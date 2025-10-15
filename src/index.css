@@ -1,0 +1,75 @@
+/* Import Nintex Design System */
+@import './styles/nintex-variables.css';
+
+:root {
+  font-family: var(--font-family-base);
+  line-height: var(--line-height-normal);
+  font-weight: var(--font-weight-normal);
+
+  color-scheme: light;
+  color: var(--nintex-gray-800);
+  background-color: var(--nintex-gray-50);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  font-weight: var(--font-weight-medium);
+  color: var(--nintex-orange);
+  text-decoration: inherit;
+  transition: color var(--transition-normal);
+}
+a:hover {
+  color: var(--nintex-orange-dark);
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background-color: var(--nintex-gray-50);
+  color: var(--nintex-gray-800);
+}
+
+h1 {
+  font-size: var(--font-size-4xl);
+  line-height: var(--line-height-tight);
+  font-weight: var(--font-weight-bold);
+  color: var(--nintex-gray-800);
+}
+
+/* Base button styling - will be enhanced by specific components */
+button {
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  padding: var(--button-padding-md);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  font-family: var(--font-family-base);
+  background-color: var(--nintex-orange);
+  color: var(--nintex-white);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+}
+
+button:hover {
+  background-color: var(--nintex-orange-dark);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-orange);
+}
+
+button:focus,
+button:focus-visible {
+  outline: 2px solid var(--nintex-orange);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}

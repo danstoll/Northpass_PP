@@ -1,0 +1,214 @@
+/**
+ * Nintex Button Component Styles
+ * Following Nintex brand guidelines and design system
+ */
+
+/* Base button styles */
+.nintex-btn {
+  font-family: var(--font-family-base);
+  font-weight: var(--font-weight-semibold);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  position: relative;
+  overflow: hidden;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Primary button - Nintex orange */
+.nintex-btn--primary {
+  background: var(--nintex-gradient-orange);
+  color: var(--nintex-white);
+  border: none;
+  box-shadow: var(--shadow-sm);
+}
+
+.nintex-btn--primary:hover:not(:disabled) {
+  background: var(--nintex-orange-dark);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-orange);
+}
+
+.nintex-btn--primary:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Secondary button - outlined */
+.nintex-btn--secondary {
+  background-color: transparent;
+  color: var(--nintex-orange);
+  border: 2px solid var(--nintex-orange);
+  box-shadow: var(--shadow-sm);
+}
+
+.nintex-btn--secondary:hover:not(:disabled) {
+  background-color: var(--nintex-orange);
+  color: var(--nintex-white);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-orange);
+}
+
+.nintex-btn--secondary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* Tertiary button - ghost */
+.nintex-btn--tertiary {
+  background-color: transparent;
+  color: var(--nintex-gray-800);
+  border: none;
+}
+
+.nintex-btn--tertiary:hover:not(:disabled) {
+  background-color: var(--nintex-gray-100);
+  color: var(--nintex-orange);
+  transform: translateY(-1px);
+}
+
+.nintex-btn--tertiary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* Purple variant for special cases */
+.nintex-btn--purple {
+  background: var(--nintex-gradient-primary);
+  color: var(--nintex-white);
+  border: none;
+  box-shadow: var(--shadow-sm);
+}
+
+.nintex-btn--purple:hover:not(:disabled) {
+  background: var(--nintex-purple-dark);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-purple);
+}
+
+/* Size variants */
+.nintex-btn--small {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-sm);
+  gap: var(--space-1);
+}
+
+.nintex-btn--medium {
+  padding: var(--space-3) var(--space-6);
+  font-size: var(--font-size-base);
+  gap: var(--space-2);
+}
+
+.nintex-btn--large {
+  padding: var(--space-4) var(--space-8);
+  font-size: var(--font-size-lg);
+  gap: var(--space-2);
+}
+
+/* Full width modifier */
+.nintex-btn--full-width {
+  width: 100%;
+}
+
+/* Disabled state */
+.nintex-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* Focus state for accessibility */
+.nintex-btn:focus-visible {
+  outline: 2px solid var(--nintex-orange);
+  outline-offset: 2px;
+}
+
+/* Loading state */
+.nintex-btn--loading {
+  pointer-events: none;
+}
+
+.nintex-btn--loading .nintex-btn__content {
+  opacity: 0.7;
+}
+
+/* Button content and icons */
+.nintex-btn__content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nintex-btn__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nintex-btn__icon--left {
+  margin-right: var(--space-2);
+}
+
+.nintex-btn__icon--right {
+  margin-left: var(--space-2);
+}
+
+/* Loading spinner */
+.nintex-btn__spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid transparent;
+  border-top: 2px solid currentColor;
+  border-radius: 50%;
+  margin-right: var(--space-2);
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .nintex-btn--large {
+    padding: var(--space-3) var(--space-6);
+    font-size: var(--font-size-base);
+  }
+  
+  .nintex-btn--medium {
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--font-size-sm);
+  }
+}
+
+/* High contrast mode */
+@media (prefers-contrast: high) {
+  .nintex-btn--secondary {
+    border-width: 3px;
+  }
+  
+  .nintex-btn:focus-visible {
+    outline-width: 3px;
+  }
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .nintex-btn {
+    transition: none;
+  }
+  
+  .nintex-btn:hover:not(:disabled) {
+    transform: none;
+  }
+  
+  .nintex-btn__spinner {
+    animation: none;
+  }
+}
