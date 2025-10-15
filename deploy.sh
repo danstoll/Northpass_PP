@@ -13,17 +13,15 @@ TEMP_DIR="/tmp/northpass-pp-deploy"
 # Load environment-specific configuration
 if [ "$ENVIRONMENT" = "production" ]; then
     echo "🚀 Deploying to PRODUCTION environment"
-    # Add your production server details here
-    SSH_HOST="your-server.com"
-    SSH_USER="your-username"
+    SSH_HOST="20.125.24.28"
+    SSH_USER="NTXPTRAdmin"
     SSH_PORT="22"
     REMOTE_PATH="/var/www/northpass-pp"
     BACKUP_PATH="/var/backups/northpass-pp"
 elif [ "$ENVIRONMENT" = "staging" ]; then
     echo "🧪 Deploying to STAGING environment"
-    # Add your staging server details here
-    SSH_HOST="staging-server.com"
-    SSH_USER="your-username"
+    SSH_HOST="20.125.24.28"
+    SSH_USER="NTXPTRAdmin"
     SSH_PORT="22"
     REMOTE_PATH="/var/www/staging-northpass-pp"
     BACKUP_PATH="/var/backups/staging-northpass-pp"

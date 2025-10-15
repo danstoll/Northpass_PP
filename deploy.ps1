@@ -14,15 +14,15 @@ $TempDir = "$env:TEMP\northpass-pp-deploy"
 # Environment-specific configuration
 if ($Environment -eq "production") {
     Write-Host "🚀 Deploying to PRODUCTION environment" -ForegroundColor Green
-    $SSHHost = "your-server.com"
-    $SSHUser = "your-username"
+    $SSHHost = "20.125.24.28"
+    $SSHUser = "NTXPTRAdmin"
     $SSHPort = 22
     $RemotePath = "/var/www/northpass-pp"
     $BackupPath = "/var/backups/northpass-pp"
 } elseif ($Environment -eq "staging") {
     Write-Host "🧪 Deploying to STAGING environment" -ForegroundColor Yellow
-    $SSHHost = "staging-server.com"
-    $SSHUser = "your-username"
+    $SSHHost = "20.125.24.28"
+    $SSHUser = "NTXPTRAdmin"
     $SSHPort = 22
     $RemotePath = "/var/www/staging-northpass-pp"
     $BackupPath = "/var/backups/staging-northpass-pp"
