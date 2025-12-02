@@ -1,0 +1,381 @@
+.user-widget {
+  max-width: 400px;
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  padding: 20px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  border: 1px solid #e1e5e9;
+}
+
+.user-widget.loading,
+.user-widget.error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-height: 200px;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid #f3f3f3;
+  border-top: 3px solid #007bff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 16px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.error-icon {
+  font-size: 32px;
+  margin-bottom: 12px;
+}
+
+.retry-btn {
+  background: #007bff;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  margin-top: 12px;
+}
+
+.retry-btn:hover {
+  background: #0056b3;
+}
+
+.user-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e9ecef;
+}
+
+.user-avatar {
+  margin-right: 16px;
+}
+
+.user-avatar img,
+.avatar-placeholder {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.avatar-placeholder {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 20px;
+  text-transform: uppercase;
+}
+
+.user-info h3 {
+  margin: 0 0 4px 0;
+  color: #2c3e50;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.user-email {
+  margin: 0 0 4px 0;
+  color: #6c757d;
+  font-size: 14px;
+}
+
+.user-title {
+  margin: 0;
+  color: #495057;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.certifications-summary h4 {
+  margin: 0 0 12px 0;
+  color: #2c3e50;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.cert-stats {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+}
+
+.stat-number {
+  font-size: 24px;
+  font-weight: 700;
+  color: #007bff;
+  line-height: 1;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: #6c757d;
+  text-transform: uppercase;
+  font-weight: 500;
+  margin-top: 4px;
+}
+
+.recent-certifications h4 {
+  margin: 0 0 12px 0;
+  color: #2c3e50;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.cert-list {
+  margin-bottom: 20px;
+}
+
+.cert-item {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 0;
+  border-bottom: 1px solid #f1f3f4;
+}
+
+.cert-item:last-child {
+  border-bottom: none;
+}
+
+.cert-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.cert-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #2c3e50;
+  flex: 1;
+}
+
+.npcu-badge {
+  background: linear-gradient(135deg, #28a745, #20c997);
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 10px;
+  margin-left: 6px;
+}
+
+.cert-badge {
+  margin-left: 4px;
+  font-size: 12px;
+}
+
+.path-badge {
+  background: linear-gradient(135deg, #6f42c1, #8e44ad);
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 10px;
+  margin-left: 6px;
+}
+
+.cert-status {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.cert-details {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cert-date {
+  font-size: 12px;
+  color: #6c757d;
+}
+
+.cert-download-link {
+  font-size: 12px;
+  color: #007bff;
+  text-decoration: none;
+  padding: 4px 8px;
+  border: 1px solid #007bff;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.cert-download-link:hover {
+  background: #007bff;
+  color: white;
+}
+
+.attempt-info {
+  font-size: 11px;
+  color: #6c757d;
+  background: #f8f9fa;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.show-more {
+  text-align: center;
+  margin-top: 12px;
+}
+
+.show-more-btn {
+  background: none;
+  border: 1px solid #dee2e6;
+  color: #6c757d;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.show-more-btn:hover {
+  background: #f8f9fa;
+  border-color: #adb5bd;
+}
+
+.widget-actions {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #e9ecef;
+}
+
+.group-stats-btn {
+  width: 100%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.group-stats-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.group-stats-btn:disabled {
+  background: #6c757d;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* Responsive design for mobile */
+@media (max-width: 480px) {
+  .user-widget {
+    max-width: 100%;
+    margin: 0;
+    border-radius: 8px;
+    padding: 16px;
+  }
+
+  .user-header {
+    flex-direction: column;
+    text-align: center;
+  }
+
+  .user-avatar {
+    margin: 0 0 16px 0;
+  }
+
+  .cert-stats {
+    margin-bottom: 16px;
+  }
+
+  .stat-number {
+    font-size: 20px;
+  }
+}
+
+/* Welcome State Styles for UserWidget */
+.user-widget .welcome-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: #495057;
+}
+
+.user-widget .welcome-icon {
+  font-size: 3rem;
+  margin-bottom: 20px;
+  opacity: 0.7;
+}
+
+.user-widget .welcome-state h3 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: #212529;
+}
+
+.user-widget .welcome-state p {
+  font-size: 1rem;
+  margin-bottom: 24px;
+  opacity: 0.8;
+}
+
+.user-widget .url-examples {
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 20px;
+  margin: 20px 0;
+  text-align: left;
+  border: 1px solid #e9ecef;
+}
+
+.user-widget .url-examples h4 {
+  color: #495057;
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.user-widget .example-url {
+  background: #ffffff;
+  padding: 12px;
+  border-radius: 6px;
+  margin: 8px 0;
+  border-left: 3px solid #007bff;
+  border: 1px solid #dee2e6;
+}
+
+.user-widget .example-url code {
+  background: transparent;
+  padding: 0;
+  font-family: 'Courier New', monospace;
+  font-size: 0.9rem;
+  color: #007bff;
+  font-weight: 500;
+}

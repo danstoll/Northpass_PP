@@ -1,0 +1,16 @@
+{
+  "name": "northpass-portal-server",
+  "version": "1.0.0",
+  "description": "Production server for Northpass Partner Portal with API proxy",
+  "main": "server-with-proxy.js",
+  "scripts": {
+    "start": "node server-with-proxy.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "http-proxy-middleware": "^2.0.6"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

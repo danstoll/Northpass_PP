@@ -19,11 +19,19 @@
 
 .app-container {
   width: 100%;
+  max-width: 1600px;
+  margin: 0 auto;
   padding: var(--space-5);
   display: flex;
   justify-content: center;
   align-items: flex-start;
   min-height: 100vh;
+}
+
+@media (max-width: 768px) {
+  .app-container {
+    padding: var(--space-3);
+  }
 }
 
 /* Reset some global styles */

@@ -5,11 +5,10 @@ import {
   getFailedCourseStats,
   analyzePropertiesFailures 
 } from './failedCourseTracker.js';
+import cacheService from './cacheService.js';
 
-// Use proxy in development, direct API in production
-const API_BASE_URL = import.meta.env.DEV 
-  ? '/api/northpass' 
-  : 'https://api.northpass.com';
+// Always use proxy to avoid CORS issues
+const API_BASE_URL = '/api/northpass';
 const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
 
 // Optimized rate limiting configuration
@@ -122,6 +121,21 @@ apiClient.interceptors.response.use(
 );
 
 export const northpassApi = {
+  // Cache management methods
+  clearCache() {
+    console.log('🧹 Clearing all Northpass cache...');
+    cacheService.clearAll();
+  },
+
+  clearCacheByType(type) {
+    console.log(`🧹 Clearing ${type} cache...`);
+    cacheService.clearByType(type);
+  },
+
+  getCacheStats() {
+    return cacheService.getStats();
+  },
+
   // Test API connection
   async testConnection() {
     try {
@@ -260,8 +274,141 @@ export const northpassApi = {
     return [];
   },
 
-  // Get user certifications with enriched data and catalog validation
+  // Get user certifications with enriched data and catalog validation (cached)
   async getUserCertifications(userId) {
+    const cachedFn = cacheService.cached(
+      this._getUserCertificationsUncached.bind(this),
+      'user_certifications',
+      4 * 60 * 60 * 1000 // 4 hours
+    );
+    return await cachedFn(userId);
+  },
+
+  // Get comprehensive user learning data for customer dashboard (cached)
+  async getUserLearningActivity(userId) {
+    const cachedFn = cacheService.cached(
+      this._getUserLearningActivityUncached.bind(this),
+      'user_learning_activity',
+      4 * 60 * 60 * 1000 // 4 hours
+    );
+    return await cachedFn(userId);
+  },
+
+  // Internal method to get all learning activity (enrollments, progress, completions)
+  async _getUserLearningActivityUncached(userId) {
+    try {
+      console.log('📚 Fetching comprehensive learning activity for user:', userId);
+      
+      // Get complete transcript data (all course interactions)
+      let allTranscriptItems = [];
+      let currentPage = 1;
+      let hasNextPage = true;
+      
+      try {
+        console.log('📡 Fetching complete learning transcript for user:', userId);
+        
+        while (hasNextPage) {
+          console.log(`📄 Fetching transcript page ${currentPage}...`);
+          
+          const pageParam = currentPage > 1 ? `?page=${currentPage}&limit=50` : '?limit=50';
+          const transcriptResponse = await rateLimitedApiCall(() => apiClient.get(`/v2/transcripts/${userId}${pageParam}`));
+          
+          if (transcriptResponse.data?.data && transcriptResponse.data.data.length > 0) {
+            allTranscriptItems = [...allTranscriptItems, ...transcriptResponse.data.data];
+            console.log(`✅ Page ${currentPage}: Found ${transcriptResponse.data.data.length} items (Total: ${allTranscriptItems.length})`);
+            
+            hasNextPage = !!transcriptResponse.data.links?.next;
+            if (hasNextPage) currentPage++;
+          } else {
+            hasNextPage = false;
+          }
+        }
+        
+        console.log(`🎯 Total learning activities fetched: ${allTranscriptItems.length}`);
+        
+      } catch {
+        console.log('📝 No transcript data available (expected for users without any learning activity)');
+        allTranscriptItems = [];
+      }
+      
+      if (!allTranscriptItems || allTranscriptItems.length === 0) {
+        return {
+          enrollments: [],
+          inProgress: [],
+          completed: [],
+          totalCourses: 0,
+          completionRate: 0,
+          averageProgress: 0
+        };
+      }
+      
+      // Process all learning activities
+      const learningActivities = allTranscriptItems.map(item => {
+        const attrs = item.attributes;
+        
+        return {
+          id: item.id,
+          resourceId: attrs.resource_id,
+          resourceType: attrs.resource_type,
+          name: attrs.name || 'Unknown Course',
+          status: attrs.progress_status, // enrolled, in_progress, completed
+          progress: attrs.progress || 0, // Progress percentage
+          completedAt: attrs.completed_at,
+          enrolledAt: attrs.enrolled_at,
+          startedAt: attrs.started_at,
+          lastActiveAt: attrs.last_active_at,
+          attemptNumber: attrs.attempt_number,
+          versionNumber: attrs.version_number,
+          certificateUrl: item.links?.certificate || null,
+          hasCertificate: !!item.links?.certificate,
+          expiresAt: attrs.expires_at || attrs.expiry_date || null,
+          // Calculate expiry for completed certifications
+          expiryDate: attrs.expires_at || attrs.expiry_date || 
+                     (attrs.completed_at ? this.calculateExpiryDate(attrs.completed_at, attrs.name || 'Unknown Course') : null),
+          // NPCU only for completed certifications
+          npcu: attrs.progress_status === 'completed' ? this.calculateNPCUPoints(attrs.name || 'Unknown Course') : 0,
+          category: this.categorizeCertificationByProduct(attrs.name || 'Unknown Course')
+        };
+      });
+      
+      // Separate by status
+      const enrollments = learningActivities.filter(item => item.status === 'enrolled' || !item.status);
+      const inProgress = learningActivities.filter(item => item.status === 'in_progress' || (item.progress > 0 && item.status !== 'completed'));
+      const completed = learningActivities.filter(item => item.status === 'completed');
+      
+      // Calculate statistics
+      const totalCourses = learningActivities.length;
+      const completionRate = totalCourses > 0 ? Math.round((completed.length / totalCourses) * 100) : 0;
+      const averageProgress = learningActivities.length > 0 ? 
+        Math.round(learningActivities.reduce((sum, item) => sum + (item.progress || 0), 0) / learningActivities.length) : 0;
+      
+      console.log(`📊 Learning summary: ${enrollments.length} enrolled, ${inProgress.length} in progress, ${completed.length} completed`);
+      
+      return {
+        enrollments,
+        inProgress,
+        completed,
+        totalCourses,
+        completionRate,
+        averageProgress,
+        allActivities: learningActivities
+      };
+      
+    } catch (error) {
+      console.error('❌ Error fetching learning activity:', error);
+      return {
+        enrollments: [],
+        inProgress: [],
+        completed: [],
+        totalCourses: 0,
+        completionRate: 0,
+        averageProgress: 0
+      };
+    }
+  },
+
+  // Internal uncached version of getUserCertifications
+  async _getUserCertificationsUncached(userId) {
     try {
       console.log('📚 Fetching certifications for user:', userId);
       
@@ -616,12 +763,64 @@ export const northpassApi = {
   // ========================================
 
   /**
-   * Find a group by name
+   * Find a group by ID
+   * @param {string} groupId - The ID of the group to find
+   * @returns {Object|null} - The group object or null if not found
+   */
+  async findGroupById(groupId) {
+    console.log(`🔍 Searching for group by ID: "${groupId}"`);
+    
+    try {
+      const response = await rateLimitedApiCall(() => apiClient.get(`/v2/groups/${groupId}`));
+      
+      if (response.data?.data) {
+        console.log(`✅ Found group by ID: ${response.data.data.attributes.name} (ID: ${groupId})`);
+        return response.data.data;
+      }
+      
+      console.log(`❌ Group not found with ID: ${groupId}`);
+      return null;
+    } catch (error) {
+      console.error(`❌ Error finding group by ID ${groupId}:`, error.response?.status, error.response?.statusText);
+      return null;
+    }
+  },
+
+  /**
+   * Find a group by name or ID
+   * @param {string} identifier - The name or ID of the group to find
+   * @param {boolean} isId - Whether the identifier is an ID (true) or name (false)
+   * @returns {Object|null} - The group object or null if not found
+   */
+  async findGroup(identifier, isId = false) {
+    if (isId) {
+      return await this.findGroupById(identifier);
+    } else {
+      return await this.findGroupByName(identifier);
+    }
+  },
+
+  /**
+   * Find a group by name (cached)
    * @param {string} groupName - The name of the group to find
    * @returns {Object|null} - The group object or null if not found
    */
   async findGroupByName(groupName) {
-    console.log(`🔍 Searching for group: "${groupName}"`);
+    const cachedFn = cacheService.cached(
+      this._findGroupByNameUncached.bind(this),
+      'group_by_name',
+      2 * 60 * 60 * 1000 // 2 hours
+    );
+    return await cachedFn(groupName);
+  },
+
+  /**
+   * Internal uncached version of findGroupByName
+   * @param {string} groupName - The name of the group to find
+   * @returns {Object|null} - The group object or null if not found
+   */
+  async _findGroupByNameUncached(groupName) {
+    console.log(`🔍 Searching for group: "${groupName}" (uncached)`);
     
     try {
       let page = 1;
@@ -688,12 +887,72 @@ export const northpassApi = {
   },
 
   /**
-   * Get all users in a specific group using memberships endpoint
+   * Get all groups from the Northpass API (paginated)
+   * @returns {Array} - Array of all group objects
+   */
+  async getAllGroups() {
+    console.log('📋 Fetching all groups...');
+    
+    try {
+      const allGroups = [];
+      let page = 1;
+      
+      while (true) {
+        const response = await rateLimitedApiCall(() => apiClient.get('/v2/groups', {
+          params: {
+            page: page,
+            limit: 50
+          }
+        }));
+        
+        const groups = response.data?.data || [];
+        
+        if (groups.length === 0) {
+          break; // No more pages
+        }
+        
+        allGroups.push(...groups);
+        console.log(`📄 Page ${page}: ${groups.length} groups (Total: ${allGroups.length})`);
+        
+        page++;
+        
+        // Safety check to prevent infinite loops
+        if (page > 50) {
+          console.warn('⚠️ Stopped after 50 pages (2500 groups)');
+          break;
+        }
+      }
+      
+      console.log(`✅ Loaded ${allGroups.length} total groups`);
+      return allGroups;
+      
+    } catch (error) {
+      console.error('❌ Error fetching all groups:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get all users in a specific group using memberships endpoint (cached)
    * @param {string} groupId - The ID of the group
    * @returns {Array} - Array of user objects
    */
   async getGroupUsers(groupId) {
-    console.log(`👥 Fetching users for group ID: ${groupId}`);
+    const cachedFn = cacheService.cached(
+      this._getGroupUsersUncached.bind(this),
+      'group_users',
+      3 * 60 * 60 * 1000 // 3 hours
+    );
+    return await cachedFn(groupId);
+  },
+
+  /**
+   * Internal uncached version of getGroupUsers
+   * @param {string} groupId - The ID of the group
+   * @returns {Array} - Array of user objects
+   */
+  async _getGroupUsersUncached(groupId) {
+    console.log(`👥 Fetching users for group ID: ${groupId} (uncached)`);
     
     try {
       const allUsers = [];
@@ -850,6 +1109,114 @@ export const northpassApi = {
   },
 
   /**
+   * Process multiple users' learning data for customer dashboard
+   * @param {Array} users - Array of user objects
+   * @param {Function} progressCallback - Callback to report progress
+   * @returns {Array} - Array of processed user objects with comprehensive learning stats
+   */
+  async processUsersForCustomerDashboard(users, progressCallback = null) {
+    console.log(`🚀 Starting customer dashboard processing of ${users.length} users...`);
+    
+    const results = [];
+    const errors = [];
+    
+    // Process users in batches
+    for (let i = 0; i < users.length; i += MAX_CONCURRENT_USERS) {
+      const batch = users.slice(i, i + MAX_CONCURRENT_USERS);
+      console.log(`📦 Processing batch ${Math.floor(i/MAX_CONCURRENT_USERS) + 1}: users ${i + 1}-${Math.min(i + MAX_CONCURRENT_USERS, users.length)}`);
+      
+      const batchPromises = batch.map(async (user, batchIndex) => {
+        const globalIndex = i + batchIndex;
+        
+        try {
+          const firstName = user?.attributes?.first_name || '';
+          const lastName = user?.attributes?.last_name || '';
+          const email = user?.attributes?.email || '';
+          const userId = user?.id;
+          
+          if (!userId) {
+            throw new Error('User ID not found in user object');
+          }
+          
+          // Create display name
+          let displayName;
+          if (firstName.trim() && lastName.trim()) {
+            displayName = `${firstName.trim()} ${lastName.trim()}`;
+          } else if (firstName.trim()) {
+            displayName = firstName.trim();
+          } else if (lastName.trim()) {
+            displayName = lastName.trim();
+          } else if (email) {
+            displayName = email;
+          } else {
+            displayName = `User ${userId.substring(0, 8)}...`;
+          }
+          
+          if (progressCallback) {
+            progressCallback(globalIndex + 1, users.length, user);
+          }
+          
+          const learningData = await this.getUserLearningActivity(userId);
+          
+          return {
+            id: userId,
+            name: displayName,
+            email: email,
+            ...learningData,
+            error: null
+          };
+          
+        } catch (error) {
+          const firstName = user?.attributes?.first_name || '';
+          const lastName = user?.attributes?.last_name || '';
+          const email = user?.attributes?.email;
+          const userId = user?.id || 'unknown-id';
+          
+          let displayName;
+          if (firstName.trim() && lastName.trim()) {
+            displayName = `${firstName.trim()} ${lastName.trim()}`;
+          } else if (email) {
+            displayName = email;
+          } else {
+            displayName = `User ${userId}`;
+          }
+          
+          console.warn(`⚠️ Error processing user ${displayName}:`, error.message);
+          errors.push({ user, error });
+          
+          if (email) {
+            return {
+              id: userId,
+              name: displayName,
+              email: email,
+              enrollments: [],
+              inProgress: [],
+              completed: [],
+              totalCourses: 0,
+              completionRate: 0,
+              averageProgress: 0,
+              error: error.message
+            };
+          } else {
+            return null;
+          }
+        }
+      });
+      
+      const batchResults = await Promise.all(batchPromises);
+      const validResults = batchResults.filter(result => result !== null);
+      results.push(...validResults);
+      
+      if (i + MAX_CONCURRENT_USERS < users.length) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+    
+    console.log(`✅ Customer dashboard processing complete! Processed ${results.length} users with ${errors.length} errors`);
+    return results;
+  },
+
+   /**
    * Process multiple users' certifications in parallel for faster loading
    * @param {Array} users - Array of user objects
    * @param {Function} progressCallback - Callback to report progress
@@ -887,6 +1254,8 @@ export const northpassApi = {
           const lastName = user?.attributes?.last_name || '';
           const email = user?.attributes?.email || '';
           const userId = user?.id;
+          // Extract last login timestamp from user attributes
+          const lastLoginAt = user?.attributes?.last_sign_in_at || user?.attributes?.last_login_at || user?.attributes?.current_sign_in_at || null;
           
           if (!userId) {
             throw new Error('User ID not found in user object');
@@ -910,16 +1279,29 @@ export const northpassApi = {
             progressCallback(globalIndex + 1, users.length, user);
           }
           
-          const userStats = await this.getUserCertificationStats(userId);
+          // Fetch both certification stats and learning activity in parallel
+          const [userStats, learningActivity] = await Promise.all([
+            this.getUserCertificationStats(userId),
+            this.getUserLearningActivity(userId)
+          ]);
           
           return {
             id: userId,
             name: displayName,
             email: email,
+            lastLoginAt: lastLoginAt,
             certifications: userStats.certifications,
             totalNPCU: userStats.totalNPCU,
             certificationCount: userStats.certificationCount,
-            productBreakdown: userStats.productBreakdown, // ADD THIS LINE!
+            productBreakdown: userStats.productBreakdown,
+            // Learning activity data
+            enrolledCourses: learningActivity.enrollments?.length || 0,
+            inProgressCourses: learningActivity.inProgress?.length || 0,
+            completedCourses: learningActivity.completed?.length || 0,
+            totalCourses: learningActivity.totalCourses || 0,
+            completionRate: learningActivity.completionRate || 0,
+            averageProgress: learningActivity.averageProgress || 0,
+            learningActivity: learningActivity,
             error: null
           };
           
@@ -929,6 +1311,7 @@ export const northpassApi = {
           const lastName = user?.attributes?.last_name || '';
           const email = user?.attributes?.email;
           const userId = user?.id || user?.attributes?.id || 'unknown-id';
+          const lastLoginAt = user?.attributes?.last_sign_in_at || user?.attributes?.last_login_at || null;
           
           // Create display name for error logging
           let displayName;
@@ -949,9 +1332,16 @@ export const northpassApi = {
               id: userId,
               name: displayName,
               email: email,
+              lastLoginAt: lastLoginAt,
               certifications: [],
               totalNPCU: 0,
               certificationCount: 0,
+              enrolledCourses: 0,
+              inProgressCourses: 0,
+              completedCourses: 0,
+              totalCourses: 0,
+              completionRate: 0,
+              averageProgress: 0,
               error: error.message
             };
           } else {
@@ -974,6 +1364,408 @@ export const northpassApi = {
     
     console.log(`✅ Parallel processing complete! Processed ${results.length} users with ${errors.length} errors`);
     return results;
+  },
+
+  /**
+   * Get all users in the system (cached for 30 minutes)
+   * @returns {Array} - Array of all user objects
+   */
+  async getAllUsers() {
+    const cachedFn = cacheService.cached(
+      this._getAllUsersUncached.bind(this),
+      'all_users',
+      30 * 60 * 1000 // 30 minutes cache
+    );
+    return await cachedFn();
+  },
+
+  /**
+   * Internal uncached version of getAllUsers
+   * @returns {Array} - Array of all user objects
+   */
+  async _getAllUsersUncached() {
+    console.log('👥 Fetching all users from Northpass (uncached)...');
+    
+    try {
+      const allUsers = [];
+      let page = 1;
+      
+      while (true) {
+        const response = await rateLimitedApiCall(() => apiClient.get('/v2/people', {
+          params: {
+            page: page,
+            limit: 50
+          }
+        }));
+        
+        const users = response.data?.data || [];
+        
+        if (users.length === 0) {
+          break;
+        }
+        
+        allUsers.push(...users);
+        console.log(`📄 Page ${page}: ${users.length} users (total: ${allUsers.length})`);
+        
+        page++;
+        
+        // Safety limit
+        if (page > 100) {
+          console.warn('⚠️ Stopped fetching after 100 pages (5000 users)');
+          break;
+        }
+      }
+      
+      console.log(`✅ Total users fetched: ${allUsers.length}`);
+      return allUsers;
+      
+    } catch (error) {
+      console.error('❌ Error fetching all users:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Find users by email domain who are NOT in the specified group
+   * @param {string} groupId - The group ID to exclude
+   * @param {Array} domains - Array of email domains to search for
+   * @param {Array} existingUserIds - Array of user IDs already in the group
+   * @returns {Array} - Array of users matching the domains but not in the group
+   */
+  async findUsersByDomainNotInGroup(groupId, domains, existingUserIds) {
+    console.log(`🔍 Searching for users with domains: ${domains.join(', ')}`);
+    console.log(`📋 Excluding ${existingUserIds.length} users already in group`);
+    
+    try {
+      const allUsers = await this.getAllUsers();
+      
+      // Filter users who:
+      // 1. Have an email
+      // 2. Email domain matches one of the target domains
+      // 3. Are NOT already in the group
+      const matchingUsers = allUsers.filter(user => {
+        const email = user.attributes?.email?.toLowerCase();
+        if (!email) return false;
+        
+        const userDomain = email.split('@')[1];
+        if (!userDomain) return false;
+        
+        const domainMatches = domains.some(d => d.toLowerCase() === userDomain);
+        const notInGroup = !existingUserIds.includes(user.id);
+        
+        return domainMatches && notInGroup;
+      });
+      
+      console.log(`✅ Found ${matchingUsers.length} users with matching domains not in group`);
+      
+      return matchingUsers.map(user => ({
+        id: user.id,
+        email: user.attributes?.email || '',
+        firstName: user.attributes?.first_name || '',
+        lastName: user.attributes?.last_name || '',
+        name: [user.attributes?.first_name, user.attributes?.last_name].filter(Boolean).join(' ') || user.attributes?.email || 'Unknown'
+      }));
+      
+    } catch (error) {
+      console.error('❌ Error finding users by domain:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Find the "All Partners" group
+   * @returns {Object|null} - The group object or null if not found
+   */
+  async findAllPartnersGroup() {
+    console.log('🔍 Searching for "All Partners" group...');
+    
+    try {
+      const group = await this.findGroupByName('All Partners');
+      if (group) {
+        console.log(`✅ Found "All Partners" group: ${group.id}`);
+        return group;
+      }
+      
+      console.warn('⚠️ "All Partners" group not found');
+      return null;
+      
+    } catch (error) {
+      console.error('❌ Error finding All Partners group:', error);
+      return null;
+    }
+  },
+
+  /**
+   * Add people to a group using the relationships endpoint
+   * POST /v2/groups/{group_uuid}/relationships/people
+   * This can add multiple people at once and ignores people already in the group
+   * @param {string} groupId - The group ID
+   * @param {Array} userIds - Array of user IDs to add
+   * @returns {Object} - Result of the operation
+   */
+  async addPeopleToGroup(groupId, userIds) {
+    console.log(`➕ Adding ${userIds.length} users to group ${groupId}...`);
+    
+    try {
+      // Build the data array for JSON:API format
+      const peopleData = userIds.map(userId => ({
+        type: 'people',
+        id: userId
+      }));
+      
+      const response = await rateLimitedApiCall(() => apiClient.post(
+        `/v2/groups/${groupId}/relationships/people`,
+        { data: peopleData }
+      ));
+      
+      console.log(`✅ Successfully added ${userIds.length} users to group ${groupId}`);
+      return { success: true, data: response.data, count: userIds.length };
+      
+    } catch (error) {
+      console.error(`❌ Error adding users to group ${groupId}:`, error.response?.data || error.message);
+      console.error('   Status:', error.response?.status);
+      return { success: false, error: error.response?.data || error.message };
+    }
+  },
+
+  /**
+   * Add a single user to a group (convenience wrapper)
+   * @param {string} groupId - The group ID
+   * @param {string} userId - The user ID
+   * @returns {Object} - Result of the operation
+   */
+  async addUserToGroup(groupId, userId) {
+    return this.addPeopleToGroup(groupId, [userId]);
+  },
+
+  /**
+   * Search users by email domain using API filtering (more efficient than fetching all)
+   * Uses filter[email][cont]=@domain to search server-side
+   * @param {string} domain - The email domain to search for (e.g., "bridging-it.de")
+   * @returns {Array} - Array of matching users
+   */
+  async searchUsersByEmailDomain(domain) {
+    console.log(`🔍 Searching for users with email domain: @${domain}`);
+    
+    try {
+      const allUsers = [];
+      let page = 1;
+      
+      while (true) {
+        const response = await rateLimitedApiCall(() => apiClient.get('/v2/people', {
+          params: {
+            page: page,
+            limit: 50,
+            'filter[email][cont]': `@${domain}`
+          }
+        }));
+        
+        const users = response.data?.data || [];
+        
+        if (users.length === 0) {
+          break;
+        }
+        
+        allUsers.push(...users);
+        console.log(`📄 Page ${page}: ${users.length} users matching @${domain} (total: ${allUsers.length})`);
+        
+        page++;
+        
+        // Safety limit
+        if (page > 50) {
+          console.warn('⚠️ Stopped after 50 pages');
+          break;
+        }
+      }
+      
+      console.log(`✅ Found ${allUsers.length} users with @${domain} email domain`);
+      return allUsers;
+      
+    } catch (error) {
+      console.error(`❌ Error searching users by domain @${domain}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Search users by multiple email domains (parallel requests for speed)
+   * @param {Array} domains - Array of email domains to search for
+   * @param {Set} excludeUserIds - Set of user IDs to exclude from results
+   * @returns {Array} - Array of matching users not in the exclude list
+   */
+  async searchUsersByEmailDomains(domains, excludeUserIds = new Set()) {
+    console.log(`🔍 Searching for users across ${domains.length} email domains...`);
+    
+    try {
+      // Search each domain (with some parallelism but not too aggressive)
+      const batchSize = 3; // Search 3 domains at a time
+      const allMatchingUsers = [];
+      const seenUserIds = new Set();
+      
+      for (let i = 0; i < domains.length; i += batchSize) {
+        const batch = domains.slice(i, i + batchSize);
+        const batchResults = await Promise.all(
+          batch.map(domain => this.searchUsersByEmailDomain(domain))
+        );
+        
+        // Merge results, avoiding duplicates
+        for (const users of batchResults) {
+          for (const user of users) {
+            if (!seenUserIds.has(user.id) && !excludeUserIds.has(user.id)) {
+              seenUserIds.add(user.id);
+              allMatchingUsers.push(user);
+            }
+          }
+        }
+      }
+      
+      console.log(`✅ Found ${allMatchingUsers.length} unique users across ${domains.length} domains (excluding ${excludeUserIds.size} existing members)`);
+      
+      return allMatchingUsers.map(user => ({
+        id: user.id,
+        email: user.attributes?.email || '',
+        firstName: user.attributes?.first_name || '',
+        lastName: user.attributes?.last_name || '',
+        name: [user.attributes?.first_name, user.attributes?.last_name].filter(Boolean).join(' ') || user.attributes?.email || 'Unknown'
+      }));
+      
+    } catch (error) {
+      console.error('❌ Error searching users by domains:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Bulk add users to groups using the bulk endpoint (much faster!)
+   * POST /v2/bulk/people/membership - can handle up to 15,000 at once
+   * @param {Array} userIds - Array of user IDs to add
+   * @param {Array} groupIds - Array of group IDs to add users to
+   * @returns {Object} - Result of the bulk operation
+   */
+  async bulkAddUsersToGroups(userIds, groupIds) {
+    console.log(`⚡ Bulk adding ${userIds.length} users to ${groupIds.length} groups...`);
+    console.log(`   User IDs: ${userIds.slice(0, 3).join(', ')}${userIds.length > 3 ? '...' : ''}`);
+    console.log(`   Group IDs: ${groupIds.join(', ')}`);
+    
+    try {
+      // Try different payload formats
+      const response = await rateLimitedApiCall(() => apiClient.post('/v2/bulk/people/membership', {
+        data: {
+          person_ids: userIds,
+          group_ids: groupIds
+        }
+      }));
+      
+      console.log('✅ Bulk add complete:', response.data);
+      return {
+        success: true,
+        data: response.data
+      };
+      
+    } catch (error) {
+      console.error('❌ Bulk add error:', error.response?.data || error.message);
+      console.error('   Status:', error.response?.status);
+      return {
+        success: false,
+        error: error.response?.data || error.message
+      };
+    }
+  },
+
+  /**
+   * Add multiple users to a group (and optionally to All Partners group)
+   * Uses bulk API when available for better performance
+   * @param {string} groupId - The primary group ID
+   * @param {Array} userIds - Array of user IDs to add
+   * @param {boolean} addToAllPartners - Whether to also add to All Partners group
+   * @param {Function} progressCallback - Callback for progress updates
+   * @returns {Object} - Summary of the operation
+   */
+  async addUsersToGroups(groupId, userIds, addToAllPartners = true, progressCallback = null) {
+    console.log(`➕ Adding ${userIds.length} users to group ${groupId}...`);
+    
+    const results = {
+      primaryGroup: { success: 0, failed: 0, alreadyExists: 0 },
+      allPartnersGroup: { success: 0, failed: 0, alreadyExists: 0, skipped: false }
+    };
+    
+    if (progressCallback) {
+      progressCallback(0, 2, 'Adding to primary group...');
+    }
+    
+    // Add to primary group using the relationships endpoint (handles all at once)
+    const primaryResult = await this.addPeopleToGroup(groupId, userIds);
+    if (primaryResult.success) {
+      results.primaryGroup.success = userIds.length;
+      console.log(`✅ Added ${userIds.length} users to primary group`);
+    } else {
+      results.primaryGroup.failed = userIds.length;
+      console.error('❌ Failed to add users to primary group');
+    }
+    
+    if (progressCallback) {
+      progressCallback(1, 2, 'Adding to All Partners group...');
+    }
+    
+    // Add to All Partners group if needed
+    if (addToAllPartners) {
+      const allPartnersGroup = await this.findAllPartnersGroup();
+      if (allPartnersGroup) {
+        const allPartnersResult = await this.addPeopleToGroup(allPartnersGroup.id, userIds);
+        if (allPartnersResult.success) {
+          results.allPartnersGroup.success = userIds.length;
+          console.log(`✅ Added ${userIds.length} users to All Partners group`);
+        } else {
+          results.allPartnersGroup.failed = userIds.length;
+          console.error('❌ Failed to add users to All Partners group');
+        }
+      } else {
+        console.warn('⚠️ All Partners group not found, skipping...');
+        results.allPartnersGroup.skipped = true;
+      }
+    }
+    
+    if (progressCallback) {
+      progressCallback(2, 2, 'Complete!');
+    }
+    
+    console.log('✅ Batch add complete:', results);
+    return results;
+  },
+
+  /**
+   * Get user transcript (learning activities) by user ID
+   * @param {string} userId - The Northpass user ID
+   * @returns {Promise<Array>} Array of transcript items
+   */
+  async getUserTranscript(userId) {
+    try {
+      let allItems = [];
+      let currentPage = 1;
+      let hasNextPage = true;
+
+      while (hasNextPage && currentPage <= 10) {
+        const pageParam = currentPage > 1 ? `?page[number]=${currentPage}` : '';
+        const response = await rateLimitedApiCall(() => 
+          apiClient.get(`/v2/transcripts/${userId}${pageParam}`)
+        );
+
+        if (response.data?.data && response.data.data.length > 0) {
+          allItems = [...allItems, ...response.data.data];
+          hasNextPage = !!response.data.links?.next;
+          currentPage++;
+        } else {
+          hasNextPage = false;
+        }
+      }
+
+      return allItems;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        return []; // No transcript data
+      }
+      throw error;
+    }
   }
 };
 

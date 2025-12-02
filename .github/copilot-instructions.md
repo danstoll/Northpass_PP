@@ -1,46 +1,69 @@
-# Northpass API Integration Instructions
+# Nintex Partner Portal - Northpass Integration Instructions
 
-## API Configuration
-- **Base URL**: `https://api.northpass.com`
-- **API Key**: `NP-jBVEcl1tKdyKPbxJQDbp`
-- **Authentication**: Bearer token in Authorization header
-- **Proxy**: Always use the configured proxy, never make direct API calls
+## Production Deployment
+- **Production URL**: `http://20.125.24.28:3000`
+- **Server**: Ubuntu 22.04.5 LTS with PM2 process management
+- **Process Name**: `northpass-portal`
+- **SSH Access**: `ssh NTXPTRAdmin@20.125.24.28` (SSH key authentication configured)
+
+## Application Configuration
+
+### URL Parameters (Required - No Defaults)
+- **Company Parameter**: `?group=CompanyName` or `?company=CompanyName` (exact match required)
+- **Tier Parameter**: `?tier=Premier|Select|Registered|Certified`
+- **Example URLs**:
+  - `http://20.125.24.28:3000/?group=Acme Corporation&tier=Premier`
+  - `http://20.125.24.28:3000/?company=Nintex Partner Portal Americas&tier=Certified`
+- **No Parameters**: Shows welcome screen with usage instructions
+
+### API Configuration
+- **Production API**: Uses proxy server (`/api/northpass` → `https://api.northpass.com`)
+- **API Key**: `wcU0QRpN9jnPvXEc5KXMiuVWk` (X-Api-Key header)
+- **Authentication**: Client-side X-Api-Key header (not Authorization Bearer)
+- **CORS**: Resolved via server-side proxy using `http-proxy-middleware`
 
 ## API Endpoints Reference
 
 ### Core Endpoints
-- **People API**: `/v2/people`
-  - List people: `GET /v2/people?limit=1`
-  - Find by email: `GET /v2/people?filter[email][eq]={email}`
-  - User transcript: `GET /v2/people/{userId}/transcript`
+- **Groups API**: `/v2/groups` - Find company groups by name
+- **People API**: `/v2/people` - User search and transcript data
+- **Courses API**: `/v2/courses` - Course information and completions
+- **Properties API**: `/v2/properties/courses/{courseId}` - NPCU values
 
-- **Courses API**: `/v2/courses`
-  - List courses: `GET /v2/courses?limit=10&filter[published][eq]=true`
-  - Single course: `GET /v2/courses/{courseId}`
-  - Course completions: `GET /v2/courses/{courseId}/completions`
+### Business Logic
+- **NPCU Values**: 0 (no certification), 1 (basic), 2 (advanced)
+- **Certifications**: Only courses with NPCU > 0 count as certifications
+- **Expiry Logic**: Expired certifications DO NOT count towards NPCU totals
+- **Partner Tiers**: Premier (20 NPCU), Select (10 NPCU), Registered (5 NPCU), Certified (varies)
 
-- **Properties API**: `/v2/properties/courses/{courseId}`
-  - Course properties including NPCU field
-  - Returns: `{ data: { attributes: { properties: { npcu: 0|1|2 } } } }`
+### Product Categories
+- **Nintex Workflow** = **Nintex Automation Cloud** (equivalent products)
+- **Collapsible UI**: Product breakdown with expandable certification details
+- **Expiry Display**: Visual indicators for certification expiry status
 
-### Test Data References
-- **Known Working Course ID**: `be21b16d-e564-460a-8695-d25628d69dd4`
-- **Test User Email**: `Philipp.Wissenbach@BVKontent.de`
-- **Test User ID**: `f0dac60f-80ec-4b6c-bb73-9e6541de3f9e`
+## Features Implemented
+- 🎨 **Nintex Branding**: Complete design system with orange (#FF6B35) and purple (#6B4C9A)
+- 📊 **Real-time NPCU Tracking**: Live calculation excluding expired certifications
+- 🏆 **Certification Monitoring**: Status tracking with expiry date management
+- 📅 **Expiry Management**: Business rule compliance - expired certs don't count
+- 📈 **Partner Tier Qualification**: Automatic tier status calculation
+- 🔄 **Collapsible Categories**: Product-based certification grouping
+- ✨ **Welcome Screen**: Professional onboarding when no parameters provided
 
-## Business Rules
-- **NPCU Values**: Only 0 (blank), 1, or 2 are valid
-- **Certifications**: Courses with NPCU > 0 are considered certifications
-- **Data Source**: Always use real Northpass data, never fake/demo data
+## Technical Architecture
+- **Frontend**: React + Vite with Nintex design system
+- **Backend**: Express.js with API proxy and static file serving
+- **Deployment**: PM2 process management with SSH key authentication
+- **Security**: CORS resolution, security headers, graceful error handling
 
-## Known Issues
-- Some course IDs return 403 on properties API calls
-- Transcript endpoint returns 404 for test user
-- Course-specific permissions may apply to properties access
-- Duplicate course names may have different access permissions
+## Development Workflow
+1. **Local Development**: `npm run dev` (port 5173)
+2. **Build**: `npm run build` → `dist/` folder
+3. **Deploy**: Upload to server and restart PM2 process
+4. **Monitor**: `pm2 logs northpass-portal` for debugging
 
-## Development Notes
-- Use proxy configuration in apiClient for all requests
-- Handle 403/404 errors gracefully with fallback to calculated NPCU
-- Log detailed error information for debugging
-- Courses with "Copy" in title may have different permissions than originals
+## Known Limitations
+- Some course IDs return 403 on properties API calls (gracefully handled)
+- Course properties access depends on permissions (fallback implemented)
+- Group names must match exactly (case-sensitive)
+- Expiry date calculation based on completion date + 24 months default

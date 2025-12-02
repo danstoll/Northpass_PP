@@ -1,21 +1,29 @@
-# Northpass LMS Integration Widget
+# Nintex Partner Portal - Northpass Integration
 
-A React-based widget that interfaces with the Northpass LMS API to display user information and company certification statistics. This widget is designed to be embedded into a PRM (Partner Relationship Management) system via HTML control.
+A React-based certification tracking application for Nintex partners that interfaces with the Northpass LMS API. The application displays company-wide certification statistics with complete Nintex branding and partner tier qualification tracking.
 
 ## Features
 
-- **User Profile Widget**: Displays logged-in user information including:
-  - User avatar, name, email, and job title
-  - Personal certification summary (completed, in progress, total)
-  - Recent certification activity
-  - Link to view company-wide statistics
+### 👥 Partner Dashboard
+- **🎨 Nintex Branding**: Complete design system with corporate colors and styling
+- **📊 Real-time NPCU Tracking**: Live calculation excluding expired certifications  
+- **🏆 Certification Monitoring**: Status tracking with expiry date management
+- **📅 Expiry Management**: Business rule compliance - expired certs don't count towards totals
+- **📈 Partner Tier Qualification**: Automatic tier status calculation (Premier/Select/Registered/Certified)
+- **🔄 Collapsible Categories**: Product-based certification grouping (Nintex Workflow, Automation Cloud, etc.)
 
-- **Company Statistics Dashboard**: Shows comprehensive company certification data including:
-  - Team member count and total certifications
-  - Overall completion rate and average scores
-  - Status breakdown with visual progress bars
-  - Course-specific completion statistics
-  - Team member overview with avatars
+### 🎓 Customer Dashboard
+- **👥 Staff Training Overview**: Individual employee training records and progress
+- **📚 Certification Tracking**: Course completion and expiry monitoring without NPCU complexity
+- **⚠️ Training Alerts**: Expired and expiring certification notifications
+- **📊 Training Statistics**: Staff participation rates and completion metrics
+- **🔍 Flexible Lookup**: Find companies by exact name or company ID
+
+### 🔒 Universal Features
+- **🔒 Secure URL Encoding**: Hide company and tier parameters from end users
+- **🔧 Admin Panel**: Bulk URL generation for both partners and customers
+- **✨ Professional UI**: Welcome screens with integrated URL generators
+- **🌐 Dual Format Support**: Works with both encoded and regular URL parameters
 
 ## Tech Stack
 
@@ -58,56 +66,96 @@ npm run dev
 
 5. Open your browser to `http://localhost:5173`
 
+## Production Deployment
+
+- **Live URL**: `http://20.125.24.28:3000`
+- **Server Management**: PM2 process management on Ubuntu 22.04.5 LTS
+- **SSH Access**: Configured with key-based authentication
+
 ## API Configuration
 
-The widget integrates with the Northpass API using the following endpoints:
+The application integrates with Northpass API via server-side proxy to resolve CORS:
 
-- `/v2/people/me` - Get current user information
-- `/v2/people/{userId}/certificates` - Get user certifications
-- `/v2/groups/{groupId}/certificates` - Get group certifications
-- `/v2/groups/{groupId}/people` - Get group members
-- `/v2/courses/{courseId}/completions` - Get course completions
+- **Groups API**: `/v2/groups` - Find company groups by name
+- **People API**: `/v2/people` - User search and transcript data  
+- **Courses API**: `/v2/courses` - Course information and completions
+- **Properties API**: `/v2/properties/courses/{courseId}` - NPCU values
 
-### API Authentication
+### Authentication & CORS
+- **API Key**: `wcU0QRpN9jnPvXEc5KXMiuVWk` (X-Api-Key header)
+- **Proxy Route**: `/api/northpass` → `https://api.northpass.com`
+- **CORS**: Resolved via `http-proxy-middleware` server-side proxy
 
-The widget uses Bearer token authentication. Update the API key in `src/services/northpassApi.js`:
+## Usage
 
-```javascript
-const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk'; // Production API Key
-```
+### URL Parameters
 
-## Embedding in PRM
+The application supports multiple dashboard types with both regular and encoded URL parameters:
 
-To embed this widget in your PRM system:
-
-1. Build the production version:
-```bash
-npm run build
-```
-
-2. Deploy the built files to your web server
-
-3. Embed using an HTML control in your PRM with the user's email:
-```html
-<iframe 
-  src="https://your-domain.com/northpass-widget?email=user@company.com" 
-  width="100%" 
-  height="600"
-  frameborder="0">
-</iframe>
-```
-
-### Email Parameter
-
-The widget identifies users by their email address passed as a URL parameter:
-
-- **URL Parameter**: `?email=user@company.com`
-- **Testing Email**: `Philipp.Wissenbach@BVKontent.de` (used as default for testing)
-- **Fallback**: If no email is provided, the widget defaults to the test email
+#### Partner Dashboard (Default Route)
+**Regular Format (Legacy Support):**
+- **Company**: `?group=CompanyName` or `?company=CompanyName` (exact match required)  
+- **Tier**: `?tier=Premier|Select|Registered|Certified`
 
 **Example URLs:**
-- Production: `https://your-domain.com/northpass-widget?email=john.doe@company.com`
-- Testing: `http://localhost:5173?email=Philipp.Wissenbach@BVKontent.de`
+```
+http://20.125.24.28:3000/?group=Acme Corporation&tier=Premier
+http://20.125.24.28:3000/?company=Nintex Partner Portal Americas&tier=Certified
+```
+
+**Encoded Format (Recommended):**
+```
+http://20.125.24.28:3000/?data=eyJjb21wYW55IjoiQWNtZSBDb3Jwb3JhdGlvbiIsInRpZXIiOiJQcmVtaWVyIn0
+```
+
+#### Customer Dashboard (/customer route)
+**Regular Format:**
+- **Company**: `?company=CompanyName` (exact match required)
+- **Company ID**: `?companyId=company-id` (direct ID lookup)
+
+**Example URLs:**
+```
+http://20.125.24.28:3000/customer?company=Premier Tech
+http://20.125.24.28:3000/customer?companyId=pt-001
+```
+
+**Encoded Format (Recommended):**
+```
+http://20.125.24.28:3000/customer?data=eyJjb21wYW55IjoiUHJlbWllciBUZWNoIiwidHlwZSI6ImN1c3RvbWVyIn0
+```
+
+#### URL Generation Tools
+
+**Interactive Generator**: Visit the homepage without parameters to access the built-in URL generator.
+
+**Admin Panel**: Access `/admin` for bulk URL generation and CSV export.
+
+**Programmatic Generation**:
+```javascript
+import { generateEncodedUrl } from './src/utils/urlEncoder.js';
+
+const encodedUrl = generateEncodedUrl('http://20.125.24.28:3000', {
+  company: 'Acme Corporation',
+  tier: 'Premier'
+});
+```
+
+#### Benefits of Encoded URLs
+- 🔒 Company names hidden from URL bar
+- 🛡️ Partner tiers not visible to end users  
+- 📱 Shorter, cleaner URLs
+- 🔄 Backward compatible with regular format
+- 🌐 Safe handling of special characters
+
+### No Parameters
+- Shows professional welcome screen with usage instructions
+- Provides URL generator for creating encoded links
+- No API calls made - no resource consumption without explicit parameters
+
+### Business Logic
+- **Partner Tiers**: Premier (20 NPCU), Select (10 NPCU), Registered (5 NPCU), Certified (varies)
+- **Expiry Rules**: Expired certifications DO NOT count towards NPCU totals  
+- **Product Mapping**: Nintex Workflow = Nintex Automation Cloud (equivalent products)
 
 ## Development
 
@@ -116,14 +164,15 @@ The widget identifies users by their email address passed as a URL parameter:
 ```
 src/
 ├── components/
-│   ├── UserWidget.jsx      # Main user profile widget
-│   ├── UserWidget.css      # User widget styles
-│   ├── CompanyStats.jsx    # Company statistics component
-│   └── CompanyStats.css    # Company stats styles
+│   ├── CompanyWidget.jsx    # Main company certification dashboard
+│   ├── CompanyWidget.css    # Nintex branded styling
+│   ├── UserWidget.jsx       # Individual user certification widget
+│   ├── UserWidget.css       # User widget styles
+│   └── NintexButton.jsx     # Branded button component
 ├── services/
-│   └── northpassApi.js     # API integration and utilities
-├── App.jsx                 # Main application component
-└── App.css                 # Global application styles
+│   └── northpassApi.js      # API integration with rate limiting
+├── App.jsx                  # Main application with parameter handling
+└── App.css                  # Global Nintex design system
 ```
 
 ### Available Scripts

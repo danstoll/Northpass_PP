@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import './CompanyWidget.css';
 import northpassApi from '../services/northpassApi';
 import NintexButton from './NintexButton';
+import UrlGenerator from './UrlGenerator';
 
 // Helper function to get expiry status and formatting
 const getExpiryInfo = (expiryDate) => {
@@ -163,7 +164,48 @@ const TIER_REQUIREMENTS = {
   'Aggregator': 5
 };
 
-const CompanyWidget = ({ groupName = "_BWI_Fernao Digital Solutions", tier = "Premier" }) => {
+// Sort options for user list
+const SORT_OPTIONS = {
+  'npcu': { label: 'NPCU (High to Low)', sortFn: (a, b) => b.totalNPCU - a.totalNPCU },
+  'npcu-asc': { label: 'NPCU (Low to High)', sortFn: (a, b) => a.totalNPCU - b.totalNPCU },
+  'completions': { label: 'Completions (High to Low)', sortFn: (a, b) => b.completedCourses - a.completedCourses },
+  'login': { label: 'Last Login (Recent First)', sortFn: (a, b) => {
+    if (!a.lastLoginAt && !b.lastLoginAt) return 0;
+    if (!a.lastLoginAt) return 1;
+    if (!b.lastLoginAt) return -1;
+    return new Date(b.lastLoginAt) - new Date(a.lastLoginAt);
+  }},
+  'login-asc': { label: 'Last Login (Oldest First)', sortFn: (a, b) => {
+    if (!a.lastLoginAt && !b.lastLoginAt) return 0;
+    if (!a.lastLoginAt) return 1;
+    if (!b.lastLoginAt) return -1;
+    return new Date(a.lastLoginAt) - new Date(b.lastLoginAt);
+  }},
+  'alpha': { label: 'Alphabetical (A-Z)', sortFn: (a, b) => a.name.localeCompare(b.name) },
+  'alpha-desc': { label: 'Alphabetical (Z-A)', sortFn: (a, b) => b.name.localeCompare(a.name) }
+};
+
+// Format relative time for last login
+const formatLastLogin = (dateString) => {
+  if (!dateString) return 'Never logged in';
+  
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now - date;
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffMinutes = Math.floor(diffMs / (1000 * 60));
+  
+  if (diffMinutes < 1) return 'Just now';
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+  if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
+  return date.toLocaleDateString();
+};
+
+const CompanyWidget = ({ groupName, tier }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [groupData, setGroupData] = useState(null);
@@ -177,6 +219,18 @@ const CompanyWidget = ({ groupName = "_BWI_Fernao Digital Solutions", tier = "Pr
     'Nintex for Salesforce': { count: 0, npcu: 0, courses: [] },
     'Other': { count: 0, npcu: 0, courses: [] }
   });
+  const [showUrlGenerator, setShowUrlGenerator] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [cacheStats, setCacheStats] = useState(null);
+  const [sortBy, setSortBy] = useState('npcu');
+  
+  // Learning activity summary
+  const [learningStats, setLearningStats] = useState({
+    totalEnrolled: 0,
+    totalInProgress: 0,
+    totalCompleted: 0,
+    totalCertifications: 0
+  });
   
   // Progress tracking
   const [progressStatus, setProgressStatus] = useState('');
@@ -184,18 +238,46 @@ const CompanyWidget = ({ groupName = "_BWI_Fernao Digital Solutions", tier = "Pr
   const [currentStep, setCurrentStep] = useState(0);
   const [totalSteps, setTotalSteps] = useState(0);
 
+  // Handle cache refresh
+  const handleRefreshData = async () => {
+    if (loading || isRefreshing) return;
+    
+    setIsRefreshing(true);
+    try {
+      // Clear cache
+      northpassApi.clearCache();
+      
+      // Reload data
+      await fetchGroupUsers();
+      
+      // Update cache stats
+      setCacheStats(northpassApi.getCacheStats());
+    } catch (error) {
+      console.error('Error refreshing data:', error);
+      setError('Failed to refresh data. Please try again.');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   useEffect(() => {
     setTierRequirement(TIER_REQUIREMENTS[tier] || 20);
   }, [tier]);
 
   const fetchGroupUsers = useCallback(async () => {
+    // Don't load data if no groupName is provided
+    if (!groupName) {
+      setLoading(false);
+      return;
+    }
+    
     try {
       setLoading(true);
       setError(null);
       setCurrentStep(0);
       setTotalSteps(3); // Initial estimate: 1) Find group, 2) Get users, 3) Process certifications
       
-      console.log(`🏢 Starting company analysis for: ${groupName} (${tier} tier)`);
+      console.log(`🏢 Starting company analysis for: ${groupName} (${tier || 'Premier'} tier)`);
       
       // Step 1: Find the group by name
       setCurrentStep(1);
@@ -317,6 +399,17 @@ const CompanyWidget = ({ groupName = "_BWI_Fernao Digital Solutions", tier = "Pr
       setTotalNPCU(runningTotal);
       setCertifiedUsers(usersWithCertifications);
       
+      // Calculate learning activity statistics
+      const learningTotals = processedUsers.reduce((acc, user) => ({
+        totalEnrolled: acc.totalEnrolled + (user.enrolledCourses || 0),
+        totalInProgress: acc.totalInProgress + (user.inProgressCourses || 0),
+        totalCompleted: acc.totalCompleted + (user.completedCourses || 0),
+        totalCertifications: acc.totalCertifications + (user.certificationCount || 0)
+      }), { totalEnrolled: 0, totalInProgress: 0, totalCompleted: 0, totalCertifications: 0 });
+      
+      setLearningStats(learningTotals);
+      console.log('📚 Learning Stats:', learningTotals);
+      
       // Calculate validation statistics
       let totalCertifications = 0;
       let validCertifications = 0;
@@ -360,6 +453,8 @@ const CompanyWidget = ({ groupName = "_BWI_Fernao Digital Solutions", tier = "Pr
 
   useEffect(() => {
     fetchGroupUsers();
+    // Load initial cache stats
+    setCacheStats(northpassApi.getCacheStats());
   }, [fetchGroupUsers]);
 
   const getCertificationBadgeColor = (npcu) => {
@@ -367,6 +462,83 @@ const CompanyWidget = ({ groupName = "_BWI_Fernao Digital Solutions", tier = "Pr
     if (npcu >= tierRequirement * 0.5) return 'certification-badge-warning';
     return 'certification-badge-danger';
   };
+
+  // Show instructions when no parameters are provided
+  if (!groupName) {
+    return (
+      <div className="company-widget">
+        <div className="widget-header">
+          <h2>🏢 Nintex Partner Portal</h2>
+          <div className="tier-badge tier-info">Ready</div>
+        </div>
+        <div className="welcome-state">
+          <div className="welcome-icon">🎯</div>
+          <h3>Welcome to Nintex Partner Certification Tracking</h3>
+          
+          {!showUrlGenerator ? (
+            <>
+              <p>Generate secure URLs to access partner certification data:</p>
+              <div className="welcome-actions">
+                <NintexButton
+                  variant="primary"
+                  size="large"
+                  onClick={() => setShowUrlGenerator(true)}
+                  leftIcon="🔗"
+                >
+                  Generate Secure URL
+                </NintexButton>
+              </div>
+              
+              <div className="features-list">
+                <h4>Features:</h4>
+                <ul>
+                  <li>📊 Real-time NPCU tracking</li>
+                  <li>🏆 Certification status monitoring</li>
+                  <li>📅 Expiry date management</li>
+                  <li>📈 Partner tier qualification</li>
+                  <li>🔒 Secure parameter encoding</li>
+                </ul>
+              </div>
+              
+              <div className="manual-params">
+                <details>
+                  <summary>💡 Manual URL Parameters (Legacy)</summary>
+                  <div className="url-examples">
+                    <h4>Required Parameters:</h4>
+                    <ul>
+                      <li><code>group</code> or <code>company</code> - Company group name (exact match)</li>
+                      <li><code>tier</code> - Partner tier (Premier, Select, Registered, Certified)</li>
+                    </ul>
+                    <h4>Example URLs:</h4>
+                    <div className="example-url">
+                      <code>?group=YourCompanyName&tier=Premier</code>
+                    </div>
+                    <div className="example-url">
+                      <code>?company=Acme Corporation&tier=Certified</code>
+                    </div>
+                  </div>
+                </details>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="back-action">
+                <NintexButton
+                  variant="secondary"
+                  size="medium"
+                  onClick={() => setShowUrlGenerator(false)}
+                  leftIcon="←"
+                >
+                  Back to Welcome
+                </NintexButton>
+              </div>
+              <UrlGenerator />
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -425,9 +597,24 @@ const CompanyWidget = ({ groupName = "_BWI_Fernao Digital Solutions", tier = "Pr
         <div className="company-info">
           <h2>🏢 {groupData?.attributes.name || groupName}</h2>
           <p className="company-subtitle">Partnership Certification Overview</p>
+          {cacheStats && (
+            <small className="cache-info" title={`Cache hit rate: ${cacheStats.hitRate}%`}>
+              📊 Cache: {cacheStats.hits} hits, {cacheStats.misses} misses
+            </small>
+          )}
         </div>
-        <div className={`tier-badge tier-${tier.toLowerCase()}`}>
-          {tier} Partner
+        <div className="header-actions">
+          <button 
+            className="refresh-button"
+            onClick={handleRefreshData}
+            disabled={loading || isRefreshing}
+            title="Clear cache and refresh all data"
+          >
+            {isRefreshing ? '🔄 Refreshing...' : '🔄 Refresh Data'}
+          </button>
+          <div className={`tier-badge tier-${tier.toLowerCase()}`}>
+            {tier} Partner
+          </div>
         </div>
       </div>
 
@@ -447,6 +634,41 @@ const CompanyWidget = ({ groupName = "_BWI_Fernao Digital Solutions", tier = "Pr
         <div className="stat-card">
           <div className="stat-number">{certificationRate}%</div>
           <div className="stat-label">Certification Rate</div>
+        </div>
+      </div>
+
+      {/* Learning Activity Summary Tiles */}
+      <div className="learning-stats">
+        <h3>📚 Learning Activity Summary</h3>
+        <div className="learning-tiles">
+          <div className="learning-tile enrolled">
+            <div className="tile-icon">📝</div>
+            <div className="tile-content">
+              <div className="tile-number">{learningStats.totalEnrolled}</div>
+              <div className="tile-label">Enrolled</div>
+            </div>
+          </div>
+          <div className="learning-tile in-progress">
+            <div className="tile-icon">⏳</div>
+            <div className="tile-content">
+              <div className="tile-number">{learningStats.totalInProgress}</div>
+              <div className="tile-label">In Progress</div>
+            </div>
+          </div>
+          <div className="learning-tile completed">
+            <div className="tile-icon">✅</div>
+            <div className="tile-content">
+              <div className="tile-number">{learningStats.totalCompleted}</div>
+              <div className="tile-label">Completed</div>
+            </div>
+          </div>
+          <div className="learning-tile certifications">
+            <div className="tile-icon">🎓</div>
+            <div className="tile-content">
+              <div className="tile-number">{learningStats.totalCertifications}</div>
+              <div className="tile-label">Certifications</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -492,16 +714,60 @@ const CompanyWidget = ({ groupName = "_BWI_Fernao Digital Solutions", tier = "Pr
       </div>
 
       <div className="users-list">
-        <h3>👥 User Certifications</h3>
-        {users.map(user => (
+        <div className="users-list-header">
+          <h3>👥 User Certifications</h3>
+          <div className="sort-controls">
+            <label htmlFor="sort-select">Sort by:</label>
+            <select 
+              id="sort-select"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="sort-select"
+            >
+              {Object.entries(SORT_OPTIONS).map(([key, option]) => (
+                <option key={key} value={key}>{option.label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        {[...users].sort(SORT_OPTIONS[sortBy].sortFn).map(user => (
           <div key={user.id} className="user-card">
             <div className="user-header">
               <div className="user-info">
                 <h4>{user.name}</h4>
                 <p className="user-email">{user.email}</p>
+                <p className="user-last-login">
+                  🕐 Last login: {formatLastLogin(user.lastLoginAt)}
+                </p>
               </div>
-              <div className={`certification-badge ${getCertificationBadgeColor(user.totalNPCU)}`}>
-                {user.totalNPCU} NPCU
+              <div className="user-stats-badges">
+                <div className={`certification-badge ${getCertificationBadgeColor(user.totalNPCU)}`}>
+                  {user.totalNPCU} NPCU
+                </div>
+              </div>
+            </div>
+            
+            {/* User Learning Stats Row */}
+            <div className="user-learning-stats">
+              <div className="user-stat-item enrolled">
+                <span className="stat-icon">📝</span>
+                <span className="stat-value">{user.enrolledCourses || 0}</span>
+                <span className="stat-name">Enrolled</span>
+              </div>
+              <div className="user-stat-item in-progress">
+                <span className="stat-icon">⏳</span>
+                <span className="stat-value">{user.inProgressCourses || 0}</span>
+                <span className="stat-name">In Progress</span>
+              </div>
+              <div className="user-stat-item completed">
+                <span className="stat-icon">✅</span>
+                <span className="stat-value">{user.completedCourses || 0}</span>
+                <span className="stat-name">Completed</span>
+              </div>
+              <div className="user-stat-item certifications">
+                <span className="stat-icon">🎓</span>
+                <span className="stat-value">{user.certificationCount || 0}</span>
+                <span className="stat-name">Certs</span>
               </div>
             </div>
             
