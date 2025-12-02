@@ -144,6 +144,16 @@
   border-color: #64b5f6;
 }
 
+.stat-card.danger {
+  background: rgba(255, 107, 107, 0.2);
+  border-color: #ff6b6b;
+}
+
+.stat-card.npcu {
+  background: rgba(255, 107, 53, 0.2);
+  border-color: var(--nintex-orange);
+}
+
 .stat-value {
   display: block;
   font-size: var(--font-size-2xl);
@@ -160,6 +170,13 @@
   display: block;
   font-size: var(--font-size-xs);
   opacity: 0.7;
+  margin-top: var(--space-1);
+}
+
+.stat-desc {
+  display: block;
+  font-size: var(--font-size-xs);
+  opacity: 0.6;
   margin-top: var(--space-1);
 }
 
@@ -258,6 +275,171 @@
 .tier-badge.tier-certified {
   background: linear-gradient(135deg, #64b5f6 0%, #42a5f5 100%);
   color: white;
+}
+
+.tier-badge.tier-aggregator {
+  background: linear-gradient(135deg, #9c27b0 0%, #7b1fa2 100%);
+  color: white;
+}
+
+/* Tier Requirements Grid */
+.tier-requirements-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.tier-req-card {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  text-align: center;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.tier-req-card .tier-name {
+  display: block;
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: var(--space-1);
+}
+
+.tier-req-card .tier-req {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--nintex-orange);
+}
+
+.tier-req-card.tier-premier {
+  background: rgba(255, 215, 0, 0.1);
+  border-color: #ffd700;
+}
+
+.tier-req-card.tier-select {
+  background: rgba(192, 192, 192, 0.1);
+  border-color: #c0c0c0;
+}
+
+.tier-req-card.tier-registered {
+  background: rgba(205, 127, 50, 0.1);
+  border-color: #cd7f32;
+}
+
+.tier-req-card.tier-certified {
+  background: rgba(100, 181, 246, 0.1);
+  border-color: #64b5f6;
+}
+
+.tier-req-card.tier-aggregator {
+  background: rgba(156, 39, 176, 0.1);
+  border-color: #9c27b0;
+}
+
+/* Compliance Badges */
+.compliance-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.compliance-badge.compliant {
+  background: rgba(67, 233, 123, 0.2);
+  color: #43e97b;
+}
+
+.compliance-badge.non-compliant {
+  background: rgba(255, 107, 107, 0.2);
+  color: #ff6b6b;
+}
+
+.compliance-badge.neutral {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* Compliance Summary */
+.compliance-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
+.compliance-stat {
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+.compliance-stat.compliant {
+  background: rgba(67, 233, 123, 0.2);
+  border: 1px solid #43e97b;
+}
+
+.compliance-stat.non-compliant {
+  background: rgba(255, 107, 107, 0.2);
+  border: 1px solid #ff6b6b;
+}
+
+.compliance-stat.unknown {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* NPCU Values */
+.npcu-value {
+  font-weight: var(--font-weight-semibold);
+  color: var(--nintex-orange);
+}
+
+.npcu-req {
+  opacity: 0.7;
+}
+
+.npcu-gap {
+  color: #ff6b6b;
+  font-weight: var(--font-weight-semibold);
+}
+
+.npcu-surplus {
+  color: #43e97b;
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Compliant/Non-compliant rows */
+.compliant-row {
+  background: rgba(67, 233, 123, 0.05);
+}
+
+.non-compliant-row {
+  background: rgba(255, 107, 107, 0.05);
+}
+
+/* Course Names Debug */
+.course-names-debug {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: var(--radius-md);
+}
+
+.course-names-debug summary {
+  cursor: pointer;
+  font-weight: var(--font-weight-medium);
+}
+
+.course-names-debug .course-list {
+  margin-top: var(--space-3);
+  padding-left: var(--space-4);
+  font-size: var(--font-size-xs);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.course-names-debug .course-list li {
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 /* Progress Cell */

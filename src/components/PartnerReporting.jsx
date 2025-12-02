@@ -1,31 +1,68 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import './PartnerReporting.css';
 import northpassApi from '../services/northpassApi';
 import NintexButton from './NintexButton';
 
-// Certification categories for gap analysis
+// Tier NPCU requirements (same as partner-facing dashboard)
+const TIER_REQUIREMENTS = {
+  'Premier': 20,
+  'Select': 10,
+  'Registered': 5,
+  'Certified': 10,
+  'Aggregator': 5
+};
+
+// Certification categories for gap analysis - using keywords for flexible matching
 const CERTIFICATION_CATEGORIES = {
-  'Nintex Automation Cloud': [
-    'Nintex Automation Cloud Foundations',
-    'Nintex Automation Cloud Advanced',
-    'Nintex Automation Cloud Administrator'
-  ],
-  'Nintex Process Manager': [
-    'Nintex Process Manager Foundations',
-    'Nintex Process Manager Advanced'
-  ],
-  'Nintex RPA': [
-    'Nintex RPA Foundations',
-    'Nintex RPA Advanced'
-  ],
-  'Nintex for SharePoint': [
-    'Nintex for SharePoint Foundations',
-    'Nintex for SharePoint Advanced'
-  ],
-  'Nintex AssureSign': [
-    'Nintex AssureSign Foundations'
-  ]
+  'Nintex Automation Cloud': {
+    keywords: ['automation cloud', 'workflow cloud', 'nac'],
+    levels: ['Foundations', 'Advanced', 'Administrator']
+  },
+  'Nintex Process Manager': {
+    keywords: ['process manager', 'promapp', 'npm'],
+    levels: ['Foundations', 'Advanced']
+  },
+  'Nintex RPA': {
+    keywords: ['rpa', 'robotic process', 'foxtrot'],
+    levels: ['Foundations', 'Advanced']
+  },
+  'Nintex for SharePoint': {
+    keywords: ['sharepoint', 'on-premise', 'on-prem'],
+    levels: ['Foundations', 'Advanced']
+  },
+  'Nintex AssureSign': {
+    keywords: ['assuresign', 'esign', 'signature'],
+    levels: ['Foundations']
+  },
+  'Nintex DocGen': {
+    keywords: ['docgen', 'document generation', 'drawloop'],
+    levels: ['Foundations', 'Advanced']
+  },
+  'Nintex K2': {
+    keywords: ['k2'],
+    levels: ['Foundations', 'Advanced']
+  }
+};
+
+// Helper function to calculate NPCU from course name
+const calculateNPCUFromCourse = (courseName) => {
+  const name = (courseName || '').toLowerCase();
+  
+  // Only certification courses count for NPCU
+  if (!name.includes('certification') && !name.includes('certified')) {
+    // Check for specific certification keywords
+    const isCertCourse = ['foundations', 'advanced', 'administrator', 'expert', 'professional']
+      .some(level => name.includes(level));
+    if (!isCertCourse) return 0;
+  }
+  
+  // Advanced/Expert certifications = 2 NPCU
+  if (name.includes('advanced') || name.includes('expert') || name.includes('administrator') || name.includes('professional')) {
+    return 2;
+  }
+  // Foundations/Basic = 1 NPCU
+  return 1;
 };
 
 const PartnerReporting = () => {
@@ -43,11 +80,9 @@ const PartnerReporting = () => {
   });
   
   // Data state
-  const [contacts, setContacts] = useState([]);
-  const [northpassUsers, setNorthpassUsers] = useState([]);
-  const [certificationData, setCertificationData] = useState({});
   const [loading, setLoading] = useState(false);
   const [loadingNorthpass, setLoadingNorthpass] = useState(false);
+  const [progressMessage, setProgressMessage] = useState('');
   
   // Report state
   const [reportGenerated, setReportGenerated] = useState(false);
@@ -59,7 +94,8 @@ const PartnerReporting = () => {
     byTier: {},
     byPartner: {},
     certificationGaps: {},
-    overallStats: {}
+    overallStats: {},
+    allCourseNames: [] // For debugging
   });
 
   const handleFileUpload = (e) => {
@@ -144,12 +180,11 @@ const PartnerReporting = () => {
     
     try {
       const parsedContacts = parseContacts();
-      setContacts(parsedContacts);
       
       // Fetch Northpass user data for certification info
       setLoadingNorthpass(true);
+      setProgressMessage('Fetching all Northpass users...');
       const allUsers = await northpassApi.getAllUsers();
-      setNorthpassUsers(allUsers);
       
       // Create email lookup for Northpass users
       const northpassByEmail = new Map();
@@ -162,27 +197,38 @@ const PartnerReporting = () => {
       
       // Fetch transcript data for users in our contact list
       const certData = {};
+      const allCourseNames = new Set(); // Collect all course names for debugging
       let processedCount = 0;
       
       for (const contact of parsedContacts) {
         const northpassUser = northpassByEmail.get(contact.email);
         if (northpassUser) {
           try {
+            setProgressMessage(`Fetching transcript for ${contact.name || contact.email} (${processedCount + 1}/${parsedContacts.length})`);
             const transcript = await northpassApi.getUserTranscript(northpassUser.id);
             const completedCourses = transcript
-              .filter(t => t.attributes?.status === 'passed' || t.attributes?.completed_at)
-              .map(t => t.attributes?.course_name || '');
+              .filter(t => t.attributes?.progress_status === 'completed' || t.attributes?.completed_at)
+              .map(t => {
+                const courseName = t.attributes?.name || t.attributes?.course_name || '';
+                if (courseName) allCourseNames.add(courseName);
+                return courseName;
+              })
+              .filter(Boolean);
+            
+            // Calculate NPCU for this user
+            const npcu = completedCourses.reduce((total, course) => total + calculateNPCUFromCourse(course), 0);
             
             certData[contact.email] = {
               userId: northpassUser.id,
               completedCourses,
+              npcu,
               inNorthpass: true
             };
           } catch {
-            certData[contact.email] = { userId: northpassUser.id, completedCourses: [], inNorthpass: true };
+            certData[contact.email] = { userId: northpassUser.id, completedCourses: [], npcu: 0, inNorthpass: true };
           }
         } else {
-          certData[contact.email] = { userId: null, completedCourses: [], inNorthpass: false };
+          certData[contact.email] = { userId: null, completedCourses: [], npcu: 0, inNorthpass: false };
         }
         
         processedCount++;
@@ -191,11 +237,14 @@ const PartnerReporting = () => {
         }
       }
       
-      setCertificationData(certData);
       setLoadingNorthpass(false);
+      setProgressMessage('Generating reports...');
+      
+      // Log all unique course names for debugging
+      console.log('📚 All unique course names found:', Array.from(allCourseNames).sort());
       
       // Generate reports
-      const reports = generateReportData(parsedContacts, certData);
+      const reports = generateReportData(parsedContacts, certData, Array.from(allCourseNames));
       setReportData(reports);
       setReportGenerated(true);
       
@@ -205,14 +254,16 @@ const PartnerReporting = () => {
     } finally {
       setLoading(false);
       setLoadingNorthpass(false);
+      setProgressMessage('');
     }
   };
 
-  const generateReportData = (contacts, certData) => {
+  const generateReportData = (contacts, certData, allCourseNames) => {
     // Overall stats
     const totalContacts = contacts.length;
     const inNorthpass = Object.values(certData).filter(c => c.inNorthpass).length;
     const withCertifications = Object.values(certData).filter(c => c.completedCourses.length > 0).length;
+    const totalNPCU = Object.values(certData).reduce((sum, c) => sum + (c.npcu || 0), 0);
     
     // By Region
     const byRegion = {};
@@ -224,6 +275,7 @@ const PartnerReporting = () => {
           inNorthpass: 0,
           certified: 0,
           partners: new Set(),
+          totalNPCU: 0,
           certificationCounts: {}
         };
       }
@@ -234,6 +286,7 @@ const PartnerReporting = () => {
       if (cert?.inNorthpass) byRegion[region].inNorthpass++;
       if (cert?.completedCourses?.length > 0) {
         byRegion[region].certified++;
+        byRegion[region].totalNPCU += cert.npcu || 0;
         cert.completedCourses.forEach(course => {
           byRegion[region].certificationCounts[course] = (byRegion[region].certificationCounts[course] || 0) + 1;
         });
@@ -246,7 +299,7 @@ const PartnerReporting = () => {
       delete byRegion[r].partners;
     });
     
-    // By Tier
+    // By Tier - with compliance tracking
     const byTier = {};
     contacts.forEach(contact => {
       const tier = contact.tier || 'Unknown';
@@ -256,7 +309,8 @@ const PartnerReporting = () => {
           inNorthpass: 0,
           certified: 0,
           partners: new Set(),
-          totalNPCU: 0
+          totalNPCU: 0,
+          requirement: TIER_REQUIREMENTS[tier] || 0
         };
       }
       byTier[tier].total++;
@@ -266,6 +320,7 @@ const PartnerReporting = () => {
       if (cert?.inNorthpass) byTier[tier].inNorthpass++;
       if (cert?.completedCourses?.length > 0) {
         byTier[tier].certified++;
+        byTier[tier].totalNPCU += cert.npcu || 0;
       }
     });
     
@@ -274,7 +329,7 @@ const PartnerReporting = () => {
       delete byTier[t].partners;
     });
     
-    // By Partner
+    // By Partner - with NPCU and compliance
     const byPartner = {};
     contacts.forEach(contact => {
       const partner = contact.partner || 'Unknown';
@@ -285,7 +340,10 @@ const PartnerReporting = () => {
           certified: 0,
           region: contact.region,
           tier: contact.tier,
-          certifications: []
+          requirement: TIER_REQUIREMENTS[contact.tier] || 0,
+          totalNPCU: 0,
+          certifications: [],
+          contacts: []
         };
       }
       byPartner[partner].total++;
@@ -294,27 +352,53 @@ const PartnerReporting = () => {
       if (cert?.inNorthpass) byPartner[partner].inNorthpass++;
       if (cert?.completedCourses?.length > 0) {
         byPartner[partner].certified++;
+        byPartner[partner].totalNPCU += cert.npcu || 0;
         byPartner[partner].certifications.push(...cert.completedCourses);
       }
+      byPartner[partner].contacts.push({
+        name: contact.name,
+        email: contact.email,
+        npcu: cert?.npcu || 0,
+        certCount: cert?.completedCourses?.length || 0,
+        inNorthpass: cert?.inNorthpass || false
+      });
     });
     
-    // Certification Gaps Analysis
+    // Calculate compliance for each partner
+    Object.keys(byPartner).forEach(p => {
+      const partner = byPartner[p];
+      partner.isCompliant = partner.totalNPCU >= partner.requirement;
+      partner.npcuGap = Math.max(0, partner.requirement - partner.totalNPCU);
+    });
+    
+    // Certification Gaps Analysis - using keyword matching
     const certificationGaps = {};
-    Object.entries(CERTIFICATION_CATEGORIES).forEach(([category, certs]) => {
+    Object.entries(CERTIFICATION_CATEGORIES).forEach(([category, config]) => {
       certificationGaps[category] = {
         total: 0,
         byCertification: {}
       };
       
-      certs.forEach(certName => {
+      config.levels.forEach(level => {
+        // Count how many contacts have this certification using flexible matching
         const count = Object.values(certData).filter(c => 
-          c.completedCourses.some(course => course.toLowerCase().includes(certName.toLowerCase()))
+          c.completedCourses.some(course => {
+            const courseLower = course.toLowerCase();
+            const matchesCategory = config.keywords.some(kw => courseLower.includes(kw.toLowerCase()));
+            const matchesLevel = courseLower.includes(level.toLowerCase());
+            return matchesCategory && matchesLevel;
+          })
         ).length;
         
-        certificationGaps[category].byCertification[certName] = count;
+        certificationGaps[category].byCertification[level] = count;
         certificationGaps[category].total += count;
       });
     });
+    
+    // Count compliant vs non-compliant partners
+    const partnerList = Object.values(byPartner);
+    const compliantPartners = partnerList.filter(p => p.isCompliant).length;
+    const nonCompliantPartners = partnerList.filter(p => !p.isCompliant && p.requirement > 0).length;
     
     return {
       overallStats: {
@@ -324,12 +408,16 @@ const PartnerReporting = () => {
         withCertifications,
         withoutCertifications: inNorthpass - withCertifications,
         uniquePartners: new Set(contacts.map(c => c.partner)).size,
-        uniqueRegions: new Set(contacts.map(c => c.region)).size
+        uniqueRegions: new Set(contacts.map(c => c.region)).size,
+        totalNPCU,
+        compliantPartners,
+        nonCompliantPartners
       },
       byRegion,
       byTier,
       byPartner,
-      certificationGaps
+      certificationGaps,
+      allCourseNames
     };
   };
 
@@ -344,14 +432,17 @@ const PartnerReporting = () => {
       ['Not in Northpass', reportData.overallStats.notInNorthpass],
       ['With Certifications', reportData.overallStats.withCertifications],
       ['Without Certifications', reportData.overallStats.withoutCertifications],
+      ['Total NPCU', reportData.overallStats.totalNPCU],
       ['Unique Partners', reportData.overallStats.uniquePartners],
+      ['Compliant Partners', reportData.overallStats.compliantPartners],
+      ['Non-Compliant Partners', reportData.overallStats.nonCompliantPartners],
       ['Unique Regions', reportData.overallStats.uniqueRegions]
     ];
     const wsOverview = XLSX.utils.aoa_to_sheet(overviewData);
     XLSX.utils.book_append_sheet(wb, wsOverview, 'Overview');
     
     // By Region sheet
-    const regionData = [['Region', 'Total Contacts', 'In Northpass', 'Certified', 'Partner Count', '% Certified']];
+    const regionData = [['Region', 'Total Contacts', 'In Northpass', 'Certified', 'Partner Count', 'Total NPCU', '% Certified']];
     Object.entries(reportData.byRegion).forEach(([region, data]) => {
       regionData.push([
         region,
@@ -359,6 +450,7 @@ const PartnerReporting = () => {
         data.inNorthpass,
         data.certified,
         data.partnerCount,
+        data.totalNPCU || 0,
         data.inNorthpass > 0 ? `${Math.round(data.certified / data.inNorthpass * 100)}%` : '0%'
       ]);
     });
@@ -366,29 +458,35 @@ const PartnerReporting = () => {
     XLSX.utils.book_append_sheet(wb, wsRegion, 'By Region');
     
     // By Tier sheet
-    const tierData = [['Tier', 'Total Contacts', 'In Northpass', 'Certified', 'Partner Count', '% Certified']];
+    const tierData = [['Tier', 'NPCU Required', 'Total Contacts', 'In Northpass', 'Certified', 'Partner Count', 'Total NPCU', '% Certified']];
     Object.entries(reportData.byTier).forEach(([tier, data]) => {
       tierData.push([
         tier,
+        data.requirement || 'N/A',
         data.total,
         data.inNorthpass,
         data.certified,
         data.partnerCount,
+        data.totalNPCU || 0,
         data.inNorthpass > 0 ? `${Math.round(data.certified / data.inNorthpass * 100)}%` : '0%'
       ]);
     });
     const wsTier = XLSX.utils.aoa_to_sheet(tierData);
     XLSX.utils.book_append_sheet(wb, wsTier, 'By Tier');
     
-    // By Partner sheet
-    const partnerData = [['Partner', 'Region', 'Tier', 'Total Contacts', 'In Northpass', 'Certified', '% Certified']];
+    // By Partner sheet - with compliance
+    const partnerData = [['Partner', 'Region', 'Tier', 'NPCU Required', 'Total NPCU', 'Compliant', 'NPCU Gap', 'Total Contacts', 'In Northpass', 'Certified', '% Certified']];
     Object.entries(reportData.byPartner)
-      .sort((a, b) => b[1].total - a[1].total)
+      .sort((a, b) => b[1].totalNPCU - a[1].totalNPCU)
       .forEach(([partner, data]) => {
         partnerData.push([
           partner,
           data.region,
           data.tier,
+          data.requirement || 0,
+          data.totalNPCU || 0,
+          data.isCompliant ? 'Yes' : 'No',
+          data.npcuGap || 0,
           data.total,
           data.inNorthpass,
           data.certified,
@@ -399,10 +497,10 @@ const PartnerReporting = () => {
     XLSX.utils.book_append_sheet(wb, wsPartner, 'By Partner');
     
     // Certification Gaps sheet
-    const gapData = [['Category', 'Certification', 'Count']];
+    const gapData = [['Category', 'Certification Level', 'Count']];
     Object.entries(reportData.certificationGaps).forEach(([category, data]) => {
-      Object.entries(data.byCertification).forEach(([cert, count]) => {
-        gapData.push([category, cert, count]);
+      Object.entries(data.byCertification).forEach(([level, count]) => {
+        gapData.push([category, level, count]);
       });
     });
     const wsGaps = XLSX.utils.aoa_to_sheet(gapData);
@@ -435,14 +533,44 @@ const PartnerReporting = () => {
           <span className="stat-value">{reportData.overallStats.withCertifications}</span>
           <span className="stat-label">With Certifications</span>
         </div>
+        <div className="stat-card npcu">
+          <span className="stat-value">{reportData.overallStats.totalNPCU}</span>
+          <span className="stat-label">Total NPCU</span>
+        </div>
         <div className="stat-card">
           <span className="stat-value">{reportData.overallStats.uniquePartners}</span>
           <span className="stat-label">Unique Partners</span>
+        </div>
+      </div>
+      
+      {/* Partner Compliance Summary */}
+      <h3>✅ Partner Tier Compliance</h3>
+      <div className="stats-grid">
+        <div className="stat-card success">
+          <span className="stat-value">{reportData.overallStats.compliantPartners}</span>
+          <span className="stat-label">Compliant Partners</span>
+          <span className="stat-desc">Meeting NPCU requirements</span>
+        </div>
+        <div className="stat-card danger">
+          <span className="stat-value">{reportData.overallStats.nonCompliantPartners}</span>
+          <span className="stat-label">Non-Compliant Partners</span>
+          <span className="stat-desc">Below NPCU requirements</span>
         </div>
         <div className="stat-card">
           <span className="stat-value">{reportData.overallStats.uniqueRegions}</span>
           <span className="stat-label">Regions</span>
         </div>
+      </div>
+      
+      {/* Tier Requirements Reference */}
+      <h3>📋 Tier NPCU Requirements</h3>
+      <div className="tier-requirements-grid">
+        {Object.entries(TIER_REQUIREMENTS).map(([tier, requirement]) => (
+          <div key={tier} className={`tier-req-card tier-${tier.toLowerCase()}`}>
+            <span className="tier-name">{tier}</span>
+            <span className="tier-req">{requirement} NPCU</span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -494,9 +622,11 @@ const PartnerReporting = () => {
         <thead>
           <tr>
             <th>Tier</th>
+            <th>NPCU Req.</th>
             <th>Contacts</th>
             <th>In Northpass</th>
             <th>Certified</th>
+            <th>Total NPCU</th>
             <th>Partners</th>
             <th>% Certified</th>
           </tr>
@@ -504,7 +634,7 @@ const PartnerReporting = () => {
         <tbody>
           {Object.entries(reportData.byTier)
             .sort((a, b) => {
-              const tierOrder = ['Premier', 'Select', 'Registered', 'Certified'];
+              const tierOrder = ['Premier', 'Select', 'Registered', 'Certified', 'Aggregator'];
               return tierOrder.indexOf(a[0]) - tierOrder.indexOf(b[0]);
             })
             .map(([tier, data]) => (
@@ -512,9 +642,11 @@ const PartnerReporting = () => {
                 <td className="tier-name">
                   <span className={`tier-badge tier-${tier.toLowerCase()}`}>{tier}</span>
                 </td>
+                <td className="npcu-req">{data.requirement || 'N/A'}</td>
                 <td>{data.total}</td>
                 <td>{data.inNorthpass}</td>
                 <td>{data.certified}</td>
+                <td className="npcu-value">{data.totalNPCU || 0}</td>
                 <td>{data.partnerCount}</td>
                 <td>
                   <div className="progress-cell">
@@ -542,14 +674,14 @@ const PartnerReporting = () => {
           <div key={category} className="cert-category-card">
             <h4>{category}</h4>
             <div className="cert-list">
-              {Object.entries(data.byCertification).map(([cert, count]) => (
-                <div key={cert} className="cert-item">
-                  <span className="cert-name">{cert.replace(category, '').trim() || 'Foundations'}</span>
+              {Object.entries(data.byCertification).map(([level, count]) => (
+                <div key={level} className="cert-item">
+                  <span className="cert-name">{level}</span>
                   <div className="cert-bar-container">
                     <div 
                       className="cert-bar" 
                       style={{ 
-                        width: `${Math.min(count / reportData.overallStats.inNorthpass * 100 * 5, 100)}%`,
+                        width: `${Math.min(count / Math.max(reportData.overallStats.inNorthpass, 1) * 100 * 5, 100)}%`,
                         backgroundColor: count > 10 ? '#43e97b' : count > 5 ? '#ffc107' : '#ff6b6b'
                       }}
                     />
@@ -561,8 +693,126 @@ const PartnerReporting = () => {
           </div>
         ))}
       </div>
+      
+      {/* Show discovered course names for debugging */}
+      {reportData.allCourseNames && reportData.allCourseNames.length > 0 && (
+        <details className="course-names-debug">
+          <summary>📚 Discovered Course Names ({reportData.allCourseNames.length})</summary>
+          <ul className="course-list">
+            {reportData.allCourseNames.sort().map((name, idx) => (
+              <li key={idx}>{name}</li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   );
+
+  const renderComplianceTab = () => {
+    const partners = Object.entries(reportData.byPartner);
+    const compliantPartners = partners.filter(([, data]) => data.isCompliant);
+    const nonCompliantPartners = partners.filter(([, data]) => !data.isCompliant && data.requirement > 0);
+    const unknownTierPartners = partners.filter(([, data]) => !data.requirement || data.requirement === 0);
+    
+    return (
+      <div className="report-section">
+        <h3>✅ Partner Tier Compliance Summary</h3>
+        
+        <div className="compliance-summary">
+          <div className="compliance-stat compliant">
+            <span className="stat-value">{compliantPartners.length}</span>
+            <span className="stat-label">Compliant Partners</span>
+          </div>
+          <div className="compliance-stat non-compliant">
+            <span className="stat-value">{nonCompliantPartners.length}</span>
+            <span className="stat-label">Non-Compliant Partners</span>
+          </div>
+          <div className="compliance-stat unknown">
+            <span className="stat-value">{unknownTierPartners.length}</span>
+            <span className="stat-label">Unknown Tier</span>
+          </div>
+        </div>
+        
+        {/* Non-Compliant Partners (Priority) */}
+        {nonCompliantPartners.length > 0 && (
+          <>
+            <h4>❌ Non-Compliant Partners ({nonCompliantPartners.length})</h4>
+            <table className="report-table">
+              <thead>
+                <tr>
+                  <th>Partner</th>
+                  <th>Tier</th>
+                  <th>Current NPCU</th>
+                  <th>Required</th>
+                  <th>Gap</th>
+                  <th>Contacts</th>
+                </tr>
+              </thead>
+              <tbody>
+                {nonCompliantPartners
+                  .sort((a, b) => (b[1].npcuGap || 0) - (a[1].npcuGap || 0))
+                  .map(([partner, data]) => (
+                    <tr key={partner} className="non-compliant-row">
+                      <td className="partner-name">{partner}</td>
+                      <td>
+                        <span className={`tier-badge tier-${(data.tier || '').toLowerCase()}`}>
+                          {data.tier}
+                        </span>
+                      </td>
+                      <td className="npcu-value">{data.totalNPCU || 0}</td>
+                      <td className="npcu-req">{data.requirement}</td>
+                      <td className="npcu-gap">-{data.npcuGap}</td>
+                      <td>{data.total}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </>
+        )}
+        
+        {/* Compliant Partners */}
+        {compliantPartners.length > 0 && (
+          <>
+            <h4>✅ Compliant Partners ({compliantPartners.length})</h4>
+            <table className="report-table">
+              <thead>
+                <tr>
+                  <th>Partner</th>
+                  <th>Tier</th>
+                  <th>Current NPCU</th>
+                  <th>Required</th>
+                  <th>Surplus</th>
+                  <th>Contacts</th>
+                </tr>
+              </thead>
+              <tbody>
+                {compliantPartners
+                  .sort((a, b) => (b[1].totalNPCU || 0) - (a[1].totalNPCU || 0))
+                  .slice(0, 50)
+                  .map(([partner, data]) => (
+                    <tr key={partner} className="compliant-row">
+                      <td className="partner-name">{partner}</td>
+                      <td>
+                        <span className={`tier-badge tier-${(data.tier || '').toLowerCase()}`}>
+                          {data.tier}
+                        </span>
+                      </td>
+                      <td className="npcu-value">{data.totalNPCU || 0}</td>
+                      <td className="npcu-req">{data.requirement}</td>
+                      <td className="npcu-surplus">+{(data.totalNPCU || 0) - data.requirement}</td>
+                      <td>{data.total}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+            {compliantPartners.length > 50 && (
+              <p className="table-note">Showing top 50 compliant partners. Export to Excel for full list.</p>
+            )}
+          </>
+        )}
+      </div>
+    );
+  };
 
   const renderPartnersTab = () => (
     <div className="report-section">
@@ -574,18 +824,25 @@ const PartnerReporting = () => {
               <th>Partner</th>
               <th>Region</th>
               <th>Tier</th>
+              <th>NPCU</th>
+              <th>Required</th>
+              <th>Status</th>
               <th>Contacts</th>
-              <th>In Northpass</th>
               <th>Certified</th>
-              <th>% Certified</th>
             </tr>
           </thead>
           <tbody>
             {Object.entries(reportData.byPartner)
-              .sort((a, b) => b[1].total - a[1].total)
-              .slice(0, 50)
+              .sort((a, b) => {
+                // Sort by compliance status first (non-compliant first), then by NPCU gap
+                if (a[1].isCompliant !== b[1].isCompliant) {
+                  return a[1].isCompliant ? 1 : -1;
+                }
+                return (b[1].npcuGap || 0) - (a[1].npcuGap || 0);
+              })
+              .slice(0, 100)
               .map(([partner, data]) => (
-                <tr key={partner}>
+                <tr key={partner} className={data.isCompliant ? 'compliant' : 'non-compliant'}>
                   <td className="partner-name">{partner}</td>
                   <td>{data.region}</td>
                   <td>
@@ -593,24 +850,33 @@ const PartnerReporting = () => {
                       {data.tier || 'N/A'}
                     </span>
                   </td>
+                  <td className="npcu-value">{data.totalNPCU || 0}</td>
+                  <td className="npcu-req">{data.requirement || 0}</td>
+                  <td>
+                    {data.requirement > 0 ? (
+                      <span className={`compliance-badge ${data.isCompliant ? 'compliant' : 'non-compliant'}`}>
+                        {data.isCompliant ? '✅ Compliant' : `❌ Need ${data.npcuGap} more`}
+                      </span>
+                    ) : (
+                      <span className="compliance-badge neutral">N/A</span>
+                    )}
+                  </td>
                   <td>{data.total}</td>
-                  <td>{data.inNorthpass}</td>
-                  <td>{data.certified}</td>
                   <td>
                     <div className="progress-cell">
                       <div 
                         className="progress-bar-mini" 
-                        style={{ width: `${data.inNorthpass > 0 ? (data.certified / data.inNorthpass * 100) : 0}%` }}
+                        style={{ width: `${data.total > 0 ? (data.certified / data.total * 100) : 0}%` }}
                       />
-                      <span>{data.inNorthpass > 0 ? Math.round(data.certified / data.inNorthpass * 100) : 0}%</span>
+                      <span>{data.certified}/{data.total}</span>
                     </div>
                   </td>
                 </tr>
               ))}
           </tbody>
         </table>
-        {Object.keys(reportData.byPartner).length > 50 && (
-          <p className="table-note">Showing top 50 partners. Export to Excel for full list.</p>
+        {Object.keys(reportData.byPartner).length > 100 && (
+          <p className="table-note">Showing top 100 partners. Export to Excel for full list.</p>
         )}
       </div>
     </div>
@@ -680,7 +946,7 @@ const PartnerReporting = () => {
             onClick={generateReport}
             disabled={!columnMapping.email || !columnMapping.partner || loading}
           >
-            {loading ? (loadingNorthpass ? '🔄 Fetching Northpass data...' : '🔄 Generating Report...') : '📊 Generate Report'}
+            {loading ? (loadingNorthpass ? `🔄 ${progressMessage || 'Fetching Northpass data...'}` : '🔄 Generating Report...') : '📊 Generate Report'}
           </NintexButton>
         </div>
       )}
@@ -690,11 +956,12 @@ const PartnerReporting = () => {
         <>
           <div className="report-tabs">
             {[
-              { id: 'overview', label: '📊 Overview', icon: '📊' },
-              { id: 'region', label: '🌍 By Region', icon: '🌍' },
-              { id: 'tier', label: '🏆 By Tier', icon: '🏆' },
-              { id: 'certifications', label: '📜 Certifications', icon: '📜' },
-              { id: 'partners', label: '🏢 Partners', icon: '🏢' }
+              { id: 'overview', label: '📊 Overview' },
+              { id: 'compliance', label: '✅ Compliance' },
+              { id: 'region', label: '🌍 By Region' },
+              { id: 'tier', label: '🏆 By Tier' },
+              { id: 'certifications', label: '📜 Certifications' },
+              { id: 'partners', label: '🏢 Partners' }
             ].map(tab => (
               <button
                 key={tab.id}
@@ -712,6 +979,7 @@ const PartnerReporting = () => {
 
           <div className="report-content">
             {activeTab === 'overview' && renderOverviewTab()}
+            {activeTab === 'compliance' && renderComplianceTab()}
             {activeTab === 'region' && renderRegionTab()}
             {activeTab === 'tier' && renderTierTab()}
             {activeTab === 'certifications' && renderCertificationsTab()}
