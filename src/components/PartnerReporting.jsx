@@ -83,10 +83,20 @@ const PartnerReporting = () => {
   const [loading, setLoading] = useState(false);
   const [loadingNorthpass, setLoadingNorthpass] = useState(false);
   const [progressMessage, setProgressMessage] = useState('');
+  const [progressPercent, setProgressPercent] = useState(0);
+  const [processedCount, setProcessedCount] = useState(0);
+  const [totalToProcess, setTotalToProcess] = useState(0);
   
   // Report state
   const [reportGenerated, setReportGenerated] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
+  
+  // Pagination and sorting state
+  const [partnerPage, setPartnerPage] = useState(1);
+  const [partnerSort, setPartnerSort] = useState({ field: 'totalNPCU', direction: 'desc' });
+  const [regionSort, setRegionSort] = useState({ field: 'total', direction: 'desc' });
+  const [tierSort, setTierSort] = useState({ field: 'total', direction: 'desc' });
+  const ITEMS_PER_PAGE = 25;
   
   // Report data
   const [reportData, setReportData] = useState({
@@ -97,6 +107,50 @@ const PartnerReporting = () => {
     overallStats: {},
     allCourseNames: [] // For debugging
   });
+
+  // Sorting helper
+  const sortData = (data, sortConfig) => {
+    const entries = Object.entries(data);
+    return entries.sort((a, b) => {
+      let aVal = a[1][sortConfig.field];
+      let bVal = b[1][sortConfig.field];
+      
+      // Handle string comparison for name fields
+      if (sortConfig.field === 'name') {
+        aVal = a[0];
+        bVal = b[0];
+      }
+      
+      // Handle undefined/null
+      if (aVal === undefined || aVal === null) aVal = 0;
+      if (bVal === undefined || bVal === null) bVal = 0;
+      
+      // String comparison
+      if (typeof aVal === 'string' && typeof bVal === 'string') {
+        return sortConfig.direction === 'asc' 
+          ? aVal.localeCompare(bVal)
+          : bVal.localeCompare(aVal);
+      }
+      
+      // Numeric comparison
+      return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
+    });
+  };
+
+  // Toggle sort direction
+  const toggleSort = (currentSort, setSort, field) => {
+    if (currentSort.field === field) {
+      setSort({ field, direction: currentSort.direction === 'asc' ? 'desc' : 'asc' });
+    } else {
+      setSort({ field, direction: 'desc' });
+    }
+  };
+
+  // Render sort indicator
+  const SortIcon = ({ field, currentSort }) => {
+    if (currentSort.field !== field) return <span className="sort-icon">↕</span>;
+    return <span className="sort-icon active">{currentSort.direction === 'asc' ? '↑' : '↓'}</span>;
+  };
 
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
@@ -177,16 +231,22 @@ const PartnerReporting = () => {
 
   const generateReport = async () => {
     setLoading(true);
+    setProgressPercent(0);
+    setProcessedCount(0);
     
     try {
       const parsedContacts = parseContacts();
+      setTotalToProcess(parsedContacts.length);
       
       // Fetch Northpass user data for certification info
       setLoadingNorthpass(true);
       setProgressMessage('Fetching all Northpass users...');
+      setProgressPercent(5);
       const allUsers = await northpassApi.getAllUsers();
+      setProgressPercent(15);
       
       // Create email lookup for Northpass users
+      setProgressMessage('Building user index...');
       const northpassByEmail = new Map();
       allUsers.forEach(user => {
         const email = user.attributes?.email?.toLowerCase();
@@ -194,17 +254,17 @@ const PartnerReporting = () => {
           northpassByEmail.set(email, user);
         }
       });
+      setProgressPercent(20);
       
       // Fetch transcript data for users in our contact list
       const certData = {};
       const allCourseNames = new Set(); // Collect all course names for debugging
-      let processedCount = 0;
+      let currentProcessed = 0;
       
       for (const contact of parsedContacts) {
         const northpassUser = northpassByEmail.get(contact.email);
         if (northpassUser) {
           try {
-            setProgressMessage(`Fetching transcript for ${contact.name || contact.email} (${processedCount + 1}/${parsedContacts.length})`);
             const transcript = await northpassApi.getUserTranscript(northpassUser.id);
             const completedCourses = transcript
               .filter(t => t.attributes?.progress_status === 'completed' || t.attributes?.completed_at)
@@ -231,14 +291,22 @@ const PartnerReporting = () => {
           certData[contact.email] = { userId: null, completedCourses: [], npcu: 0, inNorthpass: false };
         }
         
-        processedCount++;
-        if (processedCount % 10 === 0) {
-          console.log(`Processed ${processedCount}/${parsedContacts.length} contacts`);
+        currentProcessed++;
+        setProcessedCount(currentProcessed);
+        
+        // Update progress (20% to 90% for transcript fetching)
+        const progressInPhase = (currentProcessed / parsedContacts.length) * 70;
+        setProgressPercent(Math.round(20 + progressInPhase));
+        setProgressMessage(`Analyzing ${contact.name || contact.email}`);
+        
+        if (currentProcessed % 10 === 0) {
+          console.log(`Processed ${currentProcessed}/${parsedContacts.length} contacts`);
         }
       }
       
       setLoadingNorthpass(false);
       setProgressMessage('Generating reports...');
+      setProgressPercent(95);
       
       // Log all unique course names for debugging
       console.log('📚 All unique course names found:', Array.from(allCourseNames).sort());
@@ -246,7 +314,11 @@ const PartnerReporting = () => {
       // Generate reports
       const reports = generateReportData(parsedContacts, certData, Array.from(allCourseNames));
       setReportData(reports);
+      setProgressPercent(100);
       setReportGenerated(true);
+      
+      // Reset pagination when new report is generated
+      setPartnerPage(1);
       
     } catch (error) {
       console.error('Error generating report:', error);
@@ -255,6 +327,7 @@ const PartnerReporting = () => {
       setLoading(false);
       setLoadingNorthpass(false);
       setProgressMessage('');
+      setProgressPercent(0);
     }
   };
 
@@ -575,94 +648,123 @@ const PartnerReporting = () => {
     </div>
   );
 
-  const renderRegionTab = () => (
-    <div className="report-section">
-      <h3>🌍 By Region</h3>
-      <table className="report-table">
-        <thead>
-          <tr>
-            <th>Region</th>
-            <th>Contacts</th>
-            <th>In Northpass</th>
-            <th>Certified</th>
-            <th>Partners</th>
-            <th>% Certified</th>
-          </tr>
-        </thead>
-        <tbody>
-          {Object.entries(reportData.byRegion)
-            .sort((a, b) => b[1].total - a[1].total)
-            .map(([region, data]) => (
-              <tr key={region}>
-                <td className="region-name">{region}</td>
-                <td>{data.total}</td>
-                <td>{data.inNorthpass}</td>
-                <td>{data.certified}</td>
-                <td>{data.partnerCount}</td>
-                <td>
-                  <div className="progress-cell">
-                    <div 
-                      className="progress-bar-mini" 
-                      style={{ width: `${data.inNorthpass > 0 ? (data.certified / data.inNorthpass * 100) : 0}%` }}
-                    />
-                    <span>{data.inNorthpass > 0 ? Math.round(data.certified / data.inNorthpass * 100) : 0}%</span>
-                  </div>
-                </td>
-              </tr>
-            ))}
-        </tbody>
-      </table>
-    </div>
-  );
+  const renderRegionTab = () => {
+    const sortedRegions = sortData(reportData.byRegion, regionSort);
+    
+    return (
+      <div className="report-section">
+        <h3>🌍 By Region</h3>
+        <table className="report-table sortable">
+          <thead>
+            <tr>
+              <th className="sortable-header" onClick={() => toggleSort(regionSort, setRegionSort, 'name')}>
+                Region <SortIcon field="name" currentSort={regionSort} />
+              </th>
+              <th className="sortable-header" onClick={() => toggleSort(regionSort, setRegionSort, 'total')}>
+                Contacts <SortIcon field="total" currentSort={regionSort} />
+              </th>
+              <th className="sortable-header" onClick={() => toggleSort(regionSort, setRegionSort, 'inNorthpass')}>
+                In Northpass <SortIcon field="inNorthpass" currentSort={regionSort} />
+              </th>
+              <th className="sortable-header" onClick={() => toggleSort(regionSort, setRegionSort, 'certified')}>
+                Certified <SortIcon field="certified" currentSort={regionSort} />
+              </th>
+              <th className="sortable-header" onClick={() => toggleSort(regionSort, setRegionSort, 'totalNPCU')}>
+                Total NPCU <SortIcon field="totalNPCU" currentSort={regionSort} />
+              </th>
+              <th className="sortable-header" onClick={() => toggleSort(regionSort, setRegionSort, 'partnerCount')}>
+                Partners <SortIcon field="partnerCount" currentSort={regionSort} />
+              </th>
+              <th>% Certified</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedRegions.map(([region, data]) => (
+                <tr key={region}>
+                  <td className="region-name">{region}</td>
+                  <td>{data.total}</td>
+                  <td>{data.inNorthpass}</td>
+                  <td>{data.certified}</td>
+                  <td className="npcu-value">{data.totalNPCU || 0}</td>
+                  <td>{data.partnerCount}</td>
+                  <td>
+                    <div className="progress-cell">
+                      <div 
+                        className="progress-bar-mini" 
+                        style={{ width: `${data.inNorthpass > 0 ? (data.certified / data.inNorthpass * 100) : 0}%` }}
+                      />
+                      <span>{data.inNorthpass > 0 ? Math.round(data.certified / data.inNorthpass * 100) : 0}%</span>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
 
-  const renderTierTab = () => (
-    <div className="report-section">
-      <h3>🏆 By Partner Tier</h3>
-      <table className="report-table">
-        <thead>
-          <tr>
-            <th>Tier</th>
-            <th>NPCU Req.</th>
-            <th>Contacts</th>
-            <th>In Northpass</th>
-            <th>Certified</th>
-            <th>Total NPCU</th>
-            <th>Partners</th>
-            <th>% Certified</th>
-          </tr>
-        </thead>
-        <tbody>
-          {Object.entries(reportData.byTier)
-            .sort((a, b) => {
-              const tierOrder = ['Premier', 'Select', 'Registered', 'Certified', 'Aggregator'];
-              return tierOrder.indexOf(a[0]) - tierOrder.indexOf(b[0]);
-            })
-            .map(([tier, data]) => (
-              <tr key={tier} className={`tier-${tier.toLowerCase()}`}>
-                <td className="tier-name">
-                  <span className={`tier-badge tier-${tier.toLowerCase()}`}>{tier}</span>
-                </td>
-                <td className="npcu-req">{data.requirement || 'N/A'}</td>
-                <td>{data.total}</td>
-                <td>{data.inNorthpass}</td>
-                <td>{data.certified}</td>
-                <td className="npcu-value">{data.totalNPCU || 0}</td>
-                <td>{data.partnerCount}</td>
-                <td>
-                  <div className="progress-cell">
-                    <div 
-                      className="progress-bar-mini" 
-                      style={{ width: `${data.inNorthpass > 0 ? (data.certified / data.inNorthpass * 100) : 0}%` }}
-                    />
-                    <span>{data.inNorthpass > 0 ? Math.round(data.certified / data.inNorthpass * 100) : 0}%</span>
-                  </div>
-                </td>
-              </tr>
-            ))}
-        </tbody>
-      </table>
-    </div>
-  );
+  const renderTierTab = () => {
+    const sortedTiers = sortData(reportData.byTier, tierSort);
+    
+    return (
+      <div className="report-section">
+        <h3>🏆 By Partner Tier</h3>
+        <table className="report-table sortable">
+          <thead>
+            <tr>
+              <th className="sortable-header" onClick={() => toggleSort(tierSort, setTierSort, 'name')}>
+                Tier <SortIcon field="name" currentSort={tierSort} />
+              </th>
+              <th className="sortable-header" onClick={() => toggleSort(tierSort, setTierSort, 'requirement')}>
+                NPCU Req. <SortIcon field="requirement" currentSort={tierSort} />
+              </th>
+              <th className="sortable-header" onClick={() => toggleSort(tierSort, setTierSort, 'total')}>
+                Contacts <SortIcon field="total" currentSort={tierSort} />
+              </th>
+              <th className="sortable-header" onClick={() => toggleSort(tierSort, setTierSort, 'inNorthpass')}>
+                In Northpass <SortIcon field="inNorthpass" currentSort={tierSort} />
+              </th>
+              <th className="sortable-header" onClick={() => toggleSort(tierSort, setTierSort, 'certified')}>
+                Certified <SortIcon field="certified" currentSort={tierSort} />
+              </th>
+              <th className="sortable-header" onClick={() => toggleSort(tierSort, setTierSort, 'totalNPCU')}>
+                Total NPCU <SortIcon field="totalNPCU" currentSort={tierSort} />
+              </th>
+              <th className="sortable-header" onClick={() => toggleSort(tierSort, setTierSort, 'partnerCount')}>
+                Partners <SortIcon field="partnerCount" currentSort={tierSort} />
+              </th>
+              <th>% Certified</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedTiers.map(([tier, data]) => (
+                <tr key={tier} className={`tier-${tier.toLowerCase()}`}>
+                  <td className="tier-name">
+                    <span className={`tier-badge tier-${tier.toLowerCase()}`}>{tier}</span>
+                  </td>
+                  <td className="npcu-req">{data.requirement || 'N/A'}</td>
+                  <td>{data.total}</td>
+                  <td>{data.inNorthpass}</td>
+                  <td>{data.certified}</td>
+                  <td className="npcu-value">{data.totalNPCU || 0}</td>
+                  <td>{data.partnerCount}</td>
+                  <td>
+                    <div className="progress-cell">
+                      <div 
+                        className="progress-bar-mini" 
+                        style={{ width: `${data.inNorthpass > 0 ? (data.certified / data.inNorthpass * 100) : 0}%` }}
+                      />
+                      <span>{data.inNorthpass > 0 ? Math.round(data.certified / data.inNorthpass * 100) : 0}%</span>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
 
   const renderCertificationsTab = () => (
     <div className="report-section">
@@ -814,73 +916,122 @@ const PartnerReporting = () => {
     );
   };
 
-  const renderPartnersTab = () => (
-    <div className="report-section">
-      <h3>🏢 By Partner</h3>
-      <div className="partners-table-container">
-        <table className="report-table">
-          <thead>
-            <tr>
-              <th>Partner</th>
-              <th>Region</th>
-              <th>Tier</th>
-              <th>NPCU</th>
-              <th>Required</th>
-              <th>Status</th>
-              <th>Contacts</th>
-              <th>Certified</th>
-            </tr>
-          </thead>
-          <tbody>
-            {Object.entries(reportData.byPartner)
-              .sort((a, b) => {
-                // Sort by compliance status first (non-compliant first), then by NPCU gap
-                if (a[1].isCompliant !== b[1].isCompliant) {
-                  return a[1].isCompliant ? 1 : -1;
-                }
-                return (b[1].npcuGap || 0) - (a[1].npcuGap || 0);
-              })
-              .slice(0, 100)
-              .map(([partner, data]) => (
-                <tr key={partner} className={data.isCompliant ? 'compliant' : 'non-compliant'}>
-                  <td className="partner-name">{partner}</td>
-                  <td>{data.region}</td>
-                  <td>
-                    <span className={`tier-badge tier-${(data.tier || '').toLowerCase()}`}>
-                      {data.tier || 'N/A'}
-                    </span>
-                  </td>
-                  <td className="npcu-value">{data.totalNPCU || 0}</td>
-                  <td className="npcu-req">{data.requirement || 0}</td>
-                  <td>
-                    {data.requirement > 0 ? (
-                      <span className={`compliance-badge ${data.isCompliant ? 'compliant' : 'non-compliant'}`}>
-                        {data.isCompliant ? '✅ Compliant' : `❌ Need ${data.npcuGap} more`}
+  const renderPartnersTab = () => {
+    const sortedPartners = sortData(reportData.byPartner, partnerSort);
+    const totalPages = Math.ceil(sortedPartners.length / ITEMS_PER_PAGE);
+    const startIdx = (partnerPage - 1) * ITEMS_PER_PAGE;
+    const paginatedPartners = sortedPartners.slice(startIdx, startIdx + ITEMS_PER_PAGE);
+    
+    return (
+      <div className="report-section">
+        <h3>🏢 By Partner ({sortedPartners.length} total)</h3>
+        
+        <div className="partners-table-container">
+          <table className="report-table sortable">
+            <thead>
+              <tr>
+                <th className="sortable-header" onClick={() => toggleSort(partnerSort, setPartnerSort, 'name')}>
+                  Partner <SortIcon field="name" currentSort={partnerSort} />
+                </th>
+                <th className="sortable-header" onClick={() => toggleSort(partnerSort, setPartnerSort, 'region')}>
+                  Region <SortIcon field="region" currentSort={partnerSort} />
+                </th>
+                <th className="sortable-header" onClick={() => toggleSort(partnerSort, setPartnerSort, 'tier')}>
+                  Tier <SortIcon field="tier" currentSort={partnerSort} />
+                </th>
+                <th className="sortable-header" onClick={() => toggleSort(partnerSort, setPartnerSort, 'totalNPCU')}>
+                  NPCU <SortIcon field="totalNPCU" currentSort={partnerSort} />
+                </th>
+                <th className="sortable-header" onClick={() => toggleSort(partnerSort, setPartnerSort, 'requirement')}>
+                  Required <SortIcon field="requirement" currentSort={partnerSort} />
+                </th>
+                <th className="sortable-header" onClick={() => toggleSort(partnerSort, setPartnerSort, 'isCompliant')}>
+                  Status <SortIcon field="isCompliant" currentSort={partnerSort} />
+                </th>
+                <th className="sortable-header" onClick={() => toggleSort(partnerSort, setPartnerSort, 'total')}>
+                  Contacts <SortIcon field="total" currentSort={partnerSort} />
+                </th>
+                <th className="sortable-header" onClick={() => toggleSort(partnerSort, setPartnerSort, 'certified')}>
+                  Certified <SortIcon field="certified" currentSort={partnerSort} />
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {paginatedPartners.map(([partner, data]) => (
+                  <tr key={partner} className={data.isCompliant ? 'compliant' : 'non-compliant'}>
+                    <td className="partner-name">{partner}</td>
+                    <td>{data.region}</td>
+                    <td>
+                      <span className={`tier-badge tier-${(data.tier || '').toLowerCase()}`}>
+                        {data.tier || 'N/A'}
                       </span>
-                    ) : (
-                      <span className="compliance-badge neutral">N/A</span>
-                    )}
-                  </td>
-                  <td>{data.total}</td>
-                  <td>
-                    <div className="progress-cell">
-                      <div 
-                        className="progress-bar-mini" 
-                        style={{ width: `${data.total > 0 ? (data.certified / data.total * 100) : 0}%` }}
-                      />
-                      <span>{data.certified}/{data.total}</span>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-          </tbody>
-        </table>
-        {Object.keys(reportData.byPartner).length > 100 && (
-          <p className="table-note">Showing top 100 partners. Export to Excel for full list.</p>
+                    </td>
+                    <td className="npcu-value">{data.totalNPCU || 0}</td>
+                    <td className="npcu-req">{data.requirement || 0}</td>
+                    <td>
+                      {data.requirement > 0 ? (
+                        <span className={`compliance-badge ${data.isCompliant ? 'compliant' : 'non-compliant'}`}>
+                          {data.isCompliant ? '✅ Compliant' : `❌ Need ${data.npcuGap} more`}
+                        </span>
+                      ) : (
+                        <span className="compliance-badge neutral">N/A</span>
+                      )}
+                    </td>
+                    <td>{data.total}</td>
+                    <td>
+                      <div className="progress-cell">
+                        <div 
+                          className="progress-bar-mini" 
+                          style={{ width: `${data.total > 0 ? (data.certified / data.total * 100) : 0}%` }}
+                        />
+                        <span>{data.certified}/{data.total}</span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+        
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="pagination">
+            <button 
+              className="page-btn" 
+              onClick={() => setPartnerPage(1)} 
+              disabled={partnerPage === 1}
+            >
+              ⏮ First
+            </button>
+            <button 
+              className="page-btn" 
+              onClick={() => setPartnerPage(p => Math.max(1, p - 1))} 
+              disabled={partnerPage === 1}
+            >
+              ◀ Prev
+            </button>
+            <span className="page-info">
+              Page {partnerPage} of {totalPages} ({sortedPartners.length} partners)
+            </span>
+            <button 
+              className="page-btn" 
+              onClick={() => setPartnerPage(p => Math.min(totalPages, p + 1))} 
+              disabled={partnerPage === totalPages}
+            >
+              Next ▶
+            </button>
+            <button 
+              className="page-btn" 
+              onClick={() => setPartnerPage(totalPages)} 
+              disabled={partnerPage === totalPages}
+            >
+              Last ⏭
+            </button>
+          </div>
         )}
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="partner-reporting-content">
@@ -948,6 +1099,22 @@ const PartnerReporting = () => {
           >
             {loading ? (loadingNorthpass ? `🔄 ${progressMessage || 'Fetching Northpass data...'}` : '🔄 Generating Report...') : '📊 Generate Report'}
           </NintexButton>
+          
+          {/* Progress Indicator */}
+          {loading && progressPercent > 0 && (
+            <div className="analysis-progress">
+              <div className="progress-bar-container">
+                <div 
+                  className="progress-bar-fill" 
+                  style={{ width: `${progressPercent}%` }}
+                />
+              </div>
+              <div className="progress-text">
+                <span className="progress-spinner"></span>
+                Processing {processedCount} of {totalToProcess} contacts ({Math.round(progressPercent)}%)
+              </div>
+            </div>
+          )}
         </div>
       )}
 
