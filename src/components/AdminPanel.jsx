@@ -137,7 +137,7 @@ Enterprise Corp, ent-001
 Tech Partners LLC, tp-123`;
 
   return (
-    <div className="admin-panel-content">
+    <div className="admin-panel">
       <div className="admin-header">
         <h1>🔗 Bulk URL Generator</h1>
         <p>Generate secure URLs for multiple companies</p>
