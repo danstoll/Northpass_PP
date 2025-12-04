@@ -4,6 +4,31 @@ import northpassApi from '../services/northpassApi';
 import NintexButton from './NintexButton';
 import UrlGenerator from './UrlGenerator';
 
+// Tier badge images
+import PremierBadge from '../assets/images/PartnerNetworkPremierPartner_Horizontal.png';
+import CertifiedBadge from '../assets/images/PartnerNetworkCertifiedPartner_Horizontal.png';
+import RegisteredBadge from '../assets/images/PartnerNetworkRegisteredPartner_Horizontal.png';
+import PartnerNetworkLogo from '../assets/images/PartnerNetworkLogo_Horizontal.png';
+
+// Map tier names to badge images (case-insensitive lookup with typo tolerance)
+const TIER_BADGES = {
+  'premier': PremierBadge,
+  'premier plus': PremierBadge,
+  'certified': CertifiedBadge,
+  'certifed': CertifiedBadge,  // Common typo
+  'registered': RegisteredBadge,
+  'registerd': RegisteredBadge, // Common typo
+  'aggregator': PartnerNetworkLogo
+};
+
+// Helper to get tier badge with case-insensitive lookup
+const getTierBadge = (tier) => {
+  if (!tier) return null;
+  const badge = TIER_BADGES[tier.toLowerCase()];
+  console.log('[TierBadge] Tier:', tier, '| Badge found:', !!badge, '| Badge URL:', badge);
+  return badge;
+};
+
 // Helper function to get expiry status and formatting
 const getExpiryInfo = (expiryDate) => {
   if (!expiryDate) return { status: 'unknown', text: 'No expiry date', daysLeft: null };
@@ -161,6 +186,7 @@ const TIER_REQUIREMENTS = {
   'Registered': 5,
   'Certified': 10,
   'Premier': 20,
+  'Premier Plus': 20,
   'Aggregator': 5
 };
 
@@ -612,9 +638,18 @@ const CompanyWidget = ({ groupName, tier }) => {
           >
             {isRefreshing ? '🔄 Refreshing...' : '🔄 Refresh Data'}
           </button>
-          <div className={`tier-badge tier-${tier.toLowerCase()}`}>
-            {tier} Partner
-          </div>
+          {getTierBadge(tier) ? (
+            <img 
+              src={getTierBadge(tier)} 
+              alt={`${tier} Partner`} 
+              className="tier-badge-image"
+              title={`${tier} Partner`}
+            />
+          ) : (
+            <div className={`tier-badge tier-${tier.toLowerCase()}`}>
+              {tier} Partner
+            </div>
+          )}
         </div>
       </div>
 

@@ -5,6 +5,7 @@ import AdminPanel from './components/AdminPanel'
 import GroupAnalysis from './components/GroupAnalysis'
 import PartnerImport from './components/PartnerImport'
 import PartnerReporting from './components/PartnerReporting'
+import DataManagement from './components/DataManagement'
 import { extractUrlParams } from './utils/urlEncoder'
 import { extractCustomerParams } from './utils/customerUrlEncoder'
 import './App.css'
@@ -16,6 +17,7 @@ function App() {
   const isReportingRoute = currentPath === '/admin/reports' || currentPath === '/admin/reports/';
   const isGroupAnalysisRoute = currentPath === '/admin/groups' || currentPath === '/admin/groups/';
   const isPartnerImportRoute = currentPath === '/admin/import' || currentPath === '/admin/import/';
+  const isDataRoute = currentPath === '/admin/data' || currentPath === '/admin/data/';
   const isCustomerRoute = currentPath === '/customer' || currentPath === '/customer/';
   
   // Extract parameters based on route type
@@ -49,9 +51,21 @@ function App() {
       isReportingRoute,
       isGroupAnalysisRoute,
       isPartnerImportRoute,
+      isDataRoute,
       isCustomerRoute,
       routeParams 
     });
+  }
+
+  // Show data management for /admin/data route
+  if (isDataRoute) {
+    return (
+      <div className="app">
+        <AdminHub currentPage="data">
+          <DataManagement />
+        </AdminHub>
+      </div>
+    );
   }
 
   // Show reporting for /admin/reports route

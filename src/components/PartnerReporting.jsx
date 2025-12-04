@@ -1,15 +1,17 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import './PartnerReporting.css';
 import northpassApi from '../services/northpassApi';
 import NintexButton from './NintexButton';
+import DataImport from './DataImport';
+import { getAccountSummary, getImportMetadata, hasData } from '../services/partnerDatabase';
 
 // Tier NPCU requirements (same as partner-facing dashboard)
 const TIER_REQUIREMENTS = {
+  'Premier Plus': 20,
   'Premier': 20,
-  'Select': 10,
-  'Registered': 5,
   'Certified': 10,
+  'Registered': 5,
   'Aggregator': 5
 };
 
@@ -46,26 +48,31 @@ const CERTIFICATION_CATEGORIES = {
 };
 
 // Helper function to calculate NPCU from course name
+// MUST match the logic in northpassApi.calculateNPCUPoints() exactly
 const calculateNPCUFromCourse = (courseName) => {
   const name = (courseName || '').toLowerCase();
   
-  // Only certification courses count for NPCU
-  if (!name.includes('certification') && !name.includes('certified')) {
-    // Check for specific certification keywords
-    const isCertCourse = ['foundations', 'advanced', 'administrator', 'expert', 'professional']
-      .some(level => name.includes(level));
-    if (!isCertCourse) return 0;
+  // Only assign NPCU points if this is actually a certification course
+  // Look for certification-specific keywords - MUST have "certification" or "certified"
+  if (name.includes('certification') || name.includes('certified')) {
+    // Advanced certifications get 2 NPCU
+    if (name.includes('advanced') || name.includes('expert') || name.includes('master') || name.includes('professional')) {
+      return 2;
+    }
+    // Basic certifications get 1 NPCU
+    return 1;
   }
   
-  // Advanced/Expert certifications = 2 NPCU
-  if (name.includes('advanced') || name.includes('expert') || name.includes('administrator') || name.includes('professional')) {
-    return 2;
-  }
-  // Foundations/Basic = 1 NPCU
-  return 1;
+  // Regular courses (not certifications) get 0 NPCU
+  return 0;
 };
 
 const PartnerReporting = () => {
+  // Database state
+  const [dbAvailable, setDbAvailable] = useState(false);
+  const [dbMetadata, setDbMetadata] = useState(null);
+  const [dataSource, setDataSource] = useState('database'); // 'database' or 'file'
+  
   // File upload state
   const [fileData, setFileData] = useState(null);
   const [fileName, setFileName] = useState('');
@@ -81,7 +88,7 @@ const PartnerReporting = () => {
   
   // Data state
   const [loading, setLoading] = useState(false);
-  const [loadingNorthpass, setLoadingNorthpass] = useState(false);
+  const [_loadingNorthpass, setLoadingNorthpass] = useState(false);
   const [progressMessage, setProgressMessage] = useState('');
   const [progressPercent, setProgressPercent] = useState(0);
   const [processedCount, setProcessedCount] = useState(0);
@@ -107,6 +114,45 @@ const PartnerReporting = () => {
     overallStats: {},
     allCourseNames: [] // For debugging
   });
+
+  // Check for database data on mount
+  useEffect(() => {
+    checkDatabaseStatus();
+  }, []);
+
+  const checkDatabaseStatus = async () => {
+    try {
+      const dataAvailable = await hasData();
+      setDbAvailable(dataAvailable);
+      if (dataAvailable) {
+        const metadata = await getImportMetadata();
+        setDbMetadata(metadata);
+      }
+    } catch (err) {
+      console.error('Error checking database:', err);
+    }
+  };
+
+  // Load contacts from database
+  const loadFromDatabase = async () => {
+    const accounts = await getAccountSummary();
+    const contacts = [];
+    
+    accounts.forEach(account => {
+      account.contacts.forEach(contact => {
+        contacts.push({
+          id: contacts.length,
+          name: `${contact.firstName || ''} ${contact.lastName || ''}`.trim(),
+          email: (contact.email || '').toLowerCase(),
+          partner: account.accountName,
+          region: account.accountRegion || 'Unknown',
+          tier: account.partnerTier || 'Unknown'
+        });
+      });
+    });
+    
+    return contacts;
+  };
 
   // Sorting helper
   const sortData = (data, sortConfig) => {
@@ -229,13 +275,22 @@ const PartnerReporting = () => {
     }).filter(c => c.email);
   }, [fileData, columns, columnMapping]);
 
-  const generateReport = async () => {
+  const generateReport = async (useDatabase = false) => {
     setLoading(true);
     setProgressPercent(0);
     setProcessedCount(0);
     
     try {
-      const parsedContacts = parseContacts();
+      // Get contacts from either database or file
+      let parsedContacts;
+      if (useDatabase) {
+        setProgressMessage('Loading contacts from database...');
+        parsedContacts = await loadFromDatabase();
+        setDataSource('database');
+      } else {
+        parsedContacts = parseContacts();
+        setDataSource('file');
+      }
       setTotalToProcess(parsedContacts.length);
       
       // Fetch Northpass user data for certification info
@@ -1038,33 +1093,81 @@ const PartnerReporting = () => {
       <div className="reporting-header">
         <div className="header-content">
           <h1>📊 Partner Reporting & Analytics</h1>
-          <p>Upload your partner contact export to generate comprehensive reports by Region, Tier, and Certification coverage.</p>
+          <p>Generate comprehensive reports by Region, Tier, and Certification coverage.</p>
         </div>
       </div>
 
-      {/* File Upload Section */}
-      <div className="report-section upload-section">
-        <h2>Step 1: Upload Partner Data</h2>
-        <div className="file-upload-area">
-          <input
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            onChange={handleFileUpload}
-            id="report-file-upload"
-            className="file-input"
-          />
-          <label htmlFor="report-file-upload" className="file-label">
-            {fileName ? `📄 ${fileName}` : '📁 Click to select your partner contact export file'}
-          </label>
-          {fileData && (
-            <p className="file-info">
-              ✅ Loaded {fileData.length} rows with {columns.length} columns
-            </p>
+      {/* Data Source Selection */}
+      <div className="report-section data-source-section">
+        <h2>Step 1: Select Data Source</h2>
+        
+        {/* Database Option */}
+        <div className={`source-option ${dbAvailable ? 'available' : 'unavailable'}`}>
+          <div className="source-header">
+            <span className="source-icon">💾</span>
+            <div className="source-info">
+              <h3>Use Imported Database</h3>
+              {dbAvailable && dbMetadata ? (
+                <p className="source-status success">
+                  ✅ {dbMetadata.totalContacts?.toLocaleString()} contacts loaded from "{dbMetadata.fileName}"
+                  <span className="import-date">
+                    (imported {new Date(dbMetadata.importDate).toLocaleDateString()})
+                  </span>
+                </p>
+              ) : (
+                <p className="source-status warning">
+                  ⚠️ No data imported. <a href="/admin/data">Import data first</a>
+                </p>
+              )}
+            </div>
+          </div>
+          {dbAvailable && (
+            <NintexButton 
+              variant="primary"
+              onClick={() => generateReport(true)}
+              disabled={loading}
+            >
+              {loading && dataSource === 'database' ? `🔄 ${progressMessage || 'Generating...'}` : '📊 Generate Report from Database'}
+            </NintexButton>
           )}
         </div>
+
+        {/* Divider */}
+        <div className="source-divider">
+          <span>OR</span>
+        </div>
+
+        {/* File Upload Option */}
+        <div className="source-option">
+          <div className="source-header">
+            <span className="source-icon">📁</span>
+            <div className="source-info">
+              <h3>Upload Excel File</h3>
+              <p className="source-desc">Upload a new file for one-time report generation</p>
+            </div>
+          </div>
+          
+          <div className="file-upload-area">
+            <input
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              onChange={handleFileUpload}
+              id="report-file-upload"
+              className="file-input"
+            />
+            <label htmlFor="report-file-upload" className="file-label">
+              {fileName ? `📄 ${fileName}` : '📁 Click to select your partner contact export file'}
+            </label>
+            {fileData && (
+              <p className="file-info">
+                ✅ Loaded {fileData.length} rows with {columns.length} columns
+              </p>
+            )}
+          </div>
+        </div>
       </div>
 
-      {/* Column Mapping */}
+      {/* Column Mapping - only show for file upload */}
       {columns.length > 0 && (
         <div className="report-section">
           <h2>Step 2: Map Columns</h2>
@@ -1094,10 +1197,10 @@ const PartnerReporting = () => {
           
           <NintexButton 
             variant="primary"
-            onClick={generateReport}
+            onClick={() => generateReport(false)}
             disabled={!columnMapping.email || !columnMapping.partner || loading}
           >
-            {loading ? (loadingNorthpass ? `🔄 ${progressMessage || 'Fetching Northpass data...'}` : '🔄 Generating Report...') : '📊 Generate Report'}
+            {loading && dataSource === 'file' ? `🔄 ${progressMessage || 'Generating...'}` : '📊 Generate Report from File'}
           </NintexButton>
           
           {/* Progress Indicator */}

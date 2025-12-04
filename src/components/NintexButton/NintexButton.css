@@ -90,6 +90,25 @@
   box-shadow: var(--shadow-purple);
 }
 
+/* Danger variant for destructive actions */
+.nintex-btn--danger {
+  background: linear-gradient(135deg, #f44336, #d32f2f);
+  color: var(--nintex-white);
+  border: none;
+  box-shadow: var(--shadow-sm);
+}
+
+.nintex-btn--danger:hover:not(:disabled) {
+  background: #c62828;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(244, 67, 54, 0.4);
+}
+
+.nintex-btn--danger:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: var(--shadow-sm);
+}
+
 /* Size variants */
 .nintex-btn--small {
   padding: var(--space-2) var(--space-3);

@@ -1409,9 +1409,9 @@ export const northpassApi = {
         
         page++;
         
-        // Safety limit
-        if (page > 100) {
-          console.warn('⚠️ Stopped fetching after 100 pages (5000 users)');
+        // Safety limit - increased to support larger LMS installations
+        if (page > 500) {
+          console.warn('⚠️ Stopped fetching after 500 pages (25000 users)');
           break;
         }
       }
@@ -1766,6 +1766,226 @@ export const northpassApi = {
       }
       throw error;
     }
+  },
+
+  /**
+   * Update a group's name
+   * @param {string} groupId - The group UUID
+   * @param {string} newName - The new name for the group
+   * @returns {Promise<Object>} Updated group data
+   */
+  async updateGroupName(groupId, newName) {
+    console.log(`✏️ Updating group ${groupId} to "${newName}"`);
+    
+    try {
+      const response = await rateLimitedApiCall(() => 
+        apiClient.patch(`/v2/groups/${groupId}`, {
+          data: {
+            type: 'groups',
+            id: groupId,
+            attributes: {
+              name: newName
+            }
+          }
+        })
+      );
+      
+      console.log(`✅ Group updated successfully`);
+      return response.data?.data;
+    } catch (error) {
+      console.error('❌ Error updating group:', error.response?.data || error.message);
+      throw error;
+    }
+  },
+
+  /**
+   * Create a new group
+   * @param {string} name - The name for the group
+   * @param {string} description - Optional description
+   * @returns {Promise<Object>} Created group data
+   */
+  async createGroup(name, description = '') {
+    console.log(`➕ Creating group "${name}"`);
+    
+    try {
+      const response = await rateLimitedApiCall(() => 
+        apiClient.post('/v2/groups', {
+          data: {
+            type: 'groups',
+            attributes: {
+              name: name,
+              description: description
+            }
+          }
+        })
+      );
+      
+      console.log(`✅ Group created successfully:`, response.data?.data?.id);
+      return response.data?.data;
+    } catch (error) {
+      console.error('❌ Error creating group:', error.response?.data || error.message);
+      throw error;
+    }
+  },
+
+  /**
+   * Delete a group
+   * @param {string} groupId - The group UUID
+   * @returns {Promise<boolean>} True if deleted successfully
+   */
+  async deleteGroup(groupId) {
+    console.log(`🗑️ Deleting group ${groupId}`);
+    
+    try {
+      await rateLimitedApiCall(() => 
+        apiClient.delete(`/v2/groups/${groupId}`)
+      );
+      
+      console.log(`✅ Group deleted successfully`);
+      return true;
+    } catch (error) {
+      console.error('❌ Error deleting group:', error.response?.data || error.message);
+      throw error;
+    }
+  },
+
+  /**
+   * Delete multiple groups
+   * @param {Array} groupIds - Array of group UUIDs to delete
+   * @param {Function} onProgress - Progress callback (current, total)
+   * @returns {Promise<{deleted: number, failed: number, errors: Array}>}
+   */
+  async deleteMultipleGroups(groupIds, onProgress = null) {
+    console.log(`🗑️ Bulk deleting ${groupIds.length} groups`);
+    
+    let deleted = 0;
+    let failed = 0;
+    const errors = [];
+    
+    for (let i = 0; i < groupIds.length; i++) {
+      const groupId = groupIds[i];
+      
+      try {
+        await rateLimitedApiCall(() => 
+          apiClient.delete(`/v2/groups/${groupId}`)
+        );
+        deleted++;
+      } catch (error) {
+        failed++;
+        errors.push({ groupId, error: error.message });
+        console.error(`Failed to delete group ${groupId}:`, error.message);
+      }
+      
+      if (onProgress) {
+        onProgress(i + 1, groupIds.length);
+      }
+      
+      // Small delay between deletions
+      if (i < groupIds.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+    }
+    
+    console.log(`✅ Bulk delete complete: ${deleted} deleted, ${failed} failed`);
+    return { deleted, failed, errors };
+  },
+
+  /**
+   * Merge groups - moves all users from source groups to target group, then deletes source groups
+   * @param {string} targetGroupId - The group to merge into
+   * @param {Array} sourceGroupIds - Array of group IDs to merge from (will be deleted)
+   * @param {Function} onProgress - Progress callback (stage, current, total)
+   * @returns {Promise<{usersMoved: number, groupsDeleted: number, errors: Array}>}
+   */
+  async mergeGroups(targetGroupId, sourceGroupIds, onProgress = null) {
+    console.log(`🔀 Merging ${sourceGroupIds.length} groups into ${targetGroupId}`);
+    
+    let usersMoved = 0;
+    let groupsDeleted = 0;
+    const errors = [];
+    
+    // Step 1: Get all users from source groups
+    const allSourceUsers = new Set();
+    
+    for (let i = 0; i < sourceGroupIds.length; i++) {
+      const sourceId = sourceGroupIds[i];
+      
+      if (onProgress) {
+        onProgress('fetching', i + 1, sourceGroupIds.length);
+      }
+      
+      try {
+        const users = await this.getGroupUsers(sourceId);
+        users.forEach(u => allSourceUsers.add(u.id));
+      } catch (error) {
+        errors.push({ stage: 'fetch', groupId: sourceId, error: error.message });
+        console.error(`Failed to get users from group ${sourceId}:`, error.message);
+      }
+    }
+    
+    console.log(`📊 Found ${allSourceUsers.size} unique users across source groups`);
+    
+    // Step 2: Get existing users in target group
+    let targetUserIds = new Set();
+    try {
+      const targetUsers = await this.getGroupUsers(targetGroupId);
+      targetUserIds = new Set(targetUsers.map(u => u.id));
+    } catch (error) {
+      errors.push({ stage: 'target', groupId: targetGroupId, error: error.message });
+      throw new Error(`Failed to get target group users: ${error.message}`);
+    }
+    
+    // Step 3: Add users to target group (only those not already in it)
+    const usersToAdd = [...allSourceUsers].filter(id => !targetUserIds.has(id));
+    console.log(`➕ Adding ${usersToAdd.length} users to target group`);
+    
+    for (let i = 0; i < usersToAdd.length; i++) {
+      const userId = usersToAdd[i];
+      
+      if (onProgress) {
+        onProgress('moving', i + 1, usersToAdd.length);
+      }
+      
+      try {
+        await this.addUserToGroup(targetGroupId, userId);
+        usersMoved++;
+      } catch (error) {
+        errors.push({ stage: 'move', userId, error: error.message });
+      }
+      
+      // Rate limiting
+      if (i < usersToAdd.length - 1 && i % 5 === 0) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+    }
+    
+    // Step 4: Delete source groups
+    console.log(`🗑️ Deleting ${sourceGroupIds.length} source groups`);
+    
+    for (let i = 0; i < sourceGroupIds.length; i++) {
+      const sourceId = sourceGroupIds[i];
+      
+      if (onProgress) {
+        onProgress('deleting', i + 1, sourceGroupIds.length);
+      }
+      
+      try {
+        await rateLimitedApiCall(() => 
+          apiClient.delete(`/v2/groups/${sourceId}`)
+        );
+        groupsDeleted++;
+      } catch (error) {
+        errors.push({ stage: 'delete', groupId: sourceId, error: error.message });
+        console.error(`Failed to delete source group ${sourceId}:`, error.message);
+      }
+      
+      if (i < sourceGroupIds.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+    }
+    
+    console.log(`✅ Merge complete: ${usersMoved} users moved, ${groupsDeleted} groups deleted`);
+    return { usersMoved, groupsDeleted, errors };
   }
 };
 

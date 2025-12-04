@@ -3,6 +3,7 @@ import './AdminNav.css';
 
 const AdminNav = ({ currentPage, onLogout }) => {
   const navItems = [
+    { id: 'data', label: 'Data', path: '/admin/data', icon: '💾' },
     { id: 'reports', label: 'Reporting', path: '/admin/reports', icon: '📊' },
     { id: 'groups', label: 'Group Analysis', path: '/admin/groups', icon: '👥' },
     { id: 'import', label: 'Partner Import', path: '/admin/import', icon: '📤' },

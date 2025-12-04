@@ -3,6 +3,8 @@
 
 const CACHE_PREFIX = 'northpass_cache_';
 const DEFAULT_CACHE_DURATION = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
+const MAX_LOCALSTORAGE_ITEM_SIZE = 50 * 1024; // 50KB max per item for localStorage
+const MAX_LOCALSTORAGE_TOTAL_SIZE = 4 * 1024 * 1024; // 4MB target max for our cache
 
 class CacheService {
   constructor() {
@@ -13,6 +15,44 @@ class CacheService {
       clears: 0,
       expired: 0
     };
+    this.idbAvailable = false;
+    this.idbPromise = this.initIndexedDB();
+  }
+
+  /**
+   * Initialize IndexedDB for larger cache items
+   */
+  async initIndexedDB() {
+    try {
+      return new Promise((resolve) => {
+        const request = indexedDB.open('NorthpassCacheDB', 1);
+        
+        request.onerror = () => {
+          console.warn('IndexedDB not available for caching, using memory only for large items');
+          this.idbAvailable = false;
+          resolve(null);
+        };
+        
+        request.onsuccess = () => {
+          this.idbAvailable = true;
+          console.log('✅ IndexedDB cache initialized');
+          resolve(request.result);
+        };
+        
+        request.onupgradeneeded = (event) => {
+          const db = event.target.result;
+          if (!db.objectStoreNames.contains('cache')) {
+            const store = db.createObjectStore('cache', { keyPath: 'key' });
+            store.createIndex('expires', 'expires', { unique: false });
+            store.createIndex('timestamp', 'timestamp', { unique: false });
+          }
+        };
+      });
+    } catch (error) {
+      console.warn('IndexedDB initialization failed:', error);
+      this.idbAvailable = false;
+      return null;
+    }
   }
 
   /**
@@ -48,6 +88,8 @@ class CacheService {
    * @returns {Object|null} - Cached data or null if not found/expired
    */
   get(key) {
+    // Synchronous get - only checks memory and localStorage
+    // For IndexedDB, use getAsync
     try {
       // Check memory cache first (fastest)
       if (this.memoryCache.has(key)) {
@@ -90,12 +132,207 @@ class CacheService {
   }
 
   /**
+   * Get cached data asynchronously (includes IndexedDB lookup)
+   * @param {string} key - Cache key
+   * @returns {Promise<Object|null>} - Cached data or null if not found/expired
+   */
+  async getAsync(key) {
+    // First try synchronous caches
+    const syncResult = this.get(key);
+    if (syncResult !== null) {
+      return syncResult;
+    }
+
+    // Try IndexedDB for larger items
+    if (this.idbAvailable) {
+      try {
+        const db = await this.idbPromise;
+        if (db) {
+          const result = await this.idbGet(db, key);
+          if (result && this.isValid(result)) {
+            // Store in memory cache for faster access
+            this.memoryCache.set(key, result);
+            this.cacheStats.hits++;
+            this.cacheStats.misses--; // Undo the miss count from sync get
+            console.log(`🎯 IndexedDB cache HIT: ${key}`);
+            return result.data;
+          }
+        }
+      } catch (error) {
+        console.warn('IndexedDB get error:', error);
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Get from IndexedDB
+   */
+  async idbGet(db, key) {
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction('cache', 'readonly');
+        const store = tx.objectStore('cache');
+        const request = store.get(key);
+        
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => resolve(null);
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  /**
+   * Store in IndexedDB
+   */
+  async idbSet(db, key, cacheEntry) {
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction('cache', 'readwrite');
+        const store = tx.objectStore('cache');
+        const request = store.put({ key, ...cacheEntry });
+        
+        request.onsuccess = () => resolve(true);
+        request.onerror = () => resolve(false);
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
+  /**
+   * Delete from IndexedDB
+   */
+  async idbDelete(db, key) {
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction('cache', 'readwrite');
+        const store = tx.objectStore('cache');
+        const request = store.delete(key);
+        
+        request.onsuccess = () => resolve(true);
+        request.onerror = () => resolve(false);
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
+  /**
+   * Clear all IndexedDB cache entries
+   */
+  async idbClearAll(db) {
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction('cache', 'readwrite');
+        const store = tx.objectStore('cache');
+        const request = store.clear();
+        
+        request.onsuccess = () => resolve(true);
+        request.onerror = () => resolve(false);
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
+  /**
+   * Get estimated size of data in bytes
+   */
+  getDataSize(data) {
+    try {
+      return new Blob([JSON.stringify(data)]).size;
+    } catch {
+      return JSON.stringify(data).length * 2; // Rough estimate
+    }
+  }
+
+  /**
+   * Get total size of our localStorage cache entries
+   */
+  getLocalStorageCacheSize() {
+    let totalSize = 0;
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(CACHE_PREFIX)) {
+          const item = localStorage.getItem(key);
+          totalSize += key.length + (item ? item.length : 0);
+        }
+      }
+    } catch {
+      // Ignore errors
+    }
+    return totalSize * 2; // UTF-16 encoding
+  }
+
+  /**
+   * Clear oldest cache entries to make room
+   * @param {number} targetSize - Target size to free up
+   */
+  clearOldestEntries(targetSize) {
+    const entries = [];
+    
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(CACHE_PREFIX)) {
+          const item = localStorage.getItem(key);
+          try {
+            const parsed = JSON.parse(item);
+            entries.push({
+              key,
+              timestamp: parsed.timestamp || 0,
+              size: key.length + (item ? item.length : 0)
+            });
+          } catch {
+            // Invalid entry, remove it
+            localStorage.removeItem(key);
+          }
+        }
+      }
+
+      // Sort by timestamp (oldest first)
+      entries.sort((a, b) => a.timestamp - b.timestamp);
+
+      let freedSize = 0;
+      let removedCount = 0;
+      for (const entry of entries) {
+        if (freedSize >= targetSize) break;
+        localStorage.removeItem(entry.key);
+        this.memoryCache.delete(entry.key);
+        freedSize += entry.size * 2;
+        removedCount++;
+      }
+
+      if (removedCount > 0) {
+        console.log(`🧹 Freed ${Math.round(freedSize / 1024)}KB by removing ${removedCount} old cache entries`);
+      }
+      
+      return freedSize;
+    } catch (error) {
+      console.warn('Error clearing oldest entries:', error);
+      return 0;
+    }
+  }
+
+  /**
    * Store data in cache
    * @param {string} key - Cache key
    * @param {*} data - Data to cache
    * @param {number} duration - Cache duration in milliseconds (optional)
    */
   set(key, data, duration = DEFAULT_CACHE_DURATION) {
+    // Run async to handle IndexedDB
+    this.setAsync(key, data, duration);
+  }
+
+  /**
+   * Store data in cache (async version)
+   */
+  async setAsync(key, data, duration = DEFAULT_CACHE_DURATION) {
     try {
       const cacheEntry = {
         data,
@@ -104,21 +341,58 @@ class CacheService {
         duration
       };
 
-      // Store in memory cache
+      // Store in memory cache (always)
       this.memoryCache.set(key, cacheEntry);
 
-      // Store in localStorage (with error handling for quota)
+      // Check data size to decide storage location
+      const dataSize = this.getDataSize(cacheEntry);
+      
+      // For large items, use IndexedDB instead of localStorage
+      if (dataSize > MAX_LOCALSTORAGE_ITEM_SIZE) {
+        if (this.idbAvailable) {
+          const db = await this.idbPromise;
+          if (db) {
+            const stored = await this.idbSet(db, key, cacheEntry);
+            if (stored) {
+              console.log(`💾 Cached in IndexedDB: ${key} (${Math.round(dataSize / 1024)}KB, expires in ${Math.round(duration / 1000 / 60)} min)`);
+              return;
+            }
+          }
+        }
+        // Fall back to memory-only for large items if IndexedDB unavailable
+        console.log(`💭 Cached in memory only (large): ${key} (${Math.round(dataSize / 1024)}KB)`);
+        return;
+      }
+
+      // For smaller items, use localStorage
       try {
+        // Check if we need to free up space
+        const currentSize = this.getLocalStorageCacheSize();
+        if (currentSize + dataSize > MAX_LOCALSTORAGE_TOTAL_SIZE) {
+          this.clearOldestEntries(dataSize + (MAX_LOCALSTORAGE_TOTAL_SIZE * 0.2)); // Free 20% extra
+        }
+        
         localStorage.setItem(key, JSON.stringify(cacheEntry));
-        console.log(`💾 Cached: ${key} (expires in ${Math.round(duration / 1000 / 60)} minutes)`);
+        console.log(`💾 Cached: ${key} (expires in ${Math.round(duration / 1000 / 60)} min)`);
       } catch (storageError) {
         if (storageError.name === 'QuotaExceededError') {
-          console.warn('LocalStorage quota exceeded, clearing old cache entries');
+          console.warn('LocalStorage quota exceeded, clearing old entries...');
           this.clearExpiredEntries();
+          this.clearOldestEntries(dataSize * 2);
           try {
             localStorage.setItem(key, JSON.stringify(cacheEntry));
+            console.log(`💾 Cached after cleanup: ${key}`);
           } catch {
-            console.warn('Still cannot store in localStorage after cleanup, using memory only');
+            // If still failing, try IndexedDB
+            if (this.idbAvailable) {
+              const db = await this.idbPromise;
+              if (db) {
+                await this.idbSet(db, key, cacheEntry);
+                console.log(`💾 Cached in IndexedDB (fallback): ${key}`);
+                return;
+              }
+            }
+            console.warn(`💭 Cached in memory only: ${key}`);
           }
         }
       }
@@ -139,7 +413,7 @@ class CacheService {
   /**
    * Clear all cache entries
    */
-  clearAll() {
+  async clearAll() {
     try {
       // Clear memory cache
       this.memoryCache.clear();
@@ -155,8 +429,16 @@ class CacheService {
 
       keysToRemove.forEach(key => localStorage.removeItem(key));
       
+      // Clear IndexedDB cache
+      if (this.idbAvailable) {
+        const db = await this.idbPromise;
+        if (db) {
+          await this.idbClearAll(db);
+        }
+      }
+      
       this.cacheStats.clears++;
-      console.log(`🧹 Cleared ${keysToRemove.length} cache entries`);
+      console.log(`🧹 Cleared ${keysToRemove.length} localStorage + IndexedDB cache entries`);
       
       // Show notification to user
       this.showCacheNotification('Cache cleared! Data will be refreshed.', 'success');
@@ -332,8 +614,8 @@ class CacheService {
     return async (...args) => {
       const cacheKey = this.generateCacheKey(cacheType, args);
       
-      // Try to get from cache first
-      const cached = this.get(cacheKey);
+      // Try to get from cache first (including IndexedDB for large items)
+      const cached = await this.getAsync(cacheKey);
       if (cached !== null) {
         return cached;
       }
@@ -342,8 +624,8 @@ class CacheService {
       console.log(`🔄 Fetching fresh data: ${cacheType}`);
       const result = await fn(...args);
       
-      // Store in cache
-      this.set(cacheKey, result, duration);
+      // Store in cache (async handles IndexedDB for large items)
+      await this.setAsync(cacheKey, result, duration);
       
       return result;
     };

@@ -69,8 +69,9 @@ const AdminHub = ({ children, currentPage }) => {
             <div className="login-tools-preview">
               <h3>Available Tools:</h3>
               <ul>
-                <li>� <strong>Reporting</strong> - Analytics by Region, Tier & Certification gaps</li>
-                <li>�👥 <strong>Group Analysis</strong> - Find missing users by email domain</li>
+                <li>💾 <strong>Data Management</strong> - Import partner contact data from Excel</li>
+                <li>📊 <strong>Reporting</strong> - Analytics by Region, Tier & Certification gaps</li>
+                <li>👥 <strong>Group Analysis</strong> - Find missing users by email domain</li>
                 <li>📤 <strong>Partner Import</strong> - Cross-reference XLSX with Northpass groups</li>
                 <li>🔗 <strong>URL Generator</strong> - Bulk generate secure partner URLs</li>
               </ul>

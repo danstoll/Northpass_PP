@@ -39,17 +39,15 @@ app.use((req, res, next) => {
   next();
 });
 
-// Serve static files - cache assets but not HTML
+// Serve static files - no caching to ensure fresh CSS/JS
 app.use(express.static(path.join(__dirname, 'dist'), {
-  maxAge: '1d', // 1 day cache for static assets
-  etag: true,
+  etag: false,
+  lastModified: false,
   setHeaders: (res, filePath) => {
-    // Don't cache HTML files
-    if (filePath.endsWith('.html')) {
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      res.setHeader('Pragma', 'no-cache');
-      res.setHeader('Expires', '0');
-    }
+    // No caching for any files
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
   }
 }));
 
