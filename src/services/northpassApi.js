@@ -266,6 +266,110 @@ export const northpassApi = {
     return isValid;
   },
 
+  // Cache for course NPCU values from Properties API
+  _courseNPCUCache: new Map(),
+  _npcuCacheTimestamp: null,
+  _npcuCacheTTL: 30 * 60 * 1000, // 30 minutes TTL
+
+  /**
+   * Fetch NPCU value for a course from the Properties API
+   * @param {string} courseId - The course ID
+   * @param {string} courseName - The course name (for logging)
+   * @returns {number} - NPCU value (0, 1, or 2)
+   */
+  async getCourseNPCU(courseId, courseName = 'Unknown Course') {
+    if (!courseId) return 0;
+
+    // Check cache first
+    if (this._courseNPCUCache.has(courseId)) {
+      const cached = this._courseNPCUCache.get(courseId);
+      console.log(`⚡ Using cached NPCU for ${courseName}: ${cached}`);
+      return cached;
+    }
+
+    // Check if this course is known to fail properties API
+    if (isKnownFailedCourse(courseId, 'PROPERTIES_403')) {
+      console.log(`⚡ Skipping known failed properties course: ${courseName} (${courseId})`);
+      return 0;
+    }
+
+    try {
+      console.log(`📡 Fetching NPCU from Properties API for: ${courseName} (${courseId})`);
+      
+      const response = await rateLimitedApiCall(() => 
+        apiClient.get(`/v2/properties/courses/${courseId}`)
+      );
+
+      // Look for NPCU property in the response
+      const properties = response.data?.data || [];
+      let npcuValue = 0;
+
+      // Find the NPCU property (might be named 'npcu', 'NPCU', 'npcu_value', etc.)
+      for (const prop of properties) {
+        const propName = (prop.attributes?.name || prop.name || '').toLowerCase();
+        if (propName.includes('npcu') || propName === 'certification_points' || propName === 'points') {
+          const rawValue = prop.attributes?.value ?? prop.value ?? 0;
+          npcuValue = this.validateNPCUValue(rawValue);
+          console.log(`✅ Found NPCU for ${courseName}: ${npcuValue} (property: ${propName})`);
+          break;
+        }
+      }
+
+      // Cache the result
+      this._courseNPCUCache.set(courseId, npcuValue);
+      return npcuValue;
+
+    } catch (error) {
+      const status = error.response?.status;
+      
+      if (status === 403) {
+        console.warn(`⚠️ Properties API 403 for ${courseName} (${courseId}) - access denied`);
+        trackFailedCourse(courseId, courseName, 'PROPERTIES_403', { status });
+      } else if (status === 404) {
+        console.warn(`⚠️ Properties API 404 for ${courseName} (${courseId}) - no properties found`);
+      } else {
+        console.error(`❌ Properties API error for ${courseName}:`, error.message);
+      }
+
+      // Cache as 0 to avoid repeated failed calls
+      this._courseNPCUCache.set(courseId, 0);
+      return 0;
+    }
+  },
+
+  /**
+   * Batch fetch NPCU values for multiple courses
+   * @param {Array} courses - Array of {courseId, courseName} objects
+   * @returns {Map} - Map of courseId -> NPCU value
+   */
+  async batchGetCourseNPCU(courses) {
+    const results = new Map();
+    
+    // Process in small batches to avoid overwhelming the API
+    const batchSize = 5;
+    for (let i = 0; i < courses.length; i += batchSize) {
+      const batch = courses.slice(i, i + batchSize);
+      
+      const batchResults = await Promise.all(
+        batch.map(async ({ courseId, courseName }) => {
+          const npcu = await this.getCourseNPCU(courseId, courseName);
+          return { courseId, npcu };
+        })
+      );
+
+      batchResults.forEach(({ courseId, npcu }) => {
+        results.set(courseId, npcu);
+      });
+
+      // Small delay between batches
+      if (i + batchSize < courses.length) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+    }
+
+    return results;
+  },
+
   // Try to get certificates with expiry dates from certificates endpoint
   async getUserCertificates(userId) {
     // This endpoint consistently returns 404, so we'll skip it for now
@@ -342,13 +446,32 @@ export const northpassApi = {
         };
       }
       
+      // Get completed courses to fetch NPCU values
+      const completedCourses = allTranscriptItems
+        .filter(item => item.attributes?.progress_status === 'completed')
+        .map(item => ({
+          courseId: item.attributes.resource_id,
+          courseName: item.attributes.name || 'Unknown Course'
+        }));
+
+      // Batch fetch NPCU values for completed courses from Properties API
+      let npcuMap = new Map();
+      if (completedCourses.length > 0) {
+        console.log(`📡 Fetching NPCU values for ${completedCourses.length} completed courses...`);
+        npcuMap = await this.batchGetCourseNPCU(completedCourses);
+      }
+
       // Process all learning activities
       const learningActivities = allTranscriptItems.map(item => {
         const attrs = item.attributes;
+        const courseId = attrs.resource_id;
+        
+        // Get NPCU from Properties API for completed courses
+        const npcu = attrs.progress_status === 'completed' ? (npcuMap.get(courseId) || 0) : 0;
         
         return {
           id: item.id,
-          resourceId: attrs.resource_id,
+          resourceId: courseId,
           resourceType: attrs.resource_type,
           name: attrs.name || 'Unknown Course',
           status: attrs.progress_status, // enrolled, in_progress, completed
@@ -365,8 +488,8 @@ export const northpassApi = {
           // Calculate expiry for completed certifications
           expiryDate: attrs.expires_at || attrs.expiry_date || 
                      (attrs.completed_at ? this.calculateExpiryDate(attrs.completed_at, attrs.name || 'Unknown Course') : null),
-          // NPCU only for completed certifications
-          npcu: attrs.progress_status === 'completed' ? this.calculateNPCUPoints(attrs.name || 'Unknown Course') : 0,
+          // NPCU from Properties API for completed certifications
+          npcu: npcu,
           category: this.categorizeCertificationByProduct(attrs.name || 'Unknown Course')
         };
       });
@@ -497,13 +620,27 @@ export const northpassApi = {
       
       console.log(`✅ Found ${completedItems.length} completed items`);
       
+      // First, collect all course IDs to batch fetch NPCU values
+      const coursesToFetchNPCU = completedItems.map(item => ({
+        courseId: item.attributes.resource_id,
+        courseName: item.attributes.name || 'Unknown Course'
+      }));
+
+      // Batch fetch NPCU values from Properties API
+      console.log(`📡 Fetching NPCU values for ${coursesToFetchNPCU.length} courses from Properties API...`);
+      const npcuMap = await this.batchGetCourseNPCU(coursesToFetchNPCU);
+
       // Convert to standardized format using correct API field names
       let certifications = completedItems.map(item => {
         const attrs = item.attributes;
+        const courseId = attrs.resource_id;
+        
+        // Get NPCU from Properties API (already fetched)
+        const npcu = npcuMap.get(courseId) || 0;
         
         return {
           id: item.id,
-          resourceId: attrs.resource_id,
+          resourceId: courseId,
           resourceType: attrs.resource_type,
           name: attrs.name || 'Unknown Course', // Correct field name
           status: attrs.progress_status, // Correct field name
@@ -520,8 +657,8 @@ export const northpassApi = {
           expiresAt: attrs.expires_at || attrs.expiry_date || attrs.certificate_expires_at || null,
           validUntil: attrs.valid_until || attrs.valid_to || null,
           certificateExpiryDate: attrs.certificate_expiry_date || attrs.cert_expires_at || null,
-          // Add NPCU calculation based on course name/type
-          npcu: this.calculateNPCUPoints(attrs.name || 'Unknown Course'),
+          // NPCU from Properties API
+          npcu: npcu,
           // Use actual expiry date if available, otherwise calculate
           expiryDate: attrs.expires_at || attrs.expiry_date || attrs.certificate_expires_at || 
                      attrs.valid_until || attrs.valid_to || attrs.certificate_expiry_date || 
@@ -736,9 +873,12 @@ export const northpassApi = {
     return expiryDate.toISOString();
   },
 
-  // Calculate NPCU points based on course name and type (business logic fallback)
+  // DEPRECATED: Calculate NPCU points based on course name and type (legacy fallback)
+  // NPCU values should come from the Properties API (/v2/properties/courses/{courseId})
+  // This function is kept only as a fallback if the Properties API is unavailable
   // NPCU can only be 0 (blank), 1, or 2 - no other values allowed
   calculateNPCUPoints(courseName) {
+    console.warn('⚠️ Using fallback NPCU calculation - Properties API should be used instead');
     const name = courseName.toLowerCase();
     
     // Only assign NPCU points if this is actually a certification course
