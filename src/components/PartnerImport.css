@@ -348,8 +348,17 @@
 .result-skipped { color: #ffc107; }
 .result-failed { color: #ff6b6b; }
 
-/* Responsive */
-@media (max-width: 768px) {
+/* Responsive - Standard Breakpoints */
+/* Tablet: 768-991px */
+@media (min-width: 768px) and (max-width: 991px) {
+  .partner-import {
+    margin: var(--space-4);
+    padding: var(--space-5);
+  }
+}
+
+/* Mobile: ≤767px */
+@media (max-width: 767px) {
   .partner-import {
     margin: var(--space-3);
     padding: var(--space-4);

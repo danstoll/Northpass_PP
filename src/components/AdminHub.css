@@ -113,12 +113,39 @@
 /* Authenticated Content */
 .admin-hub .admin-content {
   padding: var(--space-5);
-  max-width: 1400px;
+  max-width: var(--container-wide);  /* 1280px - standard wide content */
   margin: 0 auto;
 }
 
-/* Responsive */
-@media (max-width: 768px) {
+/* Responsive - Standard Breakpoints */
+/* Desktop: ≥1200px (default styles above) */
+
+/* Laptop: 992-1199px */
+@media (min-width: 992px) and (max-width: 1199px) {
+  .admin-hub .admin-content {
+    padding: var(--space-4);
+  }
+  
+  .admin-hub .login-card {
+    max-width: 480px;
+    padding: var(--space-6);
+  }
+}
+
+/* Tablet: 768-991px */
+@media (min-width: 768px) and (max-width: 991px) {
+  .admin-hub .login-card {
+    max-width: 450px;
+    padding: var(--space-5);
+  }
+  
+  .admin-hub .admin-content {
+    padding: var(--space-4);
+  }
+}
+
+/* Mobile: ≤767px */
+@media (max-width: 767px) {
   .admin-hub .login-card {
     padding: var(--space-5);
   }

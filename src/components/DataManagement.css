@@ -1151,8 +1151,16 @@
   padding: 24px;
 }
 
-/* Responsive */
-@media (max-width: 768px) {
+/* Responsive - Standard Breakpoints */
+/* Tablet: 768-991px */
+@media (min-width: 768px) and (max-width: 991px) {
+  .match-summary {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* Mobile: ≤767px */
+@media (max-width: 767px) {
   .data-tabs {
     flex-wrap: wrap;
   }

@@ -263,6 +263,16 @@ const CompanyWidget = ({ groupName, tier }) => {
   const [progressDetail, setProgressDetail] = useState('');
   const [currentStep, setCurrentStep] = useState(0);
   const [totalSteps, setTotalSteps] = useState(0);
+  const [progressLogs, setProgressLogs] = useState([]);
+  const [usersProcessed, setUsersProcessed] = useState(0);
+  const [totalUsersToProcess, setTotalUsersToProcess] = useState(0);
+  const [coursesLoaded, setCoursesLoaded] = useState(0);
+  
+  // Helper to add log entry
+  const addProgressLog = (message, type = 'info') => {
+    const timestamp = new Date().toLocaleTimeString();
+    setProgressLogs(prev => [...prev.slice(-15), { message, type, timestamp }]);
+  };
 
   // Handle cache refresh
   const handleRefreshData = async () => {
@@ -301,14 +311,20 @@ const CompanyWidget = ({ groupName, tier }) => {
       setLoading(true);
       setError(null);
       setCurrentStep(0);
-      setTotalSteps(3); // Initial estimate: 1) Find group, 2) Get users, 3) Process certifications
+      setTotalSteps(4); // 1) Find group, 2) Get users, 3) Load catalog, 4) Process certifications
+      setProgressLogs([]);
+      setUsersProcessed(0);
+      setTotalUsersToProcess(0);
+      setCoursesLoaded(0);
       
       console.log(`🏢 Starting company analysis for: ${groupName} (${tier || 'Premier'} tier)`);
+      addProgressLog(`Starting analysis for ${groupName}`, 'start');
       
       // Step 1: Find the group by name
       setCurrentStep(1);
       setProgressStatus('Searching for group...');
       setProgressDetail(`Looking for "${groupName}" in Northpass`);
+      addProgressLog(`Searching for group: ${groupName}`, 'search');
       console.log('📋 Searching for group...');
       
       const group = await northpassApi.findGroupByName(groupName);
@@ -318,25 +334,33 @@ const CompanyWidget = ({ groupName, tier }) => {
       }
       
       console.log(`✅ Found group: ${group.attributes.name} (ID: ${group.id})`);
+      addProgressLog(`✓ Found group: ${group.attributes.name}`, 'success');
       setGroupData(group);
       
       // Step 2: Get all users in the group
       setCurrentStep(2);
       setProgressStatus('Fetching group members...');
       setProgressDetail('Loading user list from group');
+      addProgressLog('Loading group members...', 'loading');
       console.log('👥 Fetching group members...');
       
       const groupUsers = await northpassApi.getGroupUsers(group.id);
       console.log(`📊 Found ${groupUsers.length} users in group`);
+      addProgressLog(`✓ Found ${groupUsers.length} users`, 'success');
+      setTotalUsersToProcess(groupUsers.length);
       
-      // Update total steps for parallel processing (much simpler!)
-      setTotalSteps(4); // 1) Find group, 2) Get users, 3) Process certifications, 4) Complete
-      setProgressDetail(`Found ${groupUsers.length} users - analyzing certifications in parallel...`);
+      // Update total steps for parallel processing
+      setTotalSteps(4);
+      setProgressDetail(`Found ${groupUsers.length} users - analyzing certifications...`);
+      addProgressLog('Loading course catalog...', 'loading');
       
-      // Step 3: Process all users' certifications in parallel (much faster!)
+      // Step 3: Process all users' certifications in parallel
       setCurrentStep(3);
       setProgressStatus('Analyzing certifications...');
-      setProgressDetail('Processing users in parallel batches...');
+      setProgressDetail('Fetching course catalog and NPCU values...');
+      
+      let lastLoggedUser = '';
+      let courseBatchCount = 0;
       
       const processedUsers = await northpassApi.processUsersInParallel(
         groupUsers, 
@@ -356,9 +380,17 @@ const CompanyWidget = ({ groupName, tier }) => {
             displayName = `User ${userId.substring(0, 8)}...`;
           }
           
+          setUsersProcessed(currentUser);
           setProgressDetail(`Processing ${displayName} (${currentUser}/${totalUsers})`);
+          
+          // Log every 5th user to avoid spam
+          if (currentUser % 5 === 0 || currentUser === totalUsers) {
+            addProgressLog(`Processing users: ${currentUser}/${totalUsers}`, 'progress');
+          }
         }
       );
+      
+      addProgressLog(`✓ Processed ${processedUsers.length} users`, 'success');
       
       // Calculate totals from processed results (COMPANY-LEVEL AGGREGATION)
       let runningTotal = 0;
@@ -420,6 +452,7 @@ const CompanyWidget = ({ groupName, tier }) => {
       setCurrentStep(4);
       setProgressStatus('Analysis complete!');
       setProgressDetail(`Processed ${processedUsers.length} users in parallel`);
+      addProgressLog(`✓ Analysis complete: ${runningTotal} total NPCU`, 'success');
       
       setUsers(processedUsers);
       setTotalNPCU(runningTotal);
@@ -570,14 +603,14 @@ const CompanyWidget = ({ groupName, tier }) => {
     return (
       <div className="company-widget">
         <div className="widget-header">
-          <h2>🏢 Company Certifications</h2>
-          <div className="tier-badge tier-premier">Loading...</div>
+          <h2>🏢 {groupName || 'Company Certifications'}</h2>
+          <div className="tier-badge tier-premier">{tier || 'Loading...'}</div>
         </div>
         <div className="loading-state">
           <div className="loading-spinner"></div>
           <div className="progress-info">
-            <h3>{progressStatus}</h3>
-            <p>{progressDetail}</p>
+            <h3>{progressStatus || 'Initializing...'}</h3>
+            <p className="progress-detail">{progressDetail}</p>
             {totalSteps > 0 && (
               <>
                 <div className="progress-bar">
@@ -588,9 +621,26 @@ const CompanyWidget = ({ groupName, tier }) => {
                 </div>
                 <p className="progress-text">
                   Step {currentStep} of {totalSteps} 
-                  {totalSteps > 2 && ` (${Math.round((currentStep / totalSteps) * 100)}%)`}
+                  {currentStep >= 3 && totalUsersToProcess > 0 && (
+                    <span> • Users: {usersProcessed}/{totalUsersToProcess}</span>
+                  )}
                 </p>
               </>
+            )}
+            
+            {/* Live activity log */}
+            {progressLogs.length > 0 && (
+              <div className="progress-log">
+                <div className="log-header">Activity Log</div>
+                <div className="log-entries">
+                  {progressLogs.map((log, idx) => (
+                    <div key={idx} className={`log-entry log-${log.type}`}>
+                      <span className="log-time">{log.timestamp}</span>
+                      <span className="log-message">{log.message}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         </div>

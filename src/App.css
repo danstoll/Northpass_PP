@@ -19,16 +19,40 @@
 
 .app-container {
   width: 100%;
-  max-width: 1600px;
+  max-width: 100%;
   margin: 0 auto;
   padding: var(--space-5);
   display: flex;
   justify-content: center;
   align-items: flex-start;
   min-height: 100vh;
+  box-sizing: border-box;
 }
 
-@media (max-width: 768px) {
+/* Responsive container padding - Standard breakpoints */
+/* Desktop: ≥1200px */
+@media (min-width: 1200px) {
+  .app-container {
+    padding: var(--space-6);
+  }
+}
+
+/* Laptop: 992-1199px */
+@media (min-width: 992px) and (max-width: 1199px) {
+  .app-container {
+    padding: var(--space-5);
+  }
+}
+
+/* Tablet: 768-991px */
+@media (min-width: 768px) and (max-width: 991px) {
+  .app-container {
+    padding: var(--space-4);
+  }
+}
+
+/* Mobile: ≤767px */
+@media (max-width: 767px) {
   .app-container {
     padding: var(--space-3);
   }
@@ -46,11 +70,4 @@ body {
 
 #root {
   width: 100%;
-}
-
-/* Responsive design */
-@media (max-width: 768px) {
-  .app-container {
-    padding: var(--space-4) var(--space-3);
-  }
 }

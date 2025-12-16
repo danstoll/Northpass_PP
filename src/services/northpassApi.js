@@ -6,19 +6,21 @@ import {
   analyzePropertiesFailures 
 } from './failedCourseTracker.js';
 import cacheService from './cacheService.js';
+import { shouldSkipCourse, shouldExcludeCourseByName, isExcludedCourseId, getLearningPathComponentInfo, getKnownNpcuOverride } from './invalidCourseReference.js';
 
 // Always use proxy to avoid CORS issues
 const API_BASE_URL = '/api/northpass';
 const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
 
-// Optimized rate limiting configuration
-const STANDARD_RATE_LIMIT = 5; // 5 requests per second for standard endpoints
+// Rate limiting configuration - Northpass allows 10 requests/second
+// See: https://developers.northpass.com/docs/api-rate-limiting
+const STANDARD_RATE_LIMIT = 10; // 10 requests per second (official Northpass limit)
 const STANDARD_RATE_WINDOW = 1000; // 1 second
-const STANDARD_MIN_DELAY = 200; // 200ms between standard requests
+const STANDARD_MIN_DELAY = 100; // 100ms between requests (allows 10/sec)
 
-// Conservative for properties API only
-const PROPERTIES_MIN_DELAY = 1000; // 1 second for properties API
-const MAX_CONCURRENT_USERS = 3; // Process 3 users in parallel
+// Properties API can use same rate limit as standard endpoints
+const PROPERTIES_MIN_DELAY = 100; // 100ms for properties API (same as standard)
+const MAX_CONCURRENT_USERS = 5; // Process 5 users in parallel (increased from 3)
 let requestCount = 0;
 let windowStart = Date.now();
 let lastRequestTime = 0;
@@ -192,6 +194,12 @@ export const northpassApi = {
   },
 
   // Cache for course catalog to avoid repeated API calls
+  // Helper to check if a course name indicates it's archived or should be excluded
+  isArchivedCourse(courseName) {
+    // Use centralized exclusion logic from invalidCourseReference.js
+    return shouldExcludeCourseByName(courseName);
+  },
+
   _courseCatalogCache: null,
   _catalogCacheTimestamp: null,
   _catalogCacheTTL: 5 * 60 * 1000, // 5 minutes TTL
@@ -204,66 +212,145 @@ export const northpassApi = {
       if (this._courseCatalogCache && 
           this._catalogCacheTimestamp && 
           (now - this._catalogCacheTimestamp) < this._catalogCacheTTL) {
-        console.log('📚 Using cached course catalog');
+        console.log(`📚 Using cached course catalog (${this._courseCatalogCache.size} courses)`);
         return this._courseCatalogCache;
       }
 
-      console.log('📡 Fetching current course catalog...');
+      console.log('📡 Fetching current course catalog with pagination (live + archived courses)...');
       let allCourses = [];
-      let currentPage = 1;
-      let hasNextPage = true;
-
-      while (hasNextPage) {
-        const pageParam = currentPage > 1 ? `?page=${currentPage}&limit=50&filter[published][eq]=true` : '?limit=50&filter[published][eq]=true';
-        const response = await rateLimitedApiCall(() => apiClient.get(`/v2/courses${pageParam}`));
+      
+      // Fetch BOTH live and draft courses
+      // Live courses: active certifications
+      // Draft courses with "Archived" prefix: archived courses that still count NPCU until expiry
+      // Deleted courses (not in API): excluded entirely
+      for (const status of ['live', 'draft']) {
+        let currentPage = 1;
+        let hasNextPage = true;
         
-        if (response.data?.data && response.data.data.length > 0) {
-          allCourses = [...allCourses, ...response.data.data];
-          hasNextPage = !!response.data.links?.next;
-          if (hasNextPage) currentPage++;
-        } else {
-          hasNextPage = false;
+        while (hasNextPage) {
+          const pageParam = `?page=${currentPage}&limit=50&filter[status][eq]=${status}`;
+          console.log(`   📄 Fetching ${status} courses page ${currentPage}...`);
+          const response = await rateLimitedApiCall(() => apiClient.get(`/v2/courses${pageParam}`));
+          
+          if (response.data?.data && response.data.data.length > 0) {
+            // For draft courses, only include those with "Archived" prefix (these are archived courses)
+            // For live courses, include all
+            const filteredCourses = response.data.data.filter(c => {
+              if (status === 'draft') {
+                const name = c.attributes?.name || '';
+                return name.toLowerCase().startsWith('archived');
+              }
+              return true; // Include all live courses
+            });
+            
+            // Mark the actual status: 'live' or 'archived' (draft with Archived prefix)
+            const coursesWithStatus = filteredCourses.map(c => ({
+              ...c,
+              _catalogStatus: status === 'draft' ? 'archived' : 'live'
+            }));
+            allCourses = [...allCourses, ...coursesWithStatus];
+            
+            const archivedInPage = status === 'draft' ? filteredCourses.length : 0;
+            console.log(`   ✓ Page ${currentPage}: ${response.data.data.length} ${status} courses${status === 'draft' ? ` (${archivedInPage} archived)` : ''} (total: ${allCourses.length})`);
+            hasNextPage = !!response.data.links?.next;
+            if (hasNextPage) currentPage++;
+          } else {
+            hasNextPage = false;
+          }
         }
       }
-
-      // Create a Set of valid course IDs for quick lookup
-      const validCourseIds = new Set(allCourses.map(course => course.id));
       
-      console.log(`✅ Loaded ${allCourses.length} published courses into catalog`);
+      console.log(`📊 Catalog pagination complete: ${allCourses.length} total courses (live + archived)`);
+
+      // Filter out excluded courses (test, etc.) and create a Map of courseId -> status
+      // This Map allows us to check both existence AND status (live vs archived)
+      const validCourses = allCourses.filter(course => {
+        const courseId = course.id;
+        const name = course.attributes?.name || '';
+        
+        // Use centralized skip logic
+        if (shouldSkipCourse(courseId, name)) {
+          console.log(`⏭️ Skipping excluded course: ${name}`);
+          return false;
+        }
+        return true;
+      });
+      
+      // Create Map of courseId -> { status: 'live'|'archived', name: string }
+      const courseCatalogMap = new Map();
+      validCourses.forEach(course => {
+        courseCatalogMap.set(course.id, {
+          status: course._catalogStatus || course.attributes?.status || 'live',
+          name: course.attributes?.name || 'Unknown Course'
+        });
+      });
+      
+      const liveCount = validCourses.filter(c => c._catalogStatus === 'live').length;
+      const archivedCount = validCourses.filter(c => c._catalogStatus === 'archived').length;
+      console.log(`✅ Catalog loaded: ${validCourses.length} valid courses (${liveCount} live, ${archivedCount} archived)`);
       
       // Cache the results
-      this._courseCatalogCache = validCourseIds;
+      this._courseCatalogCache = courseCatalogMap;
       this._catalogCacheTimestamp = now;
       
-      return validCourseIds;
+      return courseCatalogMap;
     } catch (error) {
       console.error('❌ Error fetching course catalog:', error.message);
-      return new Set(); // Return empty set on error
+      return new Map(); // Return empty map on error
     }
   },
 
-  // Validate if a course ID exists in the current catalog
+  /**
+   * Validate if a course ID exists in the current catalog
+   * Returns course info object with status, or null if deleted/invalid
+   * - Deleted courses (not in API): returns null (excluded entirely)
+   * - Archived courses: returns { status: 'archived', ... } (NPCU counts until expiry)
+   * - Live courses: returns { status: 'live', ... } (normal NPCU counting)
+   * @param {string} courseId - The course ID to validate
+   * @param {string} courseName - The course name (for logging)
+   * @returns {Object|null} - Course info with status, or null if deleted/invalid
+   */
   async validateCourseInCatalog(courseId, courseName = 'Unknown Course') {
-    if (!courseId) return false;
+    if (!courseId) return null;
     
-    // Check if this course is already known to be invalid to avoid unnecessary API calls
+    // Use centralized skip logic (checks ID + name patterns)
+    if (shouldSkipCourse(courseId, courseName)) {
+      console.log(`⏭️ Skipping excluded course: ${courseName} (${courseId})`);
+      return null;
+    }
+    
+    // Check if this is a known Learning Path component (valid but not in catalog)
+    const lpComponentInfo = getLearningPathComponentInfo(courseId);
+    if (lpComponentInfo) {
+      console.log(`📚 Learning Path component is valid: ${lpComponentInfo.courseName} (NPCU: ${lpComponentInfo.npcu})`);
+      return { status: 'live', name: lpComponentInfo.courseName, isLearningPathComponent: true };
+    }
+    
+    // Check if this course is already known to be deleted to avoid unnecessary API calls
     if (isKnownFailedCourse(courseId, '404_NOT_FOUND')) {
-      console.log(`⚡ Skipping known invalid course: ${courseName} (${courseId})`);
-      return false;
+      console.log(`⚡ Skipping known deleted course: ${courseName} (${courseId})`);
+      return null; // Deleted courses are excluded entirely
     }
     
     const catalog = await this.getCourseCatalog();
-    const isValid = catalog.has(courseId);
+    const courseInfo = catalog.get(courseId);
     
-    // Track failed courses for future optimization
-    if (!isValid) {
+    // Track failed courses (deleted) for future optimization
+    if (!courseInfo) {
       trackFailedCourse(courseId, courseName, '404_NOT_FOUND', {
         catalogSize: catalog.size,
         validationAttempt: new Date().toISOString()
       });
+      console.log(`❌ Course not in catalog (deleted): ${courseName} (${courseId})`);
+      return null; // Deleted courses are excluded entirely
     }
     
-    return isValid;
+    // Log if archived course found
+    if (courseInfo.status === 'archived') {
+      console.log(`📦 Archived course found: ${courseName} - NPCU will count until expiry`);
+    }
+    
+    return courseInfo;
   },
 
   // Cache for course NPCU values from Properties API
@@ -279,6 +366,20 @@ export const northpassApi = {
    */
   async getCourseNPCU(courseId, courseName = 'Unknown Course') {
     if (!courseId) return 0;
+
+    // Check if this is a known Learning Path component (valid but not in catalog)
+    const lpComponentInfo = getLearningPathComponentInfo(courseId);
+    if (lpComponentInfo) {
+      console.log(`📚 Learning Path component found: ${lpComponentInfo.courseName} - NPCU: ${lpComponentInfo.npcu}`);
+      this._courseNPCUCache.set(courseId, lpComponentInfo.npcu);
+      return lpComponentInfo.npcu;
+    }
+
+    // Use centralized skip logic (checks ID + name patterns)
+    if (shouldSkipCourse(courseId, courseName)) {
+      console.log(`⏭️ Skipping excluded course NPCU: ${courseName}`);
+      return 0;
+    }
 
     // Check cache first
     if (this._courseNPCUCache.has(courseId)) {
@@ -300,19 +401,21 @@ export const northpassApi = {
         apiClient.get(`/v2/properties/courses/${courseId}`)
       );
 
-      // Look for NPCU property in the response
-      const properties = response.data?.data || [];
+      // Log full response for debugging
+      console.log(`📋 Properties API response for ${courseName}:`, JSON.stringify(response.data, null, 2));
+
+      // The Properties API returns: data.attributes.properties.npcu
+      // Structure: { data: { attributes: { properties: { npcu: 0|1|2, ... } } } }
+      const properties = response.data?.data?.attributes?.properties || {};
       let npcuValue = 0;
 
-      // Find the NPCU property (might be named 'npcu', 'NPCU', 'npcu_value', etc.)
-      for (const prop of properties) {
-        const propName = (prop.attributes?.name || prop.name || '').toLowerCase();
-        if (propName.includes('npcu') || propName === 'certification_points' || propName === 'points') {
-          const rawValue = prop.attributes?.value ?? prop.value ?? 0;
-          npcuValue = this.validateNPCUValue(rawValue);
-          console.log(`✅ Found NPCU for ${courseName}: ${npcuValue} (property: ${propName})`);
-          break;
-        }
+      // Check for NPCU directly in the properties object
+      if (properties.npcu !== undefined) {
+        npcuValue = this.validateNPCUValue(properties.npcu);
+        console.log(`✅ Found NPCU for ${courseName}: ${npcuValue}`);
+      } else {
+        console.log(`⚠️ No 'npcu' property found for ${courseName}`);
+        console.log(`   Available properties: ${Object.keys(properties).join(', ')}`);
       }
 
       // Cache the result
@@ -323,7 +426,16 @@ export const northpassApi = {
       const status = error.response?.status;
       
       if (status === 403) {
-        console.warn(`⚠️ Properties API 403 for ${courseName} (${courseId}) - access denied`);
+        console.warn(`⚠️ Properties API 403 for ${courseName} (${courseId}) - checking for known override`);
+        
+        // Check if we have a known NPCU override for this course
+        const knownOverride = getKnownNpcuOverride(courseId);
+        if (knownOverride) {
+          console.log(`✅ Using known NPCU override for ${courseName}: ${knownOverride.npcu}`);
+          this._courseNPCUCache.set(courseId, knownOverride.npcu);
+          return knownOverride.npcu;
+        }
+        
         trackFailedCourse(courseId, courseName, 'PROPERTIES_403', { status });
       } else if (status === 404) {
         console.warn(`⚠️ Properties API 404 for ${courseName} (${courseId}) - no properties found`);
@@ -345,10 +457,18 @@ export const northpassApi = {
   async batchGetCourseNPCU(courses) {
     const results = new Map();
     
-    // Process in small batches to avoid overwhelming the API
-    const batchSize = 5;
+    // Process in small batches to avoid rate limiting
+    // Northpass rate limit is 10 req/sec, but we're conservative to account for
+    // other concurrent API calls (catalog, transcripts, etc.)
+    const batchSize = 3;
+    console.log(`📦 Processing ${courses.length} courses in batches of ${batchSize}...`);
+    
     for (let i = 0; i < courses.length; i += batchSize) {
       const batch = courses.slice(i, i + batchSize);
+      const batchNum = Math.floor(i / batchSize) + 1;
+      const totalBatches = Math.ceil(courses.length / batchSize);
+      
+      console.log(`   Batch ${batchNum}/${totalBatches}: ${batch.map(c => c.courseName.substring(0, 30)).join(', ')}`);
       
       const batchResults = await Promise.all(
         batch.map(async ({ courseId, courseName }) => {
@@ -361,12 +481,14 @@ export const northpassApi = {
         results.set(courseId, npcu);
       });
 
-      // Small delay between batches
+      // Longer delay between batches to stay well under rate limit
+      // 500ms delay = max 6 requests per second (with batch of 3)
       if (i + batchSize < courses.length) {
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
 
+    console.log(`✅ Fetched NPCU for ${results.size} courses`);
     return results;
   },
 
@@ -446,27 +568,63 @@ export const northpassApi = {
         };
       }
       
-      // Get completed courses to fetch NPCU values
-      const completedCourses = allTranscriptItems
-        .filter(item => item.attributes?.progress_status === 'completed')
-        .map(item => ({
-          courseId: item.attributes.resource_id,
-          courseName: item.attributes.name || 'Unknown Course'
-        }));
-
-      // Batch fetch NPCU values for completed courses from Properties API
-      let npcuMap = new Map();
-      if (completedCourses.length > 0) {
-        console.log(`📡 Fetching NPCU values for ${completedCourses.length} completed courses...`);
-        npcuMap = await this.batchGetCourseNPCU(completedCourses);
+      // Get completed courses and validate against catalog FIRST
+      const completedItems = allTranscriptItems
+        .filter(item => item.attributes?.progress_status === 'completed');
+      
+      // Validate completed courses against catalog before fetching NPCU
+      // validateCourseInCatalog returns null for deleted courses, or { status, name } for live/archived
+      // SKIP Learning Paths - they don't have NPCU properties (only courses do)
+      const validatedCompletedCourses = [];
+      for (const item of completedItems) {
+        const courseId = item.attributes.resource_id;
+        const courseName = item.attributes.name || 'Unknown Course';
+        const resourceType = item.attributes.resource_type;
+        
+        // Skip Learning Paths - they don't have NPCU properties
+        if (resourceType === 'learning_path') {
+          console.log(`⏭️ Skipping Learning Path (no NPCU): ${courseName}`);
+          continue;
+        }
+        
+        const courseInfo = await this.validateCourseInCatalog(courseId, courseName);
+        if (courseInfo) {
+          // Course exists (live or archived) - archived courses still count until expiry
+          validatedCompletedCourses.push({ courseId, courseName, item, courseStatus: courseInfo.status });
+        }
+        // Deleted courses (courseInfo === null) are excluded entirely
       }
 
-      // Process all learning activities
-      const learningActivities = allTranscriptItems.map(item => {
+      // Batch fetch NPCU values ONLY for validated completed courses (via proxy)
+      let npcuMap = new Map();
+      if (validatedCompletedCourses.length > 0) {
+        console.log(`📡 Fetching NPCU values for ${validatedCompletedCourses.length} validated completed courses...`);
+        npcuMap = await this.batchGetCourseNPCU(validatedCompletedCourses.map(c => ({ 
+          courseId: c.courseId, 
+          courseName: c.courseName 
+        })));
+      }
+
+      // Create a set of valid course IDs for quick lookup
+      const validCourseIds = new Set(validatedCompletedCourses.map(c => c.courseId));
+
+      // Process all learning activities (filter out invalid courses)
+      const learningActivities = allTranscriptItems
+        .filter(item => {
+          const courseId = item.attributes.resource_id;
+          const courseName = item.attributes.name || 'Unknown Course';
+          // For non-completed items, do a quick name-based check
+          if (item.attributes?.progress_status !== 'completed') {
+            return !shouldSkipCourse(courseId, courseName);
+          }
+          // For completed items, use the validated set
+          return validCourseIds.has(courseId);
+        })
+        .map(item => {
         const attrs = item.attributes;
         const courseId = attrs.resource_id;
         
-        // Get NPCU from Properties API for completed courses
+        // Get NPCU from Properties API for completed courses (validated: 0, 1, or 2 only)
         const npcu = attrs.progress_status === 'completed' ? (npcuMap.get(courseId) || 0) : 0;
         
         return {
@@ -488,7 +646,7 @@ export const northpassApi = {
           // Calculate expiry for completed certifications
           expiryDate: attrs.expires_at || attrs.expiry_date || 
                      (attrs.completed_at ? this.calculateExpiryDate(attrs.completed_at, attrs.name || 'Unknown Course') : null),
-          // NPCU from Properties API for completed certifications
+          // NPCU from Properties API for completed certifications (0, 1, or 2)
           npcu: npcu,
           category: this.categorizeCertificationByProduct(attrs.name || 'Unknown Course')
         };
@@ -620,89 +778,133 @@ export const northpassApi = {
       
       console.log(`✅ Found ${completedItems.length} completed items`);
       
-      // First, collect all course IDs to batch fetch NPCU values
-      const coursesToFetchNPCU = completedItems.map(item => ({
+      // STEP 1: Validate courses against catalog FIRST (before fetching NPCU)
+      // validateCourseInCatalog returns null for deleted courses, or { status, name } for live/archived
+      // Deleted courses: excluded entirely
+      // Archived courses: included, NPCU counts until expiry date
+      // Learning Paths: skipped (they don't have NPCU properties)
+      console.log(`🔍 Validating ${completedItems.length} courses against catalog...`);
+      
+      const validatedItems = [];
+      const invalidItems = [];
+      const skippedLearningPaths = [];
+      const courseStatusMap = new Map(); // Track status for each course
+      
+      for (const item of completedItems) {
+        const courseId = item.attributes.resource_id;
+        const courseName = item.attributes.name || 'Unknown Course';
+        const resourceType = item.attributes.resource_type;
+        
+        // Skip Learning Paths - they don't have NPCU properties
+        if (resourceType === 'learning_path') {
+          skippedLearningPaths.push(courseName);
+          continue;
+        }
+        
+        const courseInfo = await this.validateCourseInCatalog(courseId, courseName);
+        if (courseInfo) {
+          // Course exists (live or archived) - archived courses still count until expiry
+          validatedItems.push(item);
+          courseStatusMap.set(courseId, courseInfo.status);
+        } else {
+          // Deleted course - excluded entirely
+          invalidItems.push({ courseId, courseName, reason: 'deleted' });
+        }
+      }
+      
+      if (skippedLearningPaths.length > 0) {
+        console.log(`⏭️ Skipped ${skippedLearningPaths.length} Learning Paths (no NPCU): ${skippedLearningPaths.slice(0, 3).join(', ')}${skippedLearningPaths.length > 3 ? '...' : ''}`);
+      }
+      
+      const liveCount = [...courseStatusMap.values()].filter(s => s === 'live').length;
+      const archivedCount = [...courseStatusMap.values()].filter(s => s === 'archived').length;
+      console.log(`✅ Catalog validation: ${validatedItems.length} valid (${liveCount} live, ${archivedCount} archived), ${invalidItems.length} deleted courses`);
+      
+      if (invalidItems.length > 0) {
+        console.log('❌ Deleted courses (excluded):', invalidItems.map(c => c.courseName).join(', '));
+      }
+      
+      // STEP 2: Fetch NPCU values ONLY for validated courses (via proxy)
+      const coursesToFetchNPCU = validatedItems.map(item => ({
         courseId: item.attributes.resource_id,
         courseName: item.attributes.name || 'Unknown Course'
       }));
 
-      // Batch fetch NPCU values from Properties API
-      console.log(`📡 Fetching NPCU values for ${coursesToFetchNPCU.length} courses from Properties API...`);
+      // Batch fetch NPCU values from Properties API (uses proxy /api/northpass)
+      console.log(`📡 Fetching NPCU values for ${coursesToFetchNPCU.length} validated courses from Properties API...`);
       const npcuMap = await this.batchGetCourseNPCU(coursesToFetchNPCU);
 
-      // Convert to standardized format using correct API field names
-      let certifications = completedItems.map(item => {
+      // STEP 3: Convert validated items to standardized format with NPCU
+      // Archived courses: NPCU counts until expiry date (2 years from completion)
+      const certifications = validatedItems.map(item => {
         const attrs = item.attributes;
         const courseId = attrs.resource_id;
+        const courseStatus = courseStatusMap.get(courseId) || 'live';
         
-        // Get NPCU from Properties API (already fetched)
+        // Get NPCU from Properties API (already fetched, validated to be 0, 1, or 2)
         const npcu = npcuMap.get(courseId) || 0;
+        
+        // Calculate expiry date (2 years from completion for ALL certifications)
+        const expiryDate = attrs.expires_at || attrs.expiry_date || attrs.certificate_expires_at || 
+                     attrs.valid_until || attrs.valid_to || attrs.certificate_expiry_date || 
+                     attrs.cert_expires_at || this.calculateExpiryDate(attrs.completed_at, attrs.name || 'Unknown Course');
         
         return {
           id: item.id,
           resourceId: courseId,
           resourceType: attrs.resource_type,
-          name: attrs.name || 'Unknown Course', // Correct field name
-          status: attrs.progress_status, // Correct field name
+          name: attrs.name || 'Unknown Course',
+          status: attrs.progress_status,
           completedAt: attrs.completed_at,
           enrolledAt: attrs.enrolled_at,
           startedAt: attrs.started_at,
           lastActiveAt: attrs.last_active_at,
           attemptNumber: attrs.attempt_number,
           versionNumber: attrs.version_number,
-          // Check for certificate link in transcript item links
           certificateUrl: item.links?.certificate || null,
           hasCertificate: !!item.links?.certificate,
-          // Check for potential expiry date fields in attributes (transcript data only)
           expiresAt: attrs.expires_at || attrs.expiry_date || attrs.certificate_expires_at || null,
           validUntil: attrs.valid_until || attrs.valid_to || null,
           certificateExpiryDate: attrs.certificate_expiry_date || attrs.cert_expires_at || null,
-          // NPCU from Properties API
+          // NPCU from Properties API (validated: 0, 1, or 2 only)
           npcu: npcu,
-          // Use actual expiry date if available, otherwise calculate
-          expiryDate: attrs.expires_at || attrs.expiry_date || attrs.certificate_expires_at || 
-                     attrs.valid_until || attrs.valid_to || attrs.certificate_expiry_date || 
-                     attrs.cert_expires_at || this.calculateExpiryDate(attrs.completed_at, attrs.name || 'Unknown Course')
+          isValidCourse: true,
+          // Track course status: 'live' or 'archived'
+          // Archived courses still count NPCU until expiryDate
+          courseStatus: courseStatus,
+          isArchived: courseStatus === 'archived',
+          expiryDate: expiryDate
         };
       });
 
-      console.log(`🔍 Pre-validation: Found ${certifications.length} completed items`);
+      console.log(`🎓 Returning ${certifications.length} validated certifications with NPCU values`);
       
-      // Validate each certification against the current course catalog
-      const validatedCertifications = [];
-      const invalidCertifications = [];
+      // Log NPCU summary
+      const npcuSummary = certifications.reduce((acc, cert) => {
+        acc[cert.npcu] = (acc[cert.npcu] || 0) + 1;
+        return acc;
+      }, {});
+      console.log(`📊 NPCU distribution: ${JSON.stringify(npcuSummary)}`);
       
-      for (const cert of certifications) {
-        const isValid = await this.validateCourseInCatalog(cert.resourceId, cert.name);
-        if (isValid) {
-          validatedCertifications.push({
-            ...cert,
-            isValidCourse: true
-          });
-        } else {
-          invalidCertifications.push({
-            ...cert,
-            isValidCourse: false,
-            npcu: 0 // Set NPCU to 0 for invalid courses
-          });
-          console.warn(`⚠️ Invalid course found: ${cert.name} (ID: ${cert.resourceId}) - excluded from NPCU calculation`);
-        }
-      }
-      
-      console.log(`✅ Validation complete: ${validatedCertifications.length} valid, ${invalidCertifications.length} invalid courses`);
-      console.log('🎓 Valid certifications:', validatedCertifications);
-      
-      if (invalidCertifications.length > 0) {
-        console.log('❌ Invalid certifications (excluded from NPCU):', invalidCertifications.map(c => ({ name: c.name, id: c.resourceId })));
+      // Detailed logging for debugging - show all certs with NPCU > 0
+      const certsWithNpcu = certifications.filter(c => c.npcu > 0);
+      if (certsWithNpcu.length > 0) {
+        console.log(`🏆 Certifications with NPCU:`, certsWithNpcu.map(c => ({
+          name: c.name.substring(0, 50),
+          npcu: c.npcu,
+          expired: c.expiryDate ? new Date(c.expiryDate) < new Date() : false
+        })));
+      } else {
+        console.warn(`⚠️ No certifications with NPCU > 0 found for user ${userId}`);
+        console.log(`📋 NPCU Map contents:`, [...npcuMap.entries()].filter(([k, v]) => v > 0));
       }
       
       // Display failed course statistics for this user
-      if (invalidCertifications.length > 0) {
+      if (invalidItems.length > 0) {
         getFailedCourseStats();
       }
       
-      // Return only valid certifications for NPCU calculation
-      return validatedCertifications;
+      return certifications;
       
     } catch (error) {
       console.log('ℹ️ Note: 404 errors for transcript are normal for users without courses');
@@ -853,19 +1055,8 @@ export const northpassApi = {
     const completedDate = new Date(completedAt);
     if (isNaN(completedDate.getTime())) return null;
     
-    const name = courseName.toLowerCase();
-    
-    // Different validity periods based on certification type
-    let validityMonths = 24; // Default: 2 years
-    
-    // Some certifications might have different validity periods
-    if (name.includes('fundamentals') || name.includes('basic')) {
-      validityMonths = 36; // 3 years for fundamental courses
-    } else if (name.includes('advanced') || name.includes('expert')) {
-      validityMonths = 18; // 1.5 years for advanced certifications
-    } else if (name.includes('k2') || name.includes('automation')) {
-      validityMonths = 24; // 2 years for K2 certifications
-    }
+    // All certifications expire 2 years (24 months) from completion - no exceptions
+    const validityMonths = 24;
     
     const expiryDate = new Date(completedDate);
     expiryDate.setMonth(expiryDate.getMonth() + validityMonths);
@@ -1088,6 +1279,7 @@ export const northpassApi = {
 
   /**
    * Internal uncached version of getGroupUsers
+   * Uses the Memberships API to get users that belong to a specific group
    * @param {string} groupId - The ID of the group
    * @returns {Array} - Array of user objects
    */
@@ -1095,11 +1287,12 @@ export const northpassApi = {
     console.log(`👥 Fetching users for group ID: ${groupId} (uncached)`);
     
     try {
-      const allUsers = [];
+      const allMemberships = [];
       let page = 1;
-      let totalMemberships = 0;
       
+      // Use Memberships API - returns users that are members of this specific group
       while (true) {
+        console.log(`📄 Fetching memberships page ${page} for group...`);
         const response = await rateLimitedApiCall(() => apiClient.get(`/v2/groups/${groupId}/memberships`, {
           params: {
             page: page,
@@ -1114,67 +1307,57 @@ export const northpassApi = {
           break; // No more pages
         }
         
-        // Extract user objects from membership data
-        const users = memberships.map(membership => membership.relationships.person.data);
-        allUsers.push(...users);
-        totalMemberships += memberships.length;
+        allMemberships.push(...memberships);
         
-        console.log(`📄 Page ${page}: ${memberships.length} memberships, ${users.length} users (total: ${allUsers.length})`);
+        console.log(`📄 Page ${page}: ${memberships.length} memberships (total: ${allMemberships.length})`);
         
-        // Debug: Show membership structure
-        if (memberships.length > 0 && page === 1) {
-          console.log(`🔍 Sample membership structure:`, {
-            membership: memberships[0],
-            hasRelationships: !!memberships[0]?.relationships,
-            hasPerson: !!memberships[0]?.relationships?.person,
-            hasData: !!memberships[0]?.relationships?.person?.data
-          });
+        // Check if there's a next page
+        if (!response.data.links?.next) {
+          break;
         }
         
         page++;
         
         // Safety check
-        if (page > 50) {
-          console.warn('⚠️ Stopped fetching after 50 pages (2500 users)');
+        if (page > 100) {
+          console.warn('⚠️ Stopped fetching after 100 pages (5000 memberships)');
           break;
         }
       }
       
-      // Now we need to get the full user details for each user ID
-      console.log(`🔍 Fetching full details for ${allUsers.length} users...`);
-      const fullUsers = [];
+      console.log(`✅ Total memberships in group: ${allMemberships.length}`);
       
-      for (const userRef of allUsers) {
-        try {
-          const userResponse = await rateLimitedApiCall(() => apiClient.get(`/v2/people/${userRef.id}`));
-          if (userResponse.data) {
-            // Store the actual user data (nested under data.data)
-            fullUsers.push(userResponse.data.data);
-            // Safe access to user attributes - correct path is data.data.attributes
-            const userData = userResponse.data.data;
-            const email = userData?.attributes?.email || '';
-            const firstName = userData?.attributes?.first_name || '';
-            const lastName = userData?.attributes?.last_name || '';
-            
-            // Create a display name: prefer full name, fallback to email, then user ID
-            let name;
-            if (firstName.trim() && lastName.trim()) {
-              name = `${firstName.trim()} ${lastName.trim()}`;
-            } else if (email) {
-              name = email;
-            } else {
-              name = `User ${userRef.id.substring(0, 8)}...`;
-            }
-            
-            console.log(`✅ Got user details: ${name} (Email: ${email || 'none'})`);
+      // Now fetch the user details for each membership
+      // Memberships have a relationship to the person
+      const userIds = allMemberships.map(m => m.relationships?.person?.data?.id).filter(Boolean);
+      console.log(`👤 Fetching details for ${userIds.length} users...`);
+      
+      // Fetch user details in parallel (with rate limiting)
+      const users = await Promise.all(
+        userIds.map(async (userId) => {
+          try {
+            const response = await rateLimitedApiCall(() => apiClient.get(`/v2/people/${userId}`));
+            return response.data?.data;
+          } catch (error) {
+            console.warn(`⚠️ Could not fetch user ${userId}:`, error.message);
+            return null;
           }
-        } catch (userError) {
-          console.warn(`⚠️ Could not get details for user ${userRef.id}:`, userError.message);
-        }
+        })
+      );
+      
+      const validUsers = users.filter(Boolean);
+      console.log(`✅ Fetched ${validUsers.length} user details`);
+      
+      // Log sample user for debugging
+      if (validUsers.length > 0) {
+        const sample = validUsers[0];
+        const email = sample?.attributes?.email || '';
+        const firstName = sample?.attributes?.first_name || '';
+        const lastName = sample?.attributes?.last_name || '';
+        console.log(`🔍 Sample user: ${firstName} ${lastName} (${email})`);
       }
       
-      console.log(`✅ Total users in group: ${fullUsers.length} (from ${totalMemberships} memberships)`);
-      return fullUsers;
+      return validUsers;
       
     } catch (error) {
       console.error('❌ Error fetching group users:', error);

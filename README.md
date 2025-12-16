@@ -69,8 +69,62 @@ npm run dev
 ## Production Deployment
 
 - **Live URL**: `http://20.125.24.28:3000`
-- **Server Management**: PM2 process management on Ubuntu 22.04.5 LTS
-- **SSH Access**: Configured with key-based authentication
+- **Server**: Ubuntu 22.04.5 LTS with PM2 process management
+- **Process Name**: `northpass-portal`
+- **SSH Access**: `ssh NTXPTRAdmin@20.125.24.28`
+
+### Quick Deployment
+
+Run the PowerShell deployment script:
+```powershell
+.\deploy.ps1
+```
+
+This script will:
+1. Build the application (`npm run build`)
+2. Upload dist folder to the server
+3. Upload server configuration files
+4. Install dependencies
+5. Restart the PM2 process
+6. Verify deployment with cache header checks
+
+### Manual Deployment Steps
+
+```powershell
+# 1. Build
+npm run build
+
+# 2. Upload files
+scp -r dist/* NTXPTRAdmin@20.125.24.28:/home/NTXPTRAdmin/northpass-portal/dist/
+scp server-with-proxy.js NTXPTRAdmin@20.125.24.28:/home/NTXPTRAdmin/northpass-portal/
+scp server-package.json NTXPTRAdmin@20.125.24.28:/home/NTXPTRAdmin/northpass-portal/package.json
+
+# 3. Restart server
+ssh NTXPTRAdmin@20.125.24.28 "cd /home/NTXPTRAdmin/northpass-portal && npm install && pm2 restart northpass-portal"
+```
+
+### Cache Configuration
+
+The server implements optimal caching:
+- **index.html**: `no-cache, no-store, must-revalidate` (always fresh for new deployments)
+- **JS/CSS bundles**: `public, max-age=31536000, immutable` (1 year, hashed filenames)
+- **Images/fonts**: `public, max-age=604800` (1 week)
+
+### Server Management
+
+```bash
+# View logs
+ssh NTXPTRAdmin@20.125.24.28 "pm2 logs northpass-portal"
+
+# Restart
+ssh NTXPTRAdmin@20.125.24.28 "pm2 restart northpass-portal"
+
+# Stop
+ssh NTXPTRAdmin@20.125.24.28 "pm2 stop northpass-portal"
+
+# Status
+ssh NTXPTRAdmin@20.125.24.28 "pm2 status"
+```
 
 ## API Configuration
 

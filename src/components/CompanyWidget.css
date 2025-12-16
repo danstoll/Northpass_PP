@@ -4,11 +4,13 @@
   border-radius: var(--radius-xl);
   padding: var(--space-6);
   color: var(--nintex-gray-800);
-  max-width: var(--container-max-width);
+  width: 100%;
+  max-width: 1200px;
   margin: var(--space-5) auto;
   box-shadow: var(--shadow-xl);
   font-family: var(--font-family-base);
   border: 1px solid rgba(255, 255, 255, 0.3);
+  box-sizing: border-box;
 }
 
 .widget-header {
@@ -255,7 +257,7 @@
 
 .progress-info {
   width: 100%;
-  max-width: 400px;
+  max-width: 500px;
 }
 
 .progress-info h3 {
@@ -269,6 +271,86 @@
   margin: 0 0 16px 0;
   color: var(--nintex-gray-700);
   font-size: 0.95rem;
+}
+
+.progress-detail {
+  font-family: var(--font-family-mono, 'SF Mono', 'Monaco', 'Consolas', monospace);
+  font-size: 0.85rem !important;
+  color: var(--nintex-gray-600) !important;
+}
+
+/* Progress Log Styles */
+.progress-log {
+  margin-top: 20px;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+
+.log-header {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 8px 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--nintex-gray-600);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.log-entries {
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 8px 0;
+  font-family: var(--font-family-mono, 'SF Mono', 'Monaco', 'Consolas', monospace);
+  font-size: 0.8rem;
+}
+
+.log-entry {
+  display: flex;
+  gap: 10px;
+  padding: 4px 12px;
+  align-items: flex-start;
+}
+
+.log-entry:last-child {
+  background: rgba(67, 233, 123, 0.1);
+}
+
+.log-time {
+  color: var(--nintex-gray-500);
+  font-size: 0.7rem;
+  min-width: 70px;
+  flex-shrink: 0;
+}
+
+.log-message {
+  color: var(--nintex-gray-700);
+  word-break: break-word;
+}
+
+/* Log entry types */
+.log-start .log-message {
+  color: var(--nintex-purple);
+  font-weight: 500;
+}
+
+.log-success .log-message {
+  color: #16a34a;
+}
+
+.log-error .log-message {
+  color: #dc2626;
+}
+
+.log-loading .log-message,
+.log-search .log-message {
+  color: var(--nintex-orange);
+}
+
+.log-progress .log-message {
+  color: var(--nintex-gray-600);
 }
 
 .users-list {
@@ -1014,8 +1096,55 @@
   font-weight: var(--font-weight-medium);
 }
 
-/* Responsive Design */
-@media (max-width: 768px) {
+/* Responsive Design - Standard Breakpoints */
+/* Desktop: ≥1200px (default styles above) */
+
+/* Laptop: 992-1199px */
+@media (min-width: 992px) and (max-width: 1199px) {
+  .company-widget {
+    padding: var(--space-5);
+  }
+  
+  .company-stats {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+  
+  .product-stats {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  }
+}
+
+/* Tablet: 768-991px */
+@media (min-width: 768px) and (max-width: 991px) {
+  .company-widget {
+    margin: var(--space-4);
+    padding: var(--space-4);
+  }
+  
+  .widget-header {
+    flex-direction: row;
+    gap: var(--space-3);
+  }
+  
+  .company-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .stat-number {
+    font-size: var(--font-size-3xl);
+  }
+  
+  .product-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .learning-tiles {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Mobile: ≤767px */
+@media (max-width: 767px) {
   .company-widget {
     margin: 10px;
     padding: 16px;

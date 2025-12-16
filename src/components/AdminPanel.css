@@ -435,8 +435,31 @@
   border: 1px solid var(--info-border, #bfdbfe);
 }
 
-/* Responsive Design */
-@media (max-width: 768px) {
+/* Responsive Design - Standard Breakpoints */
+/* Laptop: 992-1199px */
+@media (min-width: 992px) and (max-width: 1199px) {
+  .admin-panel {
+    padding: 1.5rem;
+  }
+}
+
+/* Tablet: 768-991px */
+@media (min-width: 768px) and (max-width: 991px) {
+  .admin-panel {
+    padding: 1.25rem;
+  }
+  
+  .admin-header h1 {
+    font-size: 2.25rem;
+  }
+  
+  .results-table {
+    overflow-x: auto;
+  }
+}
+
+/* Mobile: ≤767px */
+@media (max-width: 767px) {
   .admin-panel {
     padding: 1rem;
   }

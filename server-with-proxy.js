@@ -1,9 +1,13 @@
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Disable Express default caching
+app.set('etag', false);
 
 // Proxy middleware for Northpass API
 const northpassProxy = createProxyMiddleware({
@@ -31,7 +35,33 @@ const northpassProxy = createProxyMiddleware({
 // Use the proxy for /api/northpass routes
 app.use('/api/northpass', northpassProxy);
 
-// Security headers
+// Serve static assets FIRST with proper caching (before security headers)
+// Hashed JS/CSS files are cache-safe for 1 year
+app.use('/assets', express.static(path.join(__dirname, 'dist', 'assets'), {
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, filePath) => {
+    // Security headers for all responses
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    
+    // JS/CSS files with hashes can be cached for 1 year (immutable)
+    if (filePath.match(/\.(js|css)$/)) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    } 
+    // Images/fonts cache for 1 week
+    else if (filePath.match(/\.(png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot)$/)) {
+      res.setHeader('Cache-Control', 'public, max-age=604800');
+    }
+    // Other assets cache for 1 day
+    else {
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+    }
+  }
+}));
+
+// Security headers for non-static routes
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -39,24 +69,54 @@ app.use((req, res, next) => {
   next();
 });
 
-// Serve static files - no caching to ensure fresh CSS/JS
-app.use(express.static(path.join(__dirname, 'dist'), {
-  etag: false,
-  lastModified: false,
-  setHeaders: (res, filePath) => {
-    // No caching for any files
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-  }
-}));
+// URL encoding helper (matches urlEncoder.js)
+function encodeUrlParams(params) {
+  const jsonString = JSON.stringify(params);
+  return Buffer.from(jsonString)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
+}
 
-// SPA routing - serve index.html for all non-API routes
+// Launch endpoint - redirects plain parameters to encoded URL
+// Usage: /launch?company=CompanyName&tier=Premier
+// Redirects to: /?data=eyJjb21wYW55Ijoi...
+app.get('/launch', (req, res) => {
+  const company = req.query.company || req.query.group;
+  const tier = req.query.tier;
+  
+  if (!company) {
+    return res.status(400).send('Missing required parameter: company or group');
+  }
+  
+  const params = { company };
+  if (tier) params.tier = tier;
+  
+  const encoded = encodeUrlParams(params);
+  const redirectUrl = `/?data=${encoded}`;
+  
+  console.log(`🔗 Launch redirect: ${company} (${tier || 'no tier'}) -> ${redirectUrl}`);
+  res.redirect(302, redirectUrl);
+});
+
+// Serve specific static files from dist root (favicon, etc)
+app.get('/vite.svg', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dist', 'vite.svg'));
+});
+app.get('/favicon.ico', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dist', 'favicon.ico'));
+});
+
+// ALL other requests get index.html with no caching (SPA routing)
 app.get('*', (req, res) => {
+  const indexPath = path.join(__dirname, 'dist', 'index.html');
+  const html = fs.readFileSync(indexPath, 'utf8');
+  res.setHeader('Content-Type', 'text/html; charset=UTF-8');
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+  res.send(html);
 });
 
 // Graceful shutdown

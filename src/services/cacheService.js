@@ -2,6 +2,9 @@
 // Provides browser-based caching with expiration and cache-busting capabilities
 
 const CACHE_PREFIX = 'northpass_cache_';
+// Cache version - increment this when making breaking changes to force cache invalidation
+const CACHE_VERSION = 12; // v12: Fixed rate limiting - skip Learning Paths, smaller batches, longer delays
+const CACHE_VERSION_KEY = 'northpass_cache_version';
 const DEFAULT_CACHE_DURATION = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
 const MAX_LOCALSTORAGE_ITEM_SIZE = 50 * 1024; // 50KB max per item for localStorage
 const MAX_LOCALSTORAGE_TOTAL_SIZE = 4 * 1024 * 1024; // 4MB target max for our cache
@@ -17,6 +20,57 @@ class CacheService {
     };
     this.idbAvailable = false;
     this.idbPromise = this.initIndexedDB();
+    
+    // Check cache version and clear if outdated
+    this.checkCacheVersion();
+  }
+  
+  /**
+   * Check cache version and clear all cache if version has changed
+   * This ensures users get fresh data after code updates
+   */
+  checkCacheVersion() {
+    try {
+      const storedVersion = localStorage.getItem(CACHE_VERSION_KEY);
+      const currentVersion = CACHE_VERSION.toString();
+      
+      if (storedVersion !== currentVersion) {
+        console.log(`🔄 Cache version changed from ${storedVersion || 'none'} to ${currentVersion} - clearing all cache`);
+        // Clear synchronously to ensure it happens before any cache reads
+        this.clearAllSync();
+        localStorage.setItem(CACHE_VERSION_KEY, currentVersion);
+        console.log('✅ Cache cleared and version updated');
+      } else {
+        console.log(`✅ Cache version ${currentVersion} is current`);
+      }
+    } catch (error) {
+      console.warn('Error checking cache version:', error);
+    }
+  }
+  
+  /**
+   * Synchronous version of clearAll for use in constructor
+   */
+  clearAllSync() {
+    try {
+      // Clear memory cache
+      this.memoryCache.clear();
+      
+      // Clear localStorage entries
+      const keysToRemove = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(CACHE_PREFIX)) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(key => localStorage.removeItem(key));
+      
+      // Note: IndexedDB will be cleared when it's initialized
+      this.cacheStats.clears++;
+    } catch (error) {
+      console.warn('Error in clearAllSync:', error);
+    }
   }
 
   /**
@@ -25,7 +79,8 @@ class CacheService {
   async initIndexedDB() {
     try {
       return new Promise((resolve) => {
-        const request = indexedDB.open('NorthpassCacheDB', 1);
+        // Use CACHE_VERSION in the DB version to force upgrade when cache version changes
+        const request = indexedDB.open('NorthpassCacheDB', CACHE_VERSION);
         
         request.onerror = () => {
           console.warn('IndexedDB not available for caching, using memory only for large items');
@@ -33,19 +88,32 @@ class CacheService {
           resolve(null);
         };
         
-        request.onsuccess = () => {
+        request.onsuccess = async () => {
           this.idbAvailable = true;
           console.log('✅ IndexedDB cache initialized');
-          resolve(request.result);
+          const db = request.result;
+          
+          // Clear IndexedDB cache if version changed (the onupgradeneeded will have fired)
+          const storedVersion = localStorage.getItem(CACHE_VERSION_KEY);
+          if (storedVersion && parseInt(storedVersion) < CACHE_VERSION) {
+            console.log('🔄 Clearing IndexedDB cache due to version upgrade');
+            await this.idbClearAll(db);
+          }
+          
+          resolve(db);
         };
         
         request.onupgradeneeded = (event) => {
           const db = event.target.result;
-          if (!db.objectStoreNames.contains('cache')) {
-            const store = db.createObjectStore('cache', { keyPath: 'key' });
-            store.createIndex('expires', 'expires', { unique: false });
-            store.createIndex('timestamp', 'timestamp', { unique: false });
+          // If upgrading from an older version, delete the old store and create a new one
+          if (db.objectStoreNames.contains('cache')) {
+            db.deleteObjectStore('cache');
+            console.log('🔄 Deleted old cache store for version upgrade');
           }
+          const store = db.createObjectStore('cache', { keyPath: 'key' });
+          store.createIndex('expires', 'expires', { unique: false });
+          store.createIndex('timestamp', 'timestamp', { unique: false });
+          console.log('✅ Created new cache store');
         };
       });
     } catch (error) {

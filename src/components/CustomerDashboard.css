@@ -4,7 +4,7 @@
   border-radius: var(--radius-xl);
   padding: var(--space-6);
   color: var(--nintex-white);
-  max-width: 1400px;
+  max-width: var(--container-wide);  /* 1280px - standard wide content */
   width: 95%;
   margin: var(--space-5) auto;
   box-shadow: var(--shadow-xl);
@@ -158,20 +158,7 @@
   color: var(--nintex-orange);
 }
 
-/* Responsive adjustments */
-@media (max-width: 768px) {
-  .chart-row {
-    grid-template-columns: 1fr;
-  }
-  
-  .charts-section {
-    padding: var(--space-3);
-  }
-  
-  .chart-card {
-    padding: var(--space-3);
-  }
-}
+/* Chart responsive handled in main breakpoints section at end of file */
 
 .company-info h2 {
   margin: 0;
@@ -204,11 +191,7 @@
   margin-bottom: var(--space-6);
 }
 
-@media (max-width: 1024px) {
-  .training-stats {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
+/* Training stats responsive handled in main breakpoints section below */
 
 .stat-card {
   background: rgba(255, 255, 255, 0.1);
@@ -415,11 +398,7 @@
   gap: var(--space-3);
 }
 
-@media (min-width: 1200px) {
-  .courses-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
+/* Courses grid responsive handled in main breakpoints section below */
 
 .training-course-card {
   background: rgba(255, 255, 255, 0.08);
@@ -800,15 +779,56 @@
   box-shadow: var(--shadow-lg);
 }
 
-/* Responsive Design */
-@media (max-width: 1024px) {
-  .customer-dashboard {
-    width: 98%;
-    padding: var(--space-5);
+/* Responsive Design - Standard Breakpoints */
+/* Desktop: ≥1200px */
+@media (min-width: 1200px) {
+  .courses-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 
-@media (max-width: 768px) {
+/* Laptop: 992-1199px */
+@media (min-width: 992px) and (max-width: 1199px) {
+  .customer-dashboard {
+    width: 96%;
+    padding: var(--space-5);
+  }
+  
+  .training-stats {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  
+  .courses-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Tablet: 768-991px */
+@media (min-width: 768px) and (max-width: 991px) {
+  .customer-dashboard {
+    width: 98%;
+    padding: var(--space-4);
+  }
+  
+  .training-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .courses-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .chart-row {
+    grid-template-columns: 1fr;
+  }
+  
+  .alert-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Mobile: ≤767px */
+@media (max-width: 767px) {
   .customer-dashboard {
     margin: var(--space-2);
     padding: var(--space-4);
@@ -848,6 +868,18 @@
   
   .alert-cards {
     grid-template-columns: 1fr;
+  }
+  
+  .chart-row {
+    grid-template-columns: 1fr;
+  }
+  
+  .charts-section {
+    padding: var(--space-3);
+  }
+  
+  .chart-card {
+    padding: var(--space-3);
   }
 }
 

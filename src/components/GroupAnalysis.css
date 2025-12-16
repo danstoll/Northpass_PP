@@ -604,8 +604,37 @@
   margin: 0 0 var(--space-4) 0;
 }
 
-/* Responsive */
-@media (max-width: 768px) {
+/* Responsive - Standard Breakpoints */
+/* Laptop: 992-1199px */
+@media (min-width: 992px) and (max-width: 1199px) {
+  .group-analysis {
+    margin: var(--space-4);
+    padding: var(--space-5);
+  }
+  
+  .groups-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Tablet: 768-991px */
+@media (min-width: 768px) and (max-width: 991px) {
+  .group-analysis {
+    margin: var(--space-4);
+    padding: var(--space-4);
+  }
+  
+  .summary-stats {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  
+  .groups-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Mobile: ≤767px */
+@media (max-width: 767px) {
   .group-analysis {
     margin: var(--space-3);
     padding: var(--space-4);
@@ -1281,8 +1310,8 @@
   text-align: center;
 }
 
-/* Responsive adjustments */
-@media (max-width: 768px) {
+/* Responsive adjustments for merge/bulk selection - Mobile: ≤767px */
+@media (max-width: 767px) {
   .selection-toolbar {
     flex-direction: column;
     gap: 12px;

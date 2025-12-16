@@ -526,8 +526,31 @@
   font-size: var(--font-size-sm);
 }
 
-/* Responsive */
-@media (max-width: 768px) {
+/* Responsive - Standard Breakpoints */
+/* Laptop: 992-1199px */
+@media (min-width: 992px) and (max-width: 1199px) {
+  .stats-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* Tablet: 768-991px */
+@media (min-width: 768px) and (max-width: 991px) {
+  .column-mapping-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .cert-categories {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Mobile: ≤767px */
+@media (max-width: 767px) {
   .column-mapping-grid {
     grid-template-columns: 1fr;
   }

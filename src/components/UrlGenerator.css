@@ -241,8 +241,17 @@
   margin-top: 0.5rem;
 }
 
-/* Responsive Design */
-@media (max-width: 768px) {
+/* Responsive Design - Standard Breakpoints */
+/* Tablet: 768-991px */
+@media (min-width: 768px) and (max-width: 991px) {
+  .url-generator {
+    padding: 1.75rem;
+    margin: 1.5rem;
+  }
+}
+
+/* Mobile: ≤767px */
+@media (max-width: 767px) {
   .url-generator {
     padding: 1.5rem;
     margin: 1rem;

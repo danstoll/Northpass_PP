@@ -4,7 +4,36 @@
 - **Production URL**: `http://20.125.24.28:3000`
 - **Server**: Ubuntu 22.04.5 LTS with PM2 process management
 - **Process Name**: `northpass-portal`
-- **SSH Access**: `ssh NTXPTRAdmin@20.125.24.28` (SSH key authentication configured)
+- **SSH Access**: `ssh NTXPTRAdmin@20.125.24.28`
+- **Remote Path**: `/home/NTXPTRAdmin/northpass-portal`
+
+### Deployment Script
+Run `.\deploy.ps1` in PowerShell to build and deploy. The script:
+1. Builds the application
+2. Uploads dist folder and server files
+3. Installs dependencies
+4. Restarts PM2 process
+5. Verifies deployment with cache header checks
+
+### Cache Configuration
+- **index.html**: `no-cache, no-store, must-revalidate` (always fresh)
+- **JS/CSS bundles** (hashed): `public, max-age=31536000, immutable` (1 year)
+- **Images/fonts**: `public, max-age=604800` (1 week)
+
+### Quick Commands
+```powershell
+# Full deployment
+.\deploy.ps1
+
+# Manual restart
+ssh NTXPTRAdmin@20.125.24.28 "pm2 restart northpass-portal"
+
+# View logs
+ssh NTXPTRAdmin@20.125.24.28 "pm2 logs northpass-portal"
+
+# Check cache headers
+Invoke-WebRequest -Uri "http://20.125.24.28:3000/assets/index-*.js" -Method Head | Select-Object -ExpandProperty Headers
+```
 
 ## Application Configuration
 
@@ -59,8 +88,9 @@
 ## Development Workflow
 1. **Local Development**: `npm run dev` (port 5173)
 2. **Build**: `npm run build` → `dist/` folder
-3. **Deploy**: Upload to server and restart PM2 process
-4. **Monitor**: `pm2 logs northpass-portal` for debugging
+3. **Deploy**: Run `.\deploy.ps1` (or manual upload + PM2 restart)
+4. **Monitor**: `ssh NTXPTRAdmin@20.125.24.28 "pm2 logs northpass-portal"`
+5. **Verify**: Check cache headers with deployment script output
 
 ## Known Limitations
 - Some course IDs return 403 on properties API calls (gracefully handled)
