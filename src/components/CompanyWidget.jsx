@@ -24,7 +24,7 @@ const TIER_BADGES = {
 // Helper to get tier badge with case-insensitive lookup
 const getTierBadge = (tier) => {
   if (!tier) return null;
-  const badge = TIER_BADGES[tier.toLowerCase()];
+  const badge = TIER_BADGES[(tier || '').toLowerCase()];
   console.log('[TierBadge] Tier:', tier, '| Badge found:', !!badge, '| Badge URL:', badge);
   return badge;
 };
@@ -696,8 +696,8 @@ const CompanyWidget = ({ groupName, tier }) => {
               title={`${tier} Partner`}
             />
           ) : (
-            <div className={`tier-badge tier-${tier.toLowerCase()}`}>
-              {tier} Partner
+            <div className={`tier-badge tier-${(tier || '').toLowerCase()}`}>
+              {tier || 'Unknown'} Partner
             </div>
           )}
         </div>

@@ -256,7 +256,7 @@ export const DonutChart = ({ data, size = 120, innerRadius = 35, colors = ['#FF6
 // Status Badge Component
 export const StatusBadge = ({ status, count }) => {
   const getStatusColor = (status) => {
-    switch (status.toLowerCase()) {
+    switch ((status || '').toLowerCase()) {
       case 'completed': return '#28a745';
       case 'in_progress': case 'in progress': return '#ffc107';
       case 'enrolled': return '#6c757d';
@@ -267,7 +267,7 @@ export const StatusBadge = ({ status, count }) => {
   };
 
   const getStatusIcon = (status) => {
-    switch (status.toLowerCase()) {
+    switch ((status || '').toLowerCase()) {
       case 'completed': return '✅';
       case 'in_progress': case 'in progress': return '⏳';
       case 'enrolled': return '📚';

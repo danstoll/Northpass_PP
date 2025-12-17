@@ -409,7 +409,7 @@ const DataManagement = () => {
                     .sort((a, b) => b[1] - a[1])
                     .map(([tier, count]) => (
                       <div key={tier} className="distribution-item">
-                        <span className={`tier-badge tier-${tier.toLowerCase().replace(' ', '-')}`}>{tier}</span>
+                        <span className={`tier-badge tier-${(tier || '').toLowerCase().replace(' ', '-')}`}>{tier}</span>
                         <span className="distribution-count">{count.toLocaleString()}</span>
                       </div>
                     ))}
@@ -589,7 +589,7 @@ const DataManagement = () => {
                         .map(([tier, count]) => (
                           <button 
                             key={tier}
-                            className={`preview-tier-btn tier-${tier.toLowerCase().replace(' ', '-')}`}
+                            className={`preview-tier-btn tier-${(tier || '').toLowerCase().replace(' ', '-')}`}
                             onClick={() => loadPreview('tier', tier)}
                           >
                             <span className="tier-name">{tier}</span>
@@ -819,7 +819,7 @@ const DataManagement = () => {
                                 {contact.firstName} {contact.lastName}
                               </span>
                               <span className="contact-email">{contact.email}</span>
-                              <span className={`contact-status ${contact.contactStatus?.toLowerCase()}`}>
+                              <span className={`contact-status ${(contact.contactStatus || '').toLowerCase()}`}>
                                 {contact.contactStatus}
                               </span>
                             </div>

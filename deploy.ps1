@@ -65,8 +65,28 @@ Write-Host "   Nintex Partner Portal - Production Deployment" -ForegroundColor W
 Write-Host "   Target: http://$($Config.SSHHost):$($Config.Port)" -ForegroundColor Gray
 Write-Host "=================================================================" -ForegroundColor Magenta
 
-# Step 1: Build the application
-Write-Step "Step 1: Building Application"
+# Step 1: Bump cache version (forces client browsers to clear cache)
+Write-Step "Step 1: Bumping Client Cache Version"
+try {
+    $cacheServicePath = "src/services/cacheService.js"
+    $cacheContent = Get-Content $cacheServicePath -Raw
+    
+    if ($cacheContent -match 'const CACHE_VERSION = (\d+);') {
+        $currentVersion = [int]$matches[1]
+        $newVersion = $currentVersion + 1
+        $cacheContent = $cacheContent -replace "const CACHE_VERSION = $currentVersion;", "const CACHE_VERSION = $newVersion;"
+        Set-Content $cacheServicePath $cacheContent -NoNewline
+        Write-Success "Cache version bumped: $currentVersion -> $newVersion"
+        Write-Info "Client browsers will clear their cache on next load"
+    } else {
+        Write-Warn "Could not find CACHE_VERSION in cacheService.js"
+    }
+} catch {
+    Write-Warn "Could not bump cache version: $_"
+}
+
+# Step 2: Build the application
+Write-Step "Step 2: Building Application"
 if ($SkipBuild) {
     Write-Warn "Skipping build (using existing dist folder)"
 } else {
@@ -88,8 +108,8 @@ if ($SkipBuild) {
     }
 }
 
-# Step 2: Upload dist folder
-Write-Step "Step 2: Uploading Build Files"
+# Step 3: Upload dist folder
+Write-Step "Step 3: Uploading Build Files"
 try {
     # Create remote dist directory
     Invoke-SSH "mkdir -p $($Config.RemotePath)/dist/assets"
@@ -104,8 +124,8 @@ try {
     exit 1
 }
 
-# Step 3: Upload server files
-Write-Step "Step 3: Uploading Server Configuration"
+# Step 4: Upload server files
+Write-Step "Step 4: Uploading Server Configuration"
 try {
     Invoke-SCP "server-with-proxy.js" "$($Config.RemotePath)/"
     Invoke-SCP "server-package.json" "$($Config.RemotePath)/package.json"
@@ -117,8 +137,8 @@ try {
     exit 1
 }
 
-# Step 4: Install dependencies and restart
-Write-Step "Step 4: Installing Dependencies and Restarting Server"
+# Step 5: Install dependencies and restart
+Write-Step "Step 5: Installing Dependencies and Restarting Server"
 try {
     Invoke-SSH "cd $($Config.RemotePath) && npm install --production && pm2 restart $($Config.ProcessName) || pm2 start server-with-proxy.js --name $($Config.ProcessName) && pm2 save"
     Write-Success "Server restarted"
@@ -127,12 +147,12 @@ try {
     exit 1
 }
 
-# Step 5: Wait for server to be ready
-Write-Step "Step 5: Waiting for Server to Start"
+# Step 6: Wait for server to be ready
+Write-Step "Step 6: Waiting for Server to Start"
 Start-Sleep -Seconds 3
 
-# Step 6: Verify deployment
-Write-Step "Step 6: Verifying Deployment"
+# Step 7: Verify deployment
+Write-Step "Step 7: Verifying Deployment"
 
 # Check index.html (should have no-cache)
 Write-Info "Checking index.html headers..."
@@ -188,7 +208,7 @@ try {
 }
 
 # Check PM2 status
-Write-Step "Step 7: Checking Server Status"
+Write-Step "Step 8: Checking Server Status"
 $pm2Output = Invoke-SSH "pm2 jlist"
 $pm2Status = $pm2Output | ConvertFrom-Json
 $portal = $pm2Status | Where-Object { $_.name -eq $Config.ProcessName }

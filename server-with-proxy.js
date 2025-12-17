@@ -1,5 +1,6 @@
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
+const https = require('https');
 const path = require('path');
 const fs = require('fs');
 
@@ -8,6 +9,40 @@ const PORT = process.env.PORT || 3000;
 
 // Disable Express default caching
 app.set('etag', false);
+
+// Hardcoded API key - the one we verified works
+const NORTHPASS_API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+
+// Direct HTTPS request helper for Properties API (bypasses http-proxy-middleware issues)
+function fetchFromNorthpass(apiPath) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'api.northpass.com',
+      port: 443,
+      path: apiPath,
+      method: 'GET',
+      headers: {
+        'X-Api-Key': NORTHPASS_API_KEY,
+        'Accept': 'application/json'
+      }
+    };
+    
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        resolve({ statusCode: res.statusCode, data });
+      });
+    });
+    
+    req.on('error', reject);
+    req.setTimeout(10000, () => {
+      req.destroy();
+      reject(new Error('Request timeout'));
+    });
+    req.end();
+  });
+}
 
 // Proxy middleware for Northpass API
 const northpassProxy = createProxyMiddleware({
@@ -25,14 +60,75 @@ const northpassProxy = createProxyMiddleware({
     });
   },
   onProxyReq: (proxyReq, req, res) => {
+    // ALWAYS set the API key from server-side - don't trust browser header
+    proxyReq.setHeader('X-Api-Key', NORTHPASS_API_KEY);
+    
+    // Log what we're sending
     console.log(`🔄 Proxying: ${req.method} ${req.url} -> ${proxyReq.path}`);
+    console.log(`   Outgoing headers: X-Api-Key=${NORTHPASS_API_KEY.substring(0, 8)}...`);
   },
   onProxyRes: (proxyRes, req, res) => {
+    // Add CORS headers for browser requests
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', 'X-Api-Key, Content-Type, Accept');
     console.log(`✅ Response: ${proxyRes.statusCode} for ${req.url}`);
   }
 });
 
-// Use the proxy for /api/northpass routes
+// Handle CORS preflight requests for the API proxy
+app.options('/api/northpass/*', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'X-Api-Key, Content-Type, Accept');
+  res.setHeader('Access-Control-Max-Age', '86400'); // Cache preflight for 24 hours
+  res.status(204).end();
+});
+
+// Direct route for BULK Properties API - bypasses http-proxy-middleware
+// This endpoint returns NPCU for ALL courses at once
+app.get('/api/northpass/v2/properties/courses', async (req, res) => {
+  const limit = req.query.limit || 100;
+  const page = req.query.page || 1;
+  const apiPath = `/v2/properties/courses?limit=${limit}&page=${page}`;
+  
+  try {
+    console.log(`📡 Direct bulk fetch: ${apiPath}`);
+    const result = await fetchFromNorthpass(apiPath);
+    console.log(`✅ Direct bulk response: ${result.statusCode} for ${apiPath}`);
+    
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'application/json');
+    res.status(result.statusCode);
+    res.send(result.data);
+  } catch (err) {
+    console.error(`❌ Direct bulk fetch error: ${err.message} for ${apiPath}`);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Direct route for individual course Properties API - bypasses http-proxy-middleware
+app.get('/api/northpass/v2/properties/courses/:courseId', async (req, res) => {
+  const courseId = req.params.courseId;
+  const apiPath = `/v2/properties/courses/${courseId}`;
+  
+  try {
+    console.log(`📡 Direct fetch: ${apiPath}`);
+    const result = await fetchFromNorthpass(apiPath);
+    console.log(`✅ Direct response: ${result.statusCode} for ${apiPath}`);
+    
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'application/json');
+    res.status(result.statusCode);
+    res.send(result.data);
+  } catch (err) {
+    console.error(`❌ Direct fetch error: ${err.message} for ${apiPath}`);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Use the proxy for other /api/northpass routes
 app.use('/api/northpass', northpassProxy);
 
 // Serve static assets FIRST with proper caching (before security headers)
