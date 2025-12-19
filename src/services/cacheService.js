@@ -3,7 +3,7 @@
 
 const CACHE_PREFIX = 'northpass_cache_';
 // Cache version - increment this when making breaking changes to force cache invalidation
-const CACHE_VERSION = 25; // v12: Fixed rate limiting - skip Learning Paths, smaller batches, longer delays
+const CACHE_VERSION = 26; // v12: Fixed rate limiting - skip Learning Paths, smaller batches, longer delays
 const CACHE_VERSION_KEY = 'northpass_cache_version';
 const DEFAULT_CACHE_DURATION = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
 const MAX_LOCALSTORAGE_ITEM_SIZE = 50 * 1024; // 50KB max per item for localStorage

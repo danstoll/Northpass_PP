@@ -16,6 +16,36 @@ import {
 } from '../services/partnerDatabase';
 import NintexButton from './NintexButton';
 
+// Common personal/public email domains to exclude from group analysis
+const EXCLUDED_EMAIL_DOMAINS = new Set([
+  // Gmail/Google
+  'gmail.com', 'googlemail.com', 'google.com',
+  // Microsoft
+  'hotmail.com', 'hotmail.co.uk', 'hotmail.fr', 'hotmail.de', 'hotmail.es', 'hotmail.it',
+  'outlook.com', 'outlook.co.uk', 'outlook.fr', 'outlook.de', 'outlook.es', 'outlook.it',
+  'msn.com', 'live.com', 'live.co.uk', 'live.fr', 'live.de',
+  // Yahoo
+  'yahoo.com', 'yahoo.co.uk', 'yahoo.fr', 'yahoo.de', 'yahoo.es', 'yahoo.it', 'yahoo.ca',
+  'ymail.com', 'rocketmail.com',
+  // Apple
+  'icloud.com', 'me.com', 'mac.com',
+  // AOL
+  'aol.com', 'aim.com',
+  // Other common providers
+  'protonmail.com', 'proton.me', 'zoho.com', 'mail.com', 'gmx.com', 'gmx.net', 'gmx.de',
+  'web.de', 'freenet.de', 't-online.de', 'orange.fr', 'wanadoo.fr', 'laposte.net',
+  'comcast.net', 'verizon.net', 'att.net', 'sbcglobal.net', 'cox.net', 'charter.net',
+  // Temporary/disposable
+  'mailinator.com', 'guerrillamail.com', 'tempmail.com', '10minutemail.com'
+]);
+
+// Helper to check if a domain should be excluded
+const isExcludedDomain = (domain) => {
+  if (!domain) return true;
+  const lowerDomain = domain.toLowerCase();
+  return EXCLUDED_EMAIL_DOMAINS.has(lowerDomain);
+};
+
 // Helper function for fuzzy matching
 const normalizeString = (str) => {
   return (str || '')
@@ -545,7 +575,23 @@ const UserSelectionModal = ({
         <div className="modal-body">
           {addResults ? (
             <div className="add-results">
-              <h3>✅ Users Added Successfully</h3>
+              {addResults.error ? (
+                <>
+                  <h3>❌ Error Adding Users</h3>
+                  <p className="error-message">{addResults.error}</p>
+                </>
+              ) : addResults.primaryGroup?.failed > 0 && addResults.primaryGroup?.success === 0 ? (
+                <>
+                  <h3>❌ Failed to Add Users</h3>
+                  <p className="error-message">
+                    {addResults.primaryGroup?.error ? 
+                      JSON.stringify(addResults.primaryGroup.error) : 
+                      'Unknown error - check browser console for details'}
+                  </p>
+                </>
+              ) : (
+                <h3>✅ Users Added Successfully</h3>
+              )}
               <div className="results-grid">
                 <div className="result-item">
                   <span className="result-label">Added to {groupName}:</span>
@@ -630,6 +676,253 @@ const UserSelectionModal = ({
   );
 };
 
+// Modal Component for CRM contacts missing from LMS
+const CrmContactsModal = ({
+  isOpen,
+  onClose,
+  contacts,
+  groupName,
+  groupId,
+  onAddContacts
+}) => {
+  const [selectedContacts, setSelectedContacts] = useState([]);
+  const [isAdding, setIsAdding] = useState(false);
+  const [addProgress, setAddProgress] = useState({ current: 0, total: 0, stage: '' });
+  const [addResults, setAddResults] = useState(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setSelectedContacts([]);
+      setAddResults(null);
+    }
+  }, [isOpen]);
+
+  const toggleContact = (email) => {
+    setSelectedContacts(prev =>
+      prev.includes(email)
+        ? prev.filter(e => e !== email)
+        : [...prev, email]
+    );
+  };
+
+  const selectAll = () => {
+    setSelectedContacts(contacts.map(c => c.email));
+  };
+
+  const selectNone = () => {
+    setSelectedContacts([]);
+  };
+
+  const handleAddContacts = async () => {
+    if (selectedContacts.length === 0) return;
+
+    setIsAdding(true);
+    setAddProgress({ current: 0, total: selectedContacts.length, stage: 'Creating users...' });
+
+    const results = {
+      created: 0,
+      addedToGroup: 0,
+      addedToAllPartners: 0,
+      failed: 0,
+      errors: []
+    };
+
+    try {
+      // Get the selected contact objects
+      const contactsToAdd = contacts.filter(c => selectedContacts.includes(c.email));
+
+      // Step 1: Create users in LMS
+      const createdUserIds = [];
+      for (let i = 0; i < contactsToAdd.length; i++) {
+        const contact = contactsToAdd[i];
+        setAddProgress({ 
+          current: i + 1, 
+          total: contactsToAdd.length, 
+          stage: `Creating user ${i + 1}/${contactsToAdd.length}...` 
+        });
+
+        try {
+          const result = await northpassApi.createPerson({
+            email: contact.email,
+            firstName: contact.firstName || contact.email.split('@')[0],
+            lastName: contact.lastName || ''
+          });
+
+          if (result.success && result.user?.id) {
+            results.created++;
+            createdUserIds.push(result.user.id);
+          } else {
+            results.failed++;
+            results.errors.push({ email: contact.email, error: result.error || 'Unknown error' });
+          }
+        } catch (error) {
+          results.failed++;
+          results.errors.push({ email: contact.email, error: error.message });
+        }
+
+        // Small delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+
+      // Step 2: Add created users to the group
+      if (createdUserIds.length > 0 && groupId) {
+        setAddProgress({ 
+          current: 0, 
+          total: createdUserIds.length, 
+          stage: 'Adding users to group...' 
+        });
+
+        const groupResults = await northpassApi.addUsersToGroups(
+          groupId,
+          createdUserIds,
+          true, // Add to All Partners group
+          (current, total) => {
+            setAddProgress({ current, total, stage: `Adding to group ${current}/${total}...` });
+          }
+        );
+
+        results.addedToGroup = groupResults.primaryGroup?.success || 0;
+        results.addedToAllPartners = groupResults.allPartnersGroup?.success || 0;
+      }
+
+      setAddResults(results);
+      onAddContacts(results);
+
+    } catch (error) {
+      console.error('Error adding contacts:', error);
+      setAddResults({ ...results, error: error.message });
+    } finally {
+      setIsAdding(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return ReactDOM.createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content crm-contacts-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2>📋 CRM Contacts Not in LMS</h2>
+          <p className="modal-subtitle">
+            Found {contacts.length} CRM contacts without LMS accounts
+          </p>
+          <button className="modal-close" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="modal-body">
+          {addResults ? (
+            <div className="add-results">
+              {addResults.error ? (
+                <>
+                  <h3>❌ Error Creating Users</h3>
+                  <p className="error-message">{addResults.error}</p>
+                </>
+              ) : (
+                <h3>✅ Users Created Successfully</h3>
+              )}
+              <div className="results-grid">
+                <div className="result-item">
+                  <span className="result-label">Created in LMS:</span>
+                  <span className="result-value success">{addResults.created}</span>
+                </div>
+                <div className="result-item">
+                  <span className="result-label">Added to {groupName}:</span>
+                  <span className="result-value success">{addResults.addedToGroup}</span>
+                </div>
+                <div className="result-item">
+                  <span className="result-label">Added to All Partners:</span>
+                  <span className="result-value success">{addResults.addedToAllPartners}</span>
+                </div>
+                <div className="result-item">
+                  <span className="result-label">Failed:</span>
+                  <span className="result-value error">{addResults.failed}</span>
+                </div>
+              </div>
+              {addResults.errors?.length > 0 && (
+                <div className="error-details">
+                  <h4>Errors:</h4>
+                  <ul>
+                    {addResults.errors.slice(0, 5).map((err, idx) => (
+                      <li key={idx}>{err.email}: {err.error}</li>
+                    ))}
+                    {addResults.errors.length > 5 && (
+                      <li>...and {addResults.errors.length - 5} more</li>
+                    )}
+                  </ul>
+                </div>
+              )}
+              <NintexButton variant="primary" onClick={onClose}>
+                Close
+              </NintexButton>
+            </div>
+          ) : isAdding ? (
+            <div className="adding-progress">
+              <div className="progress-spinner"></div>
+              <p>{addProgress.stage}</p>
+              <div className="progress-bar">
+                <div
+                  className="progress-fill"
+                  style={{ width: `${addProgress.total > 0 ? (addProgress.current / addProgress.total) * 100 : 0}%` }}
+                ></div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="info-banner">
+                <span className="info-icon">ℹ️</span>
+                <p>These CRM contacts will be invited to the LMS and automatically added to "{groupName}" and "All Partners" groups.</p>
+              </div>
+
+              <div className="selection-controls">
+                <button onClick={selectAll} className="selection-btn">Select All</button>
+                <button onClick={selectNone} className="selection-btn">Select None</button>
+                <span className="selection-count">
+                  {selectedContacts.length} of {contacts.length} selected
+                </span>
+              </div>
+
+              <div className="users-list-modal">
+                {contacts.map(contact => (
+                  <label key={contact.email} className="user-item-modal">
+                    <input
+                      type="checkbox"
+                      checked={selectedContacts.includes(contact.email)}
+                      onChange={() => toggleContact(contact.email)}
+                    />
+                    <div className="user-info-modal">
+                      <span className="user-name">
+                        {contact.firstName || contact.lastName 
+                          ? `${contact.firstName || ''} ${contact.lastName || ''}`.trim()
+                          : contact.email.split('@')[0]
+                        }
+                      </span>
+                      <span className="user-email">{contact.email}</span>
+                    </div>
+                  </label>
+                ))}
+              </div>
+
+              <div className="modal-actions">
+                <NintexButton variant="secondary" onClick={onClose}>
+                  Cancel
+                </NintexButton>
+                <NintexButton
+                  variant="primary"
+                  onClick={handleAddContacts}
+                  disabled={selectedContacts.length === 0}
+                >
+                  ➕ Create {selectedContacts.length} Users in LMS
+                </NintexButton>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+};
+
 // Group Card Component with matching info and selection
 const GroupCard = ({ 
   group, 
@@ -640,12 +933,26 @@ const GroupCard = ({
   onEdit,
   isSelected,
   onToggleSelect,
-  selectionMode
+  selectionMode,
+  onAnalysisUpdated
 }) => {
   const [showModal, setShowModal] = useState(false);
+  const [showCrmModal, setShowCrmModal] = useState(false);
   
   const handleAddUsers = (results) => {
     console.log('Users added:', results);
+    // Trigger re-analysis if users were added
+    if (results.primaryGroup?.success > 0) {
+      onAnalysisUpdated && onAnalysisUpdated(group.id);
+    }
+  };
+
+  const handleAddContacts = (results) => {
+    console.log('Contacts added to LMS:', results);
+    // Trigger re-analysis if contacts were created
+    if (results.created > 0) {
+      onAnalysisUpdated && onAnalysisUpdated(group.id);
+    }
   };
 
   const getMatchBadge = () => {
@@ -721,6 +1028,12 @@ const GroupCard = ({
                 <span className="stat-value">{analysisResult.potentialUsers?.length ?? 0}</span>
                 <span className="stat-label">Missing Users</span>
               </div>
+              {analysisResult.crmContactsNotInLms?.length > 0 && (
+                <div className="stat warning">
+                  <span className="stat-value">{analysisResult.crmContactsNotInLms.length}</span>
+                  <span className="stat-label">CRM Not in LMS</span>
+                </div>
+              )}
             </div>
             
             {analysisResult.domains?.length > 0 && (
@@ -729,17 +1042,29 @@ const GroupCard = ({
               </div>
             )}
             
-            {analysisResult.potentialUsers?.length > 0 ? (
-              <NintexButton 
-                variant="primary" 
-                size="small"
-                onClick={() => setShowModal(true)}
-              >
-                👥 View {analysisResult.potentialUsers.length} Missing Users
-              </NintexButton>
-            ) : (
-              <p className="no-missing">✅ No missing users found</p>
-            )}
+            <div className="analysis-actions">
+              {analysisResult.potentialUsers?.length > 0 ? (
+                <NintexButton 
+                  variant="primary" 
+                  size="small"
+                  onClick={() => setShowModal(true)}
+                >
+                  👥 View {analysisResult.potentialUsers.length} Missing Users
+                </NintexButton>
+              ) : (
+                <p className="no-missing">✅ No missing LMS users</p>
+              )}
+              
+              {analysisResult.crmContactsNotInLms?.length > 0 && (
+                <NintexButton 
+                  variant="secondary" 
+                  size="small"
+                  onClick={() => setShowCrmModal(true)}
+                >
+                  📋 Add {analysisResult.crmContactsNotInLms.length} CRM Contacts to LMS
+                </NintexButton>
+              )}
+            </div>
           </div>
         ) : (
           <NintexButton 
@@ -760,6 +1085,15 @@ const GroupCard = ({
         groupName={group.attributes?.name || 'Unknown'}
         groupId={group.id}
         onAddUsers={handleAddUsers}
+      />
+
+      <CrmContactsModal
+        isOpen={showCrmModal}
+        onClose={() => setShowCrmModal(false)}
+        contacts={analysisResult?.crmContactsNotInLms || []}
+        groupName={group.attributes?.name || 'Unknown'}
+        groupId={group.id}
+        onAddContacts={handleAddContacts}
       />
     </div>
   );
@@ -855,15 +1189,24 @@ const GroupAnalysis = () => {
         setPartnerAccounts(accounts);
         
         // Match groups to accounts
+        // Handle ptr_ prefix: groups may be named "ptr_AccountName"
         const matches = {};
         sorted.forEach(group => {
           const groupName = group.attributes?.name || '';
           const normalizedGroupName = normalizeString(groupName);
           
-          // Find exact match
-          const exactMatch = accounts.find(a => 
-            normalizeString(a.accountName) === normalizedGroupName
-          );
+          // Remove ptr_ prefix for matching if present
+          const groupNameWithoutPrefix = groupName.startsWith('ptr_') 
+            ? groupName.substring(4) 
+            : groupName;
+          const normalizedGroupNameWithoutPrefix = normalizeString(groupNameWithoutPrefix);
+          
+          // Find exact match (try both with and without ptr_ prefix)
+          const exactMatch = accounts.find(a => {
+            const normalizedAccount = normalizeString(a.accountName);
+            return normalizedAccount === normalizedGroupName || 
+                   normalizedAccount === normalizedGroupNameWithoutPrefix;
+          });
           
           // Find close matches if no exact
           let closeMatches = [];
@@ -871,7 +1214,11 @@ const GroupAnalysis = () => {
             closeMatches = accounts
               .map(a => ({
                 ...a,
-                similarity: calculateSimilarity(groupName, a.accountName)
+                // Calculate similarity using name without ptr_ prefix
+                similarity: Math.max(
+                  calculateSimilarity(groupName, a.accountName),
+                  calculateSimilarity(groupNameWithoutPrefix, a.accountName)
+                )
               }))
               .filter(a => a.similarity >= 0.4)
               .sort((a, b) => b.similarity - a.similarity)
@@ -933,29 +1280,108 @@ const GroupAnalysis = () => {
     
     try {
       const members = await northpassApi.getGroupUsers(group.id);
-      const domains = [...new Set(
+      
+      // Extract domains and filter out personal/public email domains
+      const allDomains = [...new Set(
         members
           .map(m => m.attributes?.email?.split('@')[1])
           .filter(Boolean)
           .map(d => d.toLowerCase())
       )];
       
+      // Filter out excluded domains (gmail, hotmail, outlook, etc.)
+      const domains = allDomains.filter(d => !isExcludedDomain(d));
+      const excludedCount = allDomains.length - domains.length;
+      
+      if (excludedCount > 0) {
+        console.log(`📧 Excluded ${excludedCount} personal email domains (gmail, hotmail, etc.) from analysis`);
+      }
+      
       const memberIds = new Set(members.map(m => m.id));
+      const memberEmails = new Set(members.map(m => m.attributes?.email?.toLowerCase()).filter(Boolean));
       
       let potentialUsers = [];
       if (domains.length > 0) {
         potentialUsers = await northpassApi.searchUsersByEmailDomains(domains, memberIds);
+        
+        // Also filter out any users with excluded domains from the results
+        potentialUsers = potentialUsers.filter(u => !isExcludedDomain(u.email?.split('@')[1]));
+      }
+      
+      // Check for CRM contacts not in LMS (only if we have a matched partner)
+      let crmContactsNotInLms = [];
+      const matchInfo = matchResults[group.id];
+      if (matchInfo?.exactMatch) {
+        try {
+          // Get CRM contacts for this partner
+          const crmContacts = await getContactsByAccount(matchInfo.exactMatch.accountName);
+          
+          if (crmContacts.length > 0) {
+            // Check which CRM emails exist in LMS
+            for (const contact of crmContacts) {
+              if (!contact.email) continue;
+              const emailLower = contact.email.toLowerCase();
+              
+              // Skip excluded domains
+              const domain = emailLower.split('@')[1];
+              if (isExcludedDomain(domain)) continue;
+              
+              // Skip if already a member
+              if (memberEmails.has(emailLower)) continue;
+              
+              // Check if this email exists in LMS
+              try {
+                const lmsUser = await northpassApi.getCurrentUser(emailLower);
+                if (!lmsUser) {
+                  // User doesn't exist in LMS
+                  crmContactsNotInLms.push({
+                    email: contact.email,
+                    firstName: contact['First Name'] || contact.firstName || '',
+                    lastName: contact['Last Name'] || contact.lastName || '',
+                    title: contact['Title'] || contact.title || ''
+                  });
+                }
+              } catch {
+                // If lookup fails, assume user doesn't exist
+                crmContactsNotInLms.push({
+                  email: contact.email,
+                  firstName: contact['First Name'] || contact.firstName || '',
+                  lastName: contact['Last Name'] || contact.lastName || '',
+                  title: contact['Title'] || contact.title || ''
+                });
+              }
+              
+              // Small delay to avoid rate limiting
+              await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            
+            console.log(`📋 Found ${crmContactsNotInLms.length} CRM contacts not in LMS for ${matchInfo.exactMatch.accountName}`);
+          }
+        } catch (error) {
+          console.error('Error checking CRM contacts:', error);
+        }
       }
       
       setAnalysisResults(prev => ({
         ...prev,
-        [group.id]: { memberCount: members.length, domains, potentialUsers }
+        [group.id]: { 
+          memberCount: members.length, 
+          domains, 
+          potentialUsers,
+          crmContactsNotInLms
+        }
       }));
     } catch (error) {
       console.error('Error analyzing group:', error);
       setAnalysisResults(prev => ({
         ...prev,
-        [group.id]: { error: error.message, memberCount: 0, domains: [], potentialUsers: [] }
+        [group.id]: { 
+          error: error.message, 
+          memberCount: 0, 
+          domains: [], 
+          potentialUsers: [],
+          crmContactsNotInLms: []
+        }
       }));
     } finally {
       setAnalyzingGroupId(null);
@@ -1124,16 +1550,23 @@ const GroupAnalysis = () => {
   const partnersWithoutGroups = useMemo(() => {
     if (!hasPartnerData || partnerAccounts.length === 0) return [];
     
-    // Get all group names (normalized)
-    const groupNames = new Set(
-      groups.map(g => normalizeString(g.attributes?.name || ''))
-    );
+    // Get all group names (normalized) - also store versions without ptr_ prefix
+    const groupNames = new Set();
+    groups.forEach(g => {
+      const name = g.attributes?.name || '';
+      const normalized = normalizeString(name);
+      groupNames.add(normalized);
+      // Also add version without ptr_ prefix
+      if (name.toLowerCase().startsWith('ptr_')) {
+        groupNames.add(normalizeString(name.substring(4)));
+      }
+    });
     
     // Find partners that don't have a matching group
     return partnerAccounts
       .filter(partner => {
         const normalizedName = normalizeString(partner.accountName);
-        // Check for exact match
+        // Check for exact match (with or without ptr_ prefix)
         if (groupNames.has(normalizedName)) return false;
         // Check if any group name is very similar
         for (const groupName of groupNames) {
@@ -1474,6 +1907,14 @@ const GroupAnalysis = () => {
               isSelected={selectedGroups.has(group.id)}
               onToggleSelect={toggleGroupSelection}
               selectionMode={selectionMode}
+              onAnalysisUpdated={(groupId) => {
+                // Clear the analysis result to allow re-analyzing
+                setAnalysisResults(prev => {
+                  const newResults = { ...prev };
+                  delete newResults[groupId];
+                  return newResults;
+                });
+              }}
             />
           ))}
         </div>

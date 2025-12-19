@@ -1,40 +1,30 @@
 /**
  * Data Management Page
  * Central hub for importing and managing partner data from Excel
+ * Uses MariaDB for persistent storage via server API
  */
 
-import React, { useState, useEffect } from 'react';
-import DataImport from './DataImport';
+import React, { useState, useEffect, useCallback } from 'react';
 import NintexButton from './NintexButton';
-import { 
-  getDatabaseStats, 
-  getAccountSummary, 
-  searchAccounts,
-  exportToJSON,
-  deleteContactsByAccountPattern,
-  deleteContactsByRegion,
-  deleteContactsByTier,
-  deleteAccount,
-  getAllContacts,
-  storeLmsMatchResults,
-  getLmsMatchingMetadata,
-  getUnmatchedLmsUsers,
-  getLmsUserDomainStats,
-  hasLmsMatchingData
-} from '../services/partnerDatabase';
-import northpassApi from '../services/northpassApi';
 import './DataManagement.css';
+
+const API_BASE = '/api/db/import';
 
 const DataManagement = () => {
   const [stats, setStats] = useState(null);
-  const [accounts, setAccounts] = useState([]);
+  const [partners, setPartners] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
-  const [selectedAccount, setSelectedAccount] = useState(null);
+  const [selectedPartner, setSelectedPartner] = useState(null);
+  const [selectedPartnerContacts, setSelectedPartnerContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   
   // Active tab for sections
   const [activeTab, setActiveTab] = useState('overview');
+  
+  // Import state
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
+  const [dragActive, setDragActive] = useState(false);
   
   // Data cleaning state
   const [cleaningInProgress, setCleaningInProgress] = useState(false);
@@ -48,18 +38,7 @@ const DataManagement = () => {
   const [previewLoading, setPreviewLoading] = useState(false);
   
   // LMS matching state
-  const [lmsMatching, setLmsMatching] = useState(false);
-  const [, setLmsUsers] = useState([]);  // Used internally in handleMatchLmsUsers
-  const [matchResults, setMatchResults] = useState(null);
-  const [matchProgress, setMatchProgress] = useState(0);
-  
-  // Unmatched LMS users analysis state
-  const [unmatchedUsers, setUnmatchedUsers] = useState([]);
-  const [unmatchedSearchTerm, setUnmatchedSearchTerm] = useState('');
-  const [domainStats, setDomainStats] = useState([]);
-  const [lmsMetadata, setLmsMetadata] = useState(null);
-  const [unmatchedSortBy, setUnmatchedSortBy] = useState('name');
-  const [showDomainStats, setShowDomainStats] = useState(false);
+  const [matchStats, setMatchStats] = useState(null);
 
   useEffect(() => {
     loadData();
@@ -74,35 +53,21 @@ const DataManagement = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const dbStats = await getDatabaseStats();
-      setStats(dbStats);
+      const [statsRes, matchRes] = await Promise.all([
+        fetch(`${API_BASE}/stats`),
+        fetch(`${API_BASE}/match-stats`)
+      ]);
       
-      if (dbStats?.lastImport) {
-        const allAccounts = await getAccountSummary();
-        setAccounts(allAccounts);
-      }
+      const statsData = await statsRes.json();
+      const matchData = await matchRes.json();
       
-      // Check for existing LMS matching data
-      const hasLmsData = await hasLmsMatchingData();
-      if (hasLmsData) {
-        const metadata = await getLmsMatchingMetadata();
-        setLmsMetadata(metadata);
-        
-        // Load unmatched users
-        const unmatched = await getUnmatchedLmsUsers();
-        setUnmatchedUsers(unmatched);
-        
-        // Load domain stats
-        const domains = await getLmsUserDomainStats();
-        setDomainStats(domains);
-        
-        // Set match results from stored data
-        setMatchResults({
-          totalLmsUsers: metadata.totalLmsUsers,
-          matched: metadata.matched,
-          unmatched: metadata.unmatched,
-          matchRate: metadata.matchRate
-        });
+      setStats(statsData);
+      setMatchStats(matchData);
+      
+      if (statsData.totalContacts > 0) {
+        const partnersRes = await fetch(`${API_BASE}/partners?limit=100`);
+        const partnersData = await partnersRes.json();
+        setPartners(partnersData);
       }
     } catch (err) {
       console.error('Error loading data:', err);
@@ -111,23 +76,111 @@ const DataManagement = () => {
     }
   };
 
-  const handleImportComplete = async () => {
-    await loadData();
-  };
+  // File handling for drag and drop
+  const handleDrag = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === 'dragenter' || e.type === 'dragover') {
+      setDragActive(true);
+    } else if (e.type === 'dragleave') {
+      setDragActive(false);
+    }
+  }, []);
 
-  const handleSearch = async (term) => {
-    setSearchTerm(term);
-    if (term.length >= 2) {
-      const results = await searchAccounts(term);
-      setSearchResults(results);
-    } else {
-      setSearchResults([]);
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFile(e.dataTransfer.files[0]);
+    }
+  }, []);
+
+  const handleFileInput = (e) => {
+    if (e.target.files && e.target.files[0]) {
+      handleFile(e.target.files[0]);
     }
   };
 
+  const handleFile = async (file) => {
+    if (!file.name.match(/\.(xlsx|xls)$/i)) {
+      alert('Please upload an Excel file (.xlsx or .xls)');
+      return;
+    }
+
+    setImporting(true);
+    setImportResult(null);
+
+    try {
+      // Read file as base64
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const base64 = e.target.result.split(',')[1];
+        
+        // Send to server
+        const response = await fetch(`${API_BASE}/excel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fileData: base64,
+            fileName: file.name,
+            clearExisting: true
+          })
+        });
+
+        const result = await response.json();
+        setImportResult(result);
+        
+        if (result.success) {
+          await loadData();
+        }
+        
+        setImporting(false);
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      console.error('Import error:', err);
+      setImportResult({ success: false, error: err.message });
+      setImporting(false);
+    }
+  };
+
+  // Search partners
+  const handleSearch = async (term) => {
+    setSearchTerm(term);
+    if (term.length >= 2) {
+      const res = await fetch(`${API_BASE}/partners?search=${encodeURIComponent(term)}`);
+      const data = await res.json();
+      setPartners(data);
+    } else if (term.length === 0) {
+      const res = await fetch(`${API_BASE}/partners?limit=100`);
+      const data = await res.json();
+      setPartners(data);
+    }
+  };
+
+  // Load partner contacts
+  const loadPartnerContacts = async (partnerId) => {
+    const res = await fetch(`${API_BASE}/partners/${partnerId}/contacts`);
+    const data = await res.json();
+    setSelectedPartnerContacts(data);
+  };
+
+  // Export JSON
   const handleExportJSON = async () => {
     try {
-      const data = await exportToJSON();
+      const [partnersRes, contactsRes] = await Promise.all([
+        fetch(`${API_BASE}/partners?limit=10000`),
+        fetch(`${API_BASE}/contacts/search?q=@&limit=50000`)
+      ]);
+      
+      const data = {
+        exportDate: new Date().toISOString(),
+        stats,
+        partners: await partnersRes.json()
+      };
+      
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -143,20 +196,21 @@ const DataManagement = () => {
     }
   };
 
-  // Data Cleaning - Delete single account (still used in Browse tab)
-  const handleDeleteAccount = async (accountName) => {
-    const account = accounts.find(a => a.accountName === accountName);
-    if (!window.confirm(`Delete account "${accountName}" and all ${account?.contactCount || 0} contacts?`)) return;
+  // Delete partner
+  const handleDeletePartner = async (partnerId, partnerName) => {
+    if (!window.confirm(`Delete partner "${partnerName}" and all contacts?`)) return;
     
     setCleaningInProgress(true);
     try {
-      const result = await deleteAccount(accountName);
-      setCleaningResult({ type: 'account', value: accountName, deleted: result.deleted });
-      setSelectedAccount(null);
+      const res = await fetch(`${API_BASE}/partners/${partnerId}`, { method: 'DELETE' });
+      const result = await res.json();
+      setCleaningResult({ type: 'partner', value: partnerName, deleted: result.deleted || 1 });
+      setSelectedPartner(null);
+      setSelectedPartnerContacts([]);
       await loadData();
     } catch (err) {
       console.error('Delete error:', err);
-      alert('Failed to delete account');
+      alert('Failed to delete partner');
     } finally {
       setCleaningInProgress(false);
     }
@@ -169,28 +223,12 @@ const DataManagement = () => {
     setPreviewValue(value);
     
     try {
-      const allContacts = await getAllContacts();
-      let filtered = [];
-      
-      switch (mode) {
-        case 'region':
-          filtered = allContacts.filter(c => c.accountRegion === value);
-          break;
-        case 'tier':
-          filtered = allContacts.filter(c => c.partnerTier === value);
-          break;
-        case 'pattern':
-          filtered = allContacts.filter(c => 
-            c.accountName?.toLowerCase().includes(value.toLowerCase())
-          );
-          break;
-        default:
-          filtered = [];
-      }
-      
-      setPreviewContacts(filtered);
+      const res = await fetch(`${API_BASE}/preview/${mode}/${encodeURIComponent(value)}`);
+      const data = await res.json();
+      setPreviewContacts(data);
     } catch (err) {
       console.error('Error loading preview:', err);
+      setPreviewContacts([]);
     } finally {
       setPreviewLoading(false);
     }
@@ -210,20 +248,24 @@ const DataManagement = () => {
     
     setCleaningInProgress(true);
     try {
-      let result;
+      let endpoint;
       switch (previewMode) {
         case 'region':
-          result = await deleteContactsByRegion(previewValue);
+          endpoint = `${API_BASE}/by-region/${encodeURIComponent(previewValue)}`;
           break;
         case 'tier':
-          result = await deleteContactsByTier(previewValue);
+          endpoint = `${API_BASE}/by-tier/${encodeURIComponent(previewValue)}`;
           break;
         case 'pattern':
-          result = await deleteContactsByAccountPattern(previewValue);
+          endpoint = `${API_BASE}/by-pattern/${encodeURIComponent(previewValue)}`;
           break;
         default:
           return;
       }
+      
+      const res = await fetch(endpoint, { method: 'DELETE' });
+      const result = await res.json();
+      
       setCleaningResult({ type: previewMode, value: previewValue, deleted: result.deleted });
       closePreview();
       await loadData();
@@ -235,80 +277,17 @@ const DataManagement = () => {
     }
   };
 
-  // LMS Matching Functions
-  const handleMatchLmsUsers = async () => {
-    setLmsMatching(true);
-    setMatchProgress(0);
-    setMatchResults(null);
-
+  // Re-link contacts to LMS users
+  const handleRelink = async () => {
     try {
-      // Get all contacts from database
-      setMatchProgress(10);
-      const contacts = await getAllContacts();
-      
-      // Get all LMS users
-      setMatchProgress(30);
-      const allLmsUsers = await northpassApi.getAllUsers();
-      setLmsUsers(allLmsUsers);
-      
-      // Create contact email lookup (contact email -> contact object)
-      setMatchProgress(50);
-      const contactEmailMap = new Map();
-      contacts.forEach(contact => {
-        const email = contact.email?.toLowerCase();
-        if (email) {
-          contactEmailMap.set(email, contact);
-        }
-      });
-      
-      // Store match results in IndexedDB
-      setMatchProgress(70);
-      await storeLmsMatchResults(allLmsUsers, contactEmailMap);
-      
-      // Calculate stats for display
-      setMatchProgress(90);
-      const metadata = await getLmsMatchingMetadata();
-      const unmatched = await getUnmatchedLmsUsers();
-      const domains = await getLmsUserDomainStats();
-      
-      setLmsMetadata(metadata);
-      setUnmatchedUsers(unmatched);
-      setDomainStats(domains);
-      
-      setMatchProgress(100);
-      setMatchResults({
-        totalContacts: contacts.length,
-        totalLmsUsers: allLmsUsers.length,
-        matched: metadata.matched,
-        unmatched: metadata.unmatched,
-        matchRate: metadata.matchRate
-      });
-      
+      const res = await fetch(`${API_BASE}/link`, { method: 'POST' });
+      const result = await res.json();
+      alert(`Linked ${result.linked} contacts to LMS users`);
+      await loadData();
     } catch (err) {
-      console.error('LMS matching error:', err);
-      alert('Failed to match LMS users: ' + err.message);
-    } finally {
-      setLmsMatching(false);
+      console.error('Link error:', err);
+      alert('Failed to link contacts');
     }
-  };
-  
-  // Load unmatched users with search/sort
-  const handleSearchUnmatched = async (term) => {
-    setUnmatchedSearchTerm(term);
-    const users = await getUnmatchedLmsUsers({ 
-      searchTerm: term, 
-      sortBy: unmatchedSortBy 
-    });
-    setUnmatchedUsers(users);
-  };
-  
-  const handleSortUnmatched = async (sortBy) => {
-    setUnmatchedSortBy(sortBy);
-    const users = await getUnmatchedLmsUsers({ 
-      searchTerm: unmatchedSearchTerm, 
-      sortBy: sortBy 
-    });
-    setUnmatchedUsers(users);
   };
 
   return (
@@ -317,16 +296,79 @@ const DataManagement = () => {
         <div className="header-content">
           <h1>💾 Partner Data Management</h1>
           <p>
-            Import, clean, and match partner contact data with Northpass LMS users.
+            Import partner contact data from Excel into MariaDB. Data is stored persistently on the server.
           </p>
         </div>
       </div>
 
-      {/* Data Import Component */}
-      <DataImport onImportComplete={handleImportComplete} />
+      {/* File Upload Area */}
+      <div className="import-section">
+        <div 
+          className={`drop-zone ${dragActive ? 'drag-active' : ''} ${importing ? 'importing' : ''}`}
+          onDragEnter={handleDrag}
+          onDragLeave={handleDrag}
+          onDragOver={handleDrag}
+          onDrop={handleDrop}
+        >
+          {importing ? (
+            <div className="importing-state">
+              <div className="spinner" />
+              <p>Importing data to MariaDB...</p>
+            </div>
+          ) : (
+            <>
+              <div className="upload-icon">📊</div>
+              <h3>Import Partner Contacts</h3>
+              <p>Drag & drop Excel file here, or click to browse</p>
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={handleFileInput}
+                className="file-input"
+              />
+              <NintexButton variant="secondary">
+                📁 Choose File
+              </NintexButton>
+              <p className="hint">Supported: .xlsx, .xls files with partner contact data</p>
+            </>
+          )}
+        </div>
+
+        {/* Import Result */}
+        {importResult && (
+          <div className={`import-result ${importResult.success ? 'success' : 'error'}`}>
+            {importResult.success ? (
+              <>
+                <span className="result-icon">✅</span>
+                <div className="result-details">
+                  <strong>Import Successful!</strong>
+                  <p>
+                    {importResult.stats?.partnersCreated || 0} partners, {' '}
+                    {importResult.stats?.contactsCreated || 0} contacts imported in {importResult.duration}s
+                  </p>
+                  {importResult.linkResult && (
+                    <p className="link-result">
+                      🔗 {importResult.linkResult.linked || 0} contacts linked to LMS users
+                    </p>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <span className="result-icon">❌</span>
+                <div className="result-details">
+                  <strong>Import Failed</strong>
+                  <p>{importResult.error}</p>
+                </div>
+              </>
+            )}
+            <button className="dismiss-btn" onClick={() => setImportResult(null)}>×</button>
+          </div>
+        )}
+      </div>
 
       {/* Tabs for different sections */}
-      {stats?.lastImport && (
+      {stats?.totalContacts > 0 && (
         <>
           <div className="data-tabs">
             <button 
@@ -345,13 +387,13 @@ const DataManagement = () => {
               className={`tab-btn ${activeTab === 'lms' ? 'active' : ''}`}
               onClick={() => setActiveTab('lms')}
             >
-              🎓 LMS Matching
+              🔗 LMS Matching
             </button>
             <button 
               className={`tab-btn ${activeTab === 'browse' ? 'active' : ''}`}
               onClick={() => setActiveTab('browse')}
             >
-              🔍 Browse Data
+              🔍 Browse
             </button>
           </div>
 
@@ -388,12 +430,12 @@ const DataManagement = () => {
                   <span className="stat-label">Total Contacts</span>
                 </div>
                 <div className="stat-card">
-                  <span className="stat-value">{stats.totalAccounts?.toLocaleString()}</span>
+                  <span className="stat-value">{stats.totalPartners?.toLocaleString()}</span>
                   <span className="stat-label">Partner Accounts</span>
                 </div>
                 <div className="stat-card">
-                  <span className="stat-value">{Object.keys(stats.tierDistribution || {}).length}</span>
-                  <span className="stat-label">Partner Tiers</span>
+                  <span className="stat-value">{stats.linkedToLms?.toLocaleString() || 0}</span>
+                  <span className="stat-label">Linked to LMS</span>
                 </div>
                 <div className="stat-card">
                   <span className="stat-value">{Object.keys(stats.regionDistribution || {}).length}</span>
@@ -476,15 +518,16 @@ const DataManagement = () => {
                       {(() => {
                         const byAccount = {};
                         previewContacts.forEach(c => {
-                          if (!byAccount[c.accountName]) {
-                            byAccount[c.accountName] = { 
-                              accountName: c.accountName,
-                              region: c.accountRegion,
-                              tier: c.partnerTier,
+                          const name = c.account_name || 'Unknown';
+                          if (!byAccount[name]) {
+                            byAccount[name] = { 
+                              accountName: name,
+                              region: c.account_region,
+                              tier: c.partner_tier,
                               contacts: [] 
                             };
                           }
-                          byAccount[c.accountName].contacts.push(c);
+                          byAccount[name].contacts.push(c);
                         });
                         return Object.values(byAccount)
                           .sort((a, b) => b.contacts.length - a.contacts.length)
@@ -502,11 +545,8 @@ const DataManagement = () => {
                               <div className="preview-contact-list">
                                 {account.contacts.slice(0, 10).map((contact, cIdx) => (
                                   <div key={cIdx} className="preview-contact">
-                                    <span className="contact-name">{contact.firstName} {contact.lastName}</span>
+                                    <span className="contact-name">{contact.first_name} {contact.last_name}</span>
                                     <span className="contact-email">{contact.email}</span>
-                                    <span className={`contact-status ${(contact.contactStatus || '').toLowerCase()}`}>
-                                      {contact.contactStatus}
-                                    </span>
                                   </div>
                                 ))}
                                 {account.contacts.length > 10 && (
@@ -608,152 +648,46 @@ const DataManagement = () => {
           {activeTab === 'lms' && (
             <div className="lms-matching-section">
               <div className="section-header">
-                <h2>🎓 LMS User Matching</h2>
+                <h2>🔗 LMS User Matching</h2>
               </div>
               
               <p className="section-desc">
-                Match your CRM contacts with Northpass LMS users by email address.
-                This helps identify which contacts have learning accounts.
+                Contacts are automatically matched to Northpass LMS users by email address.
+                Run a re-link after syncing LMS users to update matches.
               </p>
 
-              {!matchResults && !lmsMetadata && (
-                <div className="match-start">
-                  <NintexButton 
-                    variant="primary" 
-                    onClick={handleMatchLmsUsers}
-                    disabled={lmsMatching}
-                    size="large"
-                  >
-                    {lmsMatching ? `🔄 Matching... ${matchProgress}%` : '🔗 Match with Northpass LMS'}
-                  </NintexButton>
-                  
-                  {lmsMatching && (
-                    <div className="match-progress">
-                      <div className="progress-bar">
-                        <div className="progress-fill" style={{ width: `${matchProgress}%` }} />
-                      </div>
-                      <span className="progress-text">
-                        {matchProgress < 30 ? 'Loading contacts...' : 
-                         matchProgress < 50 ? 'Fetching LMS users...' :
-                         matchProgress < 70 ? 'Storing results...' : 'Analyzing matches...'}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {(matchResults || lmsMetadata) && (
+              {matchStats && (
                 <div className="match-results">
-                  {lmsMetadata && (
-                    <div className="match-meta">
-                      <span>Last matched: {formatDate(lmsMetadata.matchDate)}</span>
-                    </div>
-                  )}
-                  
                   <div className="match-summary">
                     <div className="match-stat">
-                      <span className="stat-value">{stats?.totalContacts?.toLocaleString() || '0'}</span>
+                      <span className="stat-value">{matchStats.totalContacts?.toLocaleString()}</span>
                       <span className="stat-label">CRM Contacts</span>
                     </div>
                     <div className="match-stat">
-                      <span className="stat-value">{(matchResults?.totalLmsUsers || lmsMetadata?.totalLmsUsers || 0).toLocaleString()}</span>
+                      <span className="stat-value">{matchStats.totalLmsUsers?.toLocaleString()}</span>
                       <span className="stat-label">LMS Users</span>
                     </div>
                     <div className="match-stat success">
-                      <span className="stat-value">{(matchResults?.matched || lmsMetadata?.matched || 0).toLocaleString()}</span>
+                      <span className="stat-value">{matchStats.matchedContacts?.toLocaleString()}</span>
                       <span className="stat-label">Matched</span>
                     </div>
                     <div className="match-stat warning">
-                      <span className="stat-value">{(matchResults?.unmatched || lmsMetadata?.unmatched || 0).toLocaleString()}</span>
+                      <span className="stat-value">{matchStats.unmatchedContacts?.toLocaleString()}</span>
                       <span className="stat-label">Unmatched</span>
                     </div>
                     <div className="match-stat rate">
-                      <span className="stat-value">{matchResults?.matchRate || lmsMetadata?.matchRate || 0}%</span>
+                      <span className="stat-value">{matchStats.matchRate}%</span>
                       <span className="stat-label">Match Rate</span>
                     </div>
                   </div>
 
                   <div className="match-actions">
-                    <NintexButton 
-                      variant="secondary" 
-                      onClick={handleMatchLmsUsers}
-                      disabled={lmsMatching}
-                    >
-                      {lmsMatching ? `🔄 ${matchProgress}%` : '🔄 Re-run Matching'}
+                    <NintexButton variant="primary" onClick={handleRelink}>
+                      🔄 Re-link Contacts to LMS
                     </NintexButton>
-                    <NintexButton 
-                      variant="secondary" 
-                      onClick={() => setShowDomainStats(!showDomainStats)}
-                    >
-                      {showDomainStats ? '📊 Hide Domain Stats' : '📊 Show Domain Stats'}
-                    </NintexButton>
-                  </div>
-
-                  {/* Domain Stats */}
-                  {showDomainStats && domainStats.length > 0 && (
-                    <div className="domain-stats-section">
-                      <h3>📧 Unmatched Users by Email Domain</h3>
-                      <p className="section-note">Top domains with unmatched LMS users (not in CRM)</p>
-                      <div className="domain-stats-list">
-                        {domainStats.filter(d => d.unmatched > 0).slice(0, 30).map((domain, idx) => (
-                          <div key={idx} className="domain-stat-item">
-                            <span className="domain-name">@{domain.domain}</span>
-                            <div className="domain-counts">
-                              <span className="domain-total">{domain.total} total</span>
-                              <span className="domain-matched">{domain.matched} matched</span>
-                              <span className="domain-unmatched">{domain.unmatched} unmatched</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Unmatched LMS Users Section */}
-                  <div className="match-list-section unmatched-lms-users">
-                    <h3>👤 Unmatched LMS Users ({unmatchedUsers.length.toLocaleString()})</h3>
-                    <p className="section-note">LMS users without matching CRM contacts - these may need accounts created or emails corrected</p>
-                    
-                    <div className="unmatched-controls">
-                      <input
-                        type="text"
-                        placeholder="Search by name or email..."
-                        value={unmatchedSearchTerm}
-                        onChange={(e) => handleSearchUnmatched(e.target.value)}
-                        className="search-input"
-                      />
-                      <select 
-                        value={unmatchedSortBy} 
-                        onChange={(e) => handleSortUnmatched(e.target.value)}
-                        className="sort-select"
-                      >
-                        <option value="name">Sort by Name</option>
-                        <option value="email">Sort by Email</option>
-                        <option value="lastActiveAt">Sort by Last Active</option>
-                        <option value="createdAt">Sort by Created</option>
-                      </select>
-                    </div>
-                    
-                    <div className="match-list">
-                      {unmatchedUsers.slice(0, 50).map((user, idx) => (
-                        <div key={idx} className="match-item unmatched-lms">
-                          <div className="contact-info">
-                            <span className="contact-name">{user.name || 'No name'}</span>
-                            <span className="contact-email">{user.email || 'No email'}</span>
-                          </div>
-                          <div className="lms-dates">
-                            <span className="created">Created: {user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'Unknown'}</span>
-                            <span className="last-active">Last Active: {user.lastActiveAt ? new Date(user.lastActiveAt).toLocaleDateString() : 'Never'}</span>
-                          </div>
-                        </div>
-                      ))}
-                      {unmatchedUsers.length > 50 && (
-                        <div className="more-items">+{unmatchedUsers.length - 50} more unmatched LMS users</div>
-                      )}
-                      {unmatchedUsers.length === 0 && !lmsMatching && (
-                        <div className="no-items">No unmatched LMS users found</div>
-                      )}
-                    </div>
+                    <p className="action-hint">
+                      This will re-match contacts to LMS users by email. Run after LMS user sync.
+                    </p>
                   </div>
                 </div>
               )}
@@ -781,52 +715,63 @@ const DataManagement = () => {
               </div>
 
               <div className="accounts-list">
-                {(searchTerm.length >= 2 ? searchResults : accounts.slice(0, 50)).map((account, idx) => (
+                {partners.map((partner) => (
                   <div 
-                    key={idx} 
-                    className={`account-item ${selectedAccount?.accountName === account.accountName ? 'selected' : ''}`}
-                    onClick={() => setSelectedAccount(selectedAccount?.accountName === account.accountName ? null : account)}
+                    key={partner.id} 
+                    className={`account-item ${selectedPartner?.id === partner.id ? 'selected' : ''}`}
+                    onClick={() => {
+                      if (selectedPartner?.id === partner.id) {
+                        setSelectedPartner(null);
+                        setSelectedPartnerContacts([]);
+                      } else {
+                        setSelectedPartner(partner);
+                        loadPartnerContacts(partner.id);
+                      }
+                    }}
                   >
                     <div className="account-main">
-                      <span className="account-name">{account.accountName}</span>
+                      <span className="account-name">{partner.account_name}</span>
                       <div className="account-meta">
-                        <span className={`tier-badge tier-${(account.partnerTier || '').toLowerCase().replace(' ', '-')}`}>
-                          {account.partnerTier || 'Unknown'}
+                        <span className={`tier-badge tier-${(partner.partner_tier || '').toLowerCase().replace(' ', '-')}`}>
+                          {partner.partner_tier || 'Unknown'}
                         </span>
-                        <span className="region-badge">{account.accountRegion || 'Unknown'}</span>
-                        <span className="contact-count">{account.contactCount} contacts</span>
+                        <span className="region-badge">{partner.account_region || 'Unknown'}</span>
+                        <span className="contact-count">{partner.contact_count} contacts</span>
+                        {partner.lms_linked_count > 0 && (
+                          <span className="lms-count">🔗 {partner.lms_linked_count} LMS</span>
+                        )}
                       </div>
                     </div>
 
-                    {selectedAccount?.accountName === account.accountName && (
+                    {selectedPartner?.id === partner.id && (
                       <div className="account-details">
                         <div className="account-actions">
                           <button 
                             className="delete-account-btn"
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleDeleteAccount(account.accountName);
+                              handleDeletePartner(partner.id, partner.account_name);
                             }}
                           >
-                            🗑️ Delete Account
+                            🗑️ Delete Partner
                           </button>
                         </div>
-                        <h4>Contacts ({account.contacts.length})</h4>
+                        <h4>Contacts ({selectedPartnerContacts.length})</h4>
                         <div className="contacts-list">
-                          {account.contacts.slice(0, 20).map((contact, cIdx) => (
-                            <div key={cIdx} className="contact-item">
+                          {selectedPartnerContacts.slice(0, 20).map((contact) => (
+                            <div key={contact.id} className="contact-item">
                               <span className="contact-name">
-                                {contact.firstName} {contact.lastName}
+                                {contact.first_name} {contact.last_name}
                               </span>
                               <span className="contact-email">{contact.email}</span>
-                              <span className={`contact-status ${(contact.contactStatus || '').toLowerCase()}`}>
-                                {contact.contactStatus}
-                              </span>
+                              {contact.lms_user_id && (
+                                <span className="lms-linked">🔗 LMS</span>
+                              )}
                             </div>
                           ))}
-                          {account.contacts.length > 20 && (
+                          {selectedPartnerContacts.length > 20 && (
                             <div className="more-contacts">
-                              +{account.contacts.length - 20} more contacts
+                              +{selectedPartnerContacts.length - 20} more contacts
                             </div>
                           )}
                         </div>
@@ -835,15 +780,9 @@ const DataManagement = () => {
                   </div>
                 ))}
 
-                {searchTerm.length >= 2 && searchResults.length === 0 && (
+                {partners.length === 0 && !loading && (
                   <div className="no-results">
-                    No accounts found matching "{searchTerm}"
-                  </div>
-                )}
-
-                {searchTerm.length < 2 && accounts.length > 50 && (
-                  <div className="more-hint">
-                    Showing first 50 accounts. Use search to find specific partners.
+                    {searchTerm ? `No partners found matching "${searchTerm}"` : 'No partners imported yet'}
                   </div>
                 )}
               </div>
@@ -853,41 +792,41 @@ const DataManagement = () => {
       )}
 
       {/* Empty State */}
-      {!loading && !stats?.lastImport && (
+      {!loading && (!stats || stats.totalContacts === 0) && (
         <div className="empty-state">
           <div className="empty-icon">📁</div>
           <h3>No Data Imported Yet</h3>
           <p>
             Upload your partner contact Excel file above to get started. 
-            Once imported, all admin tools will have instant access to the data.
+            Data will be stored in MariaDB and available across all admin tools.
           </p>
         </div>
       )}
 
       {/* How It Works - only show when no data */}
-      {!stats?.lastImport && (
+      {(!stats || stats.totalContacts === 0) && (
         <div className="how-it-works">
           <h2>ℹ️ How It Works</h2>
           <div className="steps-grid">
             <div className="step">
               <div className="step-number">1</div>
               <h4>Import Excel Data</h4>
-              <p>Upload your partner contact export file. Data is stored locally in your browser.</p>
+              <p>Upload your partner contact export file. Data is stored in MariaDB.</p>
             </div>
             <div className="step">
               <div className="step-number">2</div>
-              <h4>Clean Data</h4>
-              <p>Remove unwanted contacts by region, tier, or account pattern.</p>
+              <h4>Auto-Link to LMS</h4>
+              <p>Contacts are automatically matched to Northpass users by email.</p>
             </div>
             <div className="step">
               <div className="step-number">3</div>
-              <h4>Match with LMS</h4>
-              <p>Cross-reference CRM contacts with Northpass learning data.</p>
+              <h4>Clean & Organize</h4>
+              <p>Remove unwanted contacts by region, tier, or account pattern.</p>
             </div>
             <div className="step">
               <div className="step-number">4</div>
-              <h4>Generate Reports</h4>
-              <p>Use cleaned data in Reporting and other admin tools.</p>
+              <h4>Use Everywhere</h4>
+              <p>Data is available in Reports, Group Analysis, and other tools.</p>
             </div>
           </div>
         </div>

@@ -1,42 +1,37 @@
 // Failed Course ID Tracker
 // This file tracks course IDs that consistently fail validation to optimize future API calls
+// 
+// IMPORTANT: This is a RUNTIME tracker only. The source of truth for known invalid courses
+// is invalidCourseReference.js - this file imports from there and adds runtime discoveries.
 
-// Known problematic course IDs organized by failure type
-// Updated: October 14, 2025 - PowerShell validation completed
+import { getInvalidCourseIds, addInvalidCourse, shouldSkipCourse } from './invalidCourseReference.js';
+
+// Initialize from the source of truth (invalidCourseReference.js)
+// Runtime discoveries will be added to these Sets during execution
 const FAILED_COURSES = {
   // Courses that return 404 when fetching from catalog (these are deleted/archived courses)
-  // These should be skipped by the proxy to improve performance
-  NOT_FOUND_404: new Set([
-    // PowerShell validation confirmed these are invalid courses - SKIP THESE
-    "87823010-6818-4e96-bf81-6034e1432a07", // Process Editor Certification for Process Manager
-    "61e143f6-7de3-4df1-94a2-0b2cf5369bec", // Certification: Nintex Document Generation Expert - Nintex DocGen for Salesforce  
-    "a280c323-bb62-4d31-b874-0b2b7268058b", // Nintex DocGen for Salesforce Basics Certification
-    "1fce19b1-574d-465e-91d3-c5c39b07dcf0", // Certification: Nintex Process Automation Expert - Nintex for Office 365
-    "25b7fbde-d95b-4059-bcd3-d403e393c3fc", // Certification: Nintex Process Automation Practitioner - Nintex for Office 365
-    
-    // Additional invalid course IDs discovered during validation
-    // Add new invalid course IDs here as they are discovered
-  ]),
+  // Pre-populated from invalidCourseReference.js - the single source of truth
+  NOT_FOUND_404: new Set(getInvalidCourseIds()),
   
   // Courses that return 403 when accessing main course endpoint  
   ACCESS_DENIED_403: new Set([
-    // These will be populated as we discover courses that consistently fail
+    // Runtime discoveries only - populated during execution
   ]),
   
   // Courses that return 403 when accessing properties API for NPCU data
   // PowerShell analysis shows these failures ONLY occur for invalid courses (404s)
   PROPERTIES_ACCESS_DENIED_403: new Set([
-    // Properties API failures are expected for courses that don't exist in catalog
-    // We'll track these but they indicate course deletion, not access issues
+    // Runtime discoveries only - populated during execution
   ]),
   
   // Courses that have other validation issues
   OTHER_ERRORS: new Set([
-    // These will be populated as we discover courses that consistently fail
+    // Runtime discoveries only - populated during execution
   ])
 };
 
 // Track when a course fails validation
+// For 404 errors, also updates the source of truth (invalidCourseReference.js) at runtime
 export const trackFailedCourse = (courseId, courseName, errorType, errorDetails = {}) => {
   const timestamp = new Date().toISOString();
   
@@ -44,6 +39,8 @@ export const trackFailedCourse = (courseId, courseName, errorType, errorDetails 
   switch (errorType) {
     case '404_NOT_FOUND':
       FAILED_COURSES.NOT_FOUND_404.add(courseId);
+      // Also update the source of truth for persistence
+      addInvalidCourse(courseId, courseName, `Runtime discovery: ${errorDetails.message || 'API returned 404'}`);
       break;
     case '403_ACCESS_DENIED':
       FAILED_COURSES.ACCESS_DENIED_403.add(courseId);
@@ -62,6 +59,14 @@ export const trackFailedCourse = (courseId, courseName, errorType, errorDetails 
     errorDetails,
     totalFailedCourses: getTotalFailedCoursesCount()
   });
+};
+
+// Check if a course should be skipped (uses source of truth + runtime discoveries)
+export const shouldSkipCourseCheck = (courseId, courseName = null) => {
+  // First check runtime discoveries
+  if (isKnownFailedCourse(courseId)) return true;
+  // Then check source of truth (includes pattern matching)
+  return shouldSkipCourse(courseId, courseName);
 };
 
 // Check if a course ID is known to fail

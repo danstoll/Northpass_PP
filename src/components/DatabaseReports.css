@@ -1,0 +1,398 @@
+/* Database Reports Styles */
+.database-reports {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.reports-header {
+  margin-bottom: 24px;
+}
+
+.reports-header h1 {
+  font-size: 24px;
+  color: #333;
+  margin-bottom: 8px;
+}
+
+.reports-header p {
+  color: #666;
+  font-size: 14px;
+}
+
+/* Report Tabs */
+.report-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  border-bottom: 2px solid #e0e0e0;
+  padding-bottom: 0;
+}
+
+.report-tabs button {
+  background: none;
+  border: none;
+  padding: 12px 20px;
+  font-size: 14px;
+  color: #666;
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  transition: all 0.2s;
+}
+
+.report-tabs button:hover {
+  color: #333;
+  background: #f5f5f5;
+}
+
+.report-tabs button.active {
+  color: #6B4C9A;
+  border-bottom-color: #6B4C9A;
+  font-weight: 600;
+}
+
+/* Filters */
+.report-filters {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 16px;
+  background: #f8f9fa;
+  border-radius: 8px;
+}
+
+.report-filters select,
+.report-filters input {
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  min-width: 150px;
+}
+
+.report-filters input {
+  min-width: 250px;
+}
+
+.report-filters .refresh-btn {
+  background: #6B4C9A;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.report-filters .refresh-btn:hover {
+  background: #5a3d87;
+}
+
+/* Error & Loading */
+.error-message {
+  background: #fee;
+  color: #c00;
+  padding: 12px 16px;
+  border-radius: 6px;
+  margin-bottom: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.error-message button {
+  background: none;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  color: #c00;
+}
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 40px;
+  color: #666;
+}
+
+.loading .spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #e0e0e0;
+  border-top-color: #6B4C9A;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Overview Report */
+.overview-report {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.overview-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 16px;
+}
+
+.total-card {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+}
+
+.total-card.highlight {
+  background: linear-gradient(135deg, #6B4C9A 0%, #8B6CB9 100%);
+  color: white;
+  border: none;
+}
+
+.total-card .value {
+  font-size: 32px;
+  font-weight: 700;
+  display: block;
+}
+
+.total-card .label {
+  font-size: 14px;
+  color: #666;
+  margin-top: 4px;
+}
+
+.total-card.highlight .label {
+  color: rgba(255,255,255,0.9);
+}
+
+.overview-sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+  gap: 20px;
+}
+
+.overview-sections .section {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.overview-sections h3 {
+  font-size: 16px;
+  color: #333;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #eee;
+}
+
+.overview-sections table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.overview-sections th,
+.overview-sections td {
+  padding: 8px;
+  text-align: left;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.overview-sections th {
+  font-weight: 600;
+  color: #666;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.coverage {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.coverage.good {
+  background: #d4edda;
+  color: #28a745;
+}
+
+.coverage.low {
+  background: #fff3cd;
+  color: #856404;
+}
+
+/* Table Reports */
+.table-report {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.report-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #f8f9fa;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.report-actions .count {
+  font-size: 14px;
+  color: #666;
+}
+
+.report-actions button {
+  background: #28a745;
+  color: white;
+  border: none;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.report-actions button:hover {
+  background: #218838;
+}
+
+.table-report table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table-report th,
+.table-report td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.table-report th {
+  background: #f8f9fa;
+  font-weight: 600;
+  color: #333;
+  position: sticky;
+  top: 0;
+}
+
+.table-report tbody tr:hover {
+  background: #f8f9fa;
+}
+
+.table-report tr.has-gap {
+  background: #fff8f0;
+}
+
+/* Tier Badges */
+.tier-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.tier-badge.premier {
+  background: #6B4C9A;
+  color: white;
+}
+
+.tier-badge.select {
+  background: #FF6B35;
+  color: white;
+}
+
+.tier-badge.registered {
+  background: #17a2b8;
+  color: white;
+}
+
+.tier-badge.certified {
+  background: #28a745;
+  color: white;
+}
+
+/* Status Badges */
+.status {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.status.in-lms {
+  background: #d4edda;
+  color: #28a745;
+}
+
+.status.not-in-lms {
+  background: #f8d7da;
+  color: #dc3545;
+}
+
+.status.compliant {
+  background: #d4edda;
+  color: #28a745;
+}
+
+.status.not-compliant {
+  background: #fff3cd;
+  color: #856404;
+}
+
+/* Values */
+.npcu {
+  font-weight: 600;
+  color: #6B4C9A;
+}
+
+.gap {
+  font-weight: 600;
+}
+
+.gap.negative {
+  color: #dc3545;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .report-tabs {
+    overflow-x: auto;
+  }
+  
+  .report-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .report-filters select,
+  .report-filters input {
+    width: 100%;
+    min-width: auto;
+  }
+  
+  .overview-sections {
+    grid-template-columns: 1fr;
+  }
+  
+  .table-report {
+    overflow-x: auto;
+  }
+}

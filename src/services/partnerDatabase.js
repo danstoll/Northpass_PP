@@ -282,6 +282,105 @@ export async function searchAccounts(searchTerm) {
 }
 
 /**
+ * Get all unique account owners
+ * @returns {Promise<Array>} Array of { ownerName, accountCount }
+ */
+export async function getAccountOwners() {
+  await initDatabase();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([CONTACTS_STORE], 'readonly');
+    const store = transaction.objectStore(CONTACTS_STORE);
+    const request = store.getAll();
+
+    request.onsuccess = () => {
+      const contacts = request.result;
+      const ownerMap = new Map();
+
+      contacts.forEach(contact => {
+        const owner = contact.accountOwner;
+        if (!owner) return;
+
+        const accountName = contact.accountName;
+        if (!ownerMap.has(owner)) {
+          ownerMap.set(owner, new Set());
+        }
+        if (accountName) {
+          ownerMap.get(owner).add(accountName);
+        }
+      });
+
+      const owners = Array.from(ownerMap.entries())
+        .map(([ownerName, accounts]) => ({
+          ownerName,
+          accountCount: accounts.size
+        }))
+        .sort((a, b) => a.ownerName.localeCompare(b.ownerName));
+
+      resolve(owners);
+    };
+
+    request.onerror = () => reject(request.error);
+  });
+}
+
+/**
+ * Get accounts by owner with full details
+ * @param {string} ownerName - Account owner name
+ * @returns {Promise<Array>} Array of account objects with contacts
+ */
+export async function getAccountsByOwner(ownerName) {
+  await initDatabase();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([CONTACTS_STORE], 'readonly');
+    const store = transaction.objectStore(CONTACTS_STORE);
+    const request = store.getAll();
+
+    request.onsuccess = () => {
+      const contacts = request.result;
+      const accountMap = new Map();
+
+      contacts.forEach(contact => {
+        // Only include contacts from this owner
+        if (contact.accountOwner !== ownerName) return;
+
+        const name = contact.accountName;
+        if (!name) return;
+
+        if (!accountMap.has(name)) {
+          accountMap.set(name, {
+            accountName: name,
+            partnerTier: contact.partnerTier,
+            accountRegion: contact.accountRegion,
+            accountStatus: contact.accountStatus,
+            accountOwner: contact.accountOwner,
+            contactCount: 0,
+            contacts: []
+          });
+        }
+
+        const account = accountMap.get(name);
+        account.contactCount++;
+        account.contacts.push({
+          email: contact.email,
+          firstName: contact.firstName,
+          lastName: contact.lastName,
+          title: contact.title,
+          contactStatus: contact.contactStatus
+        });
+      });
+
+      const accounts = Array.from(accountMap.values());
+      accounts.sort((a, b) => a.accountName.localeCompare(b.accountName));
+      resolve(accounts);
+    };
+
+    request.onerror = () => reject(request.error);
+  });
+}
+
+/**
  * Get contacts by tier
  * @param {string} tier - Partner tier
  * @returns {Promise<Array>}
@@ -1090,6 +1189,8 @@ export default {
   getContactsByAccount,
   getContactByEmail,
   searchAccounts,
+  getAccountOwners,
+  getAccountsByOwner,
   getContactsByTier,
   getContactsByRegion,
   getDatabaseStats,

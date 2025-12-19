@@ -1,8 +1,11 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-      // Invalid course IDs that return 404 - block these requests at proxy level
-      const INVALID_COURSE_IDS = new Set([
+// Northpass API key - must match production
+const NORTHPASS_API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+
+// Invalid course IDs that return 404 - block these requests at proxy level
+const INVALID_COURSE_IDS = new Set([
         // Original batch (PowerShell validated)
         '87823010-6818-4e96-bf81-6034e1432a07', // Process Editor Certification for Process Manager
         '61e143f6-7de3-4df1-94a2-0b2cf5369bec', // Certification: Nintex Document Generation Expert - Nintex DocGen for Salesforce
@@ -38,6 +41,8 @@ export default defineConfig({
           });
           
           proxy.on('proxyReq', (proxyReq, req, res) => {
+            // ALWAYS set the API key from server-side (like production does)
+            proxyReq.setHeader('X-Api-Key', NORTHPASS_API_KEY);
             console.log('Sending Request to the Target:', req.method, req.url);
             
             // Check if request is for a known invalid course

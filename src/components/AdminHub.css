@@ -5,6 +5,11 @@
   font-family: var(--font-family-base);
 }
 
+/* Layout with sidebar */
+.admin-hub.authenticated {
+  display: flex;
+}
+
 /* Login Container */
 .admin-hub .login-container {
   display: flex;
@@ -110,11 +115,13 @@
   color: var(--nintex-orange);
 }
 
-/* Authenticated Content */
+/* Authenticated Content - offset for sidebar */
 .admin-hub .admin-content {
+  flex: 1;
+  margin-left: 220px;
   padding: var(--space-5);
-  max-width: var(--container-wide);  /* 1280px - standard wide content */
-  margin: 0 auto;
+  min-height: 100vh;
+  box-sizing: border-box;
 }
 
 /* Responsive - Standard Breakpoints */
@@ -132,7 +139,7 @@
   }
 }
 
-/* Tablet: 768-991px */
+/* Tablet: 768-991px - Collapsed sidebar */
 @media (min-width: 768px) and (max-width: 991px) {
   .admin-hub .login-card {
     max-width: 450px;
@@ -140,11 +147,12 @@
   }
   
   .admin-hub .admin-content {
+    margin-left: 70px;
     padding: var(--space-4);
   }
 }
 
-/* Mobile: ≤767px */
+/* Mobile: ≤767px - No sidebar offset */
 @media (max-width: 767px) {
   .admin-hub .login-card {
     padding: var(--space-5);
@@ -155,6 +163,8 @@
   }
   
   .admin-hub .admin-content {
+    margin-left: 0;
     padding: var(--space-3);
+    padding-top: calc(var(--space-3) + 60px); /* Space for mobile toggle */
   }
 }

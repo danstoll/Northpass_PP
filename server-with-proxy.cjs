@@ -4,8 +4,28 @@ const https = require('https');
 const path = require('path');
 const fs = require('fs');
 
+// Import database modules
+let dbRoutes = null;
+let dbInitialized = false;
+
+// Try to initialize database (don't fail server if DB is unavailable)
+async function initDb() {
+  try {
+    dbRoutes = require('./server/dbRoutes.cjs');
+    await dbRoutes.initializeDatabase();
+    dbInitialized = true;
+    console.log('✅ MariaDB database connected and initialized');
+  } catch (error) {
+    console.warn('⚠️ MariaDB not available, running without database:', error.message);
+    dbInitialized = false;
+  }
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// JSON body parser for POST requests
+app.use(express.json({ limit: '50mb' }));
 
 // Disable Express default caching
 app.set('etag', false);
@@ -76,7 +96,7 @@ const northpassProxy = createProxyMiddleware({
 });
 
 // Handle CORS preflight requests for the API proxy
-app.options('/api/northpass/*', (req, res) => {
+app.options('/api/northpass{/*path}', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'X-Api-Key, Content-Type, Accept');
@@ -130,6 +150,15 @@ app.get('/api/northpass/v2/properties/courses/:courseId', async (req, res) => {
 
 // Use the proxy for other /api/northpass routes
 app.use('/api/northpass', northpassProxy);
+
+// Database API routes (if available)
+app.use('/api/db', (req, res, next) => {
+  if (dbRoutes && dbInitialized) {
+    dbRoutes.router(req, res, next);
+  } else {
+    res.status(503).json({ error: 'Database not available' });
+  }
+});
 
 // Serve static assets FIRST with proper caching (before security headers)
 // Hashed JS/CSS files are cache-safe for 1 year
@@ -205,7 +234,7 @@ app.get('/favicon.ico', (req, res) => {
 });
 
 // ALL other requests get index.html with no caching (SPA routing)
-app.get('*', (req, res) => {
+app.get('{/*splat}', (req, res) => {
   const indexPath = path.join(__dirname, 'dist', 'index.html');
   const html = fs.readFileSync(indexPath, 'utf8');
   res.setHeader('Content-Type', 'text/html; charset=UTF-8');
@@ -226,9 +255,15 @@ process.on('SIGINT', () => {
   process.exit(0);
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
   console.log(`🚀 Northpass Partner Portal with Proxy running on http://0.0.0.0:${PORT}`);
   console.log(`🌐 External access: http://20.125.24.28:${PORT}`);
   console.log(`📁 Serving from: ${__dirname}`);
   console.log(`🔗 API Proxy: /api/northpass -> https://api.northpass.com`);
+  
+  // Initialize database after server starts
+  await initDb();
+  if (dbInitialized) {
+    console.log(`💾 Database API: /api/db/*`);
+  }
 });

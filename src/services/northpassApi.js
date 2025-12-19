@@ -1721,26 +1721,49 @@ export const northpassApi = {
    */
   async addPeopleToGroup(groupId, userIds) {
     console.log(`➕ Adding ${userIds.length} users to group ${groupId}...`);
+    console.log(`   User IDs to add: ${userIds.slice(0, 5).join(', ')}${userIds.length > 5 ? '...' : ''}`);
+    
+    if (!groupId) {
+      console.error('❌ No groupId provided!');
+      return { success: false, error: 'No groupId provided' };
+    }
+    
+    if (!userIds || userIds.length === 0) {
+      console.error('❌ No userIds provided!');
+      return { success: false, error: 'No userIds provided' };
+    }
     
     try {
       // Build the data array for JSON:API format
       const peopleData = userIds.map(userId => ({
         type: 'people',
-        id: userId
+        id: String(userId) // Ensure ID is a string
       }));
+      
+      console.log(`   Payload: ${JSON.stringify({ data: peopleData.slice(0, 2) })}...`);
       
       const response = await rateLimitedApiCall(() => apiClient.post(
         `/v2/groups/${groupId}/relationships/people`,
         { data: peopleData }
       ));
       
+      // Log the full response for debugging
+      console.log(`✅ API Response Status: ${response.status}`);
+      console.log(`   Response Data:`, response.data);
       console.log(`✅ Successfully added ${userIds.length} users to group ${groupId}`);
       return { success: true, data: response.data, count: userIds.length };
       
     } catch (error) {
       console.error(`❌ Error adding users to group ${groupId}:`, error.response?.data || error.message);
       console.error('   Status:', error.response?.status);
-      return { success: false, error: error.response?.data || error.message };
+      console.error('   Full error:', error);
+      
+      // Check if it's a specific error we can handle
+      if (error.response?.status === 422) {
+        console.error('   422 Unprocessable Entity - Check if users already exist in group or IDs are invalid');
+      }
+      
+      return { success: false, error: error.response?.data || error.message, status: error.response?.status };
     }
   },
 
@@ -1910,13 +1933,17 @@ export const northpassApi = {
     }
     
     // Add to primary group using the relationships endpoint (handles all at once)
+    console.log(`📍 Calling addPeopleToGroup for primary group ${groupId} with ${userIds.length} users`);
     const primaryResult = await this.addPeopleToGroup(groupId, userIds);
+    console.log(`📍 Primary group result:`, primaryResult);
+    
     if (primaryResult.success) {
       results.primaryGroup.success = userIds.length;
       console.log(`✅ Added ${userIds.length} users to primary group`);
     } else {
       results.primaryGroup.failed = userIds.length;
-      console.error('❌ Failed to add users to primary group');
+      results.primaryGroup.error = primaryResult.error;
+      console.error('❌ Failed to add users to primary group:', primaryResult.error);
     }
     
     if (progressCallback) {
@@ -1926,14 +1953,19 @@ export const northpassApi = {
     // Add to All Partners group if needed
     if (addToAllPartners) {
       const allPartnersGroup = await this.findAllPartnersGroup();
+      console.log(`📍 All Partners group found:`, allPartnersGroup?.id);
+      
       if (allPartnersGroup) {
         const allPartnersResult = await this.addPeopleToGroup(allPartnersGroup.id, userIds);
+        console.log(`📍 All Partners result:`, allPartnersResult);
+        
         if (allPartnersResult.success) {
           results.allPartnersGroup.success = userIds.length;
           console.log(`✅ Added ${userIds.length} users to All Partners group`);
         } else {
           results.allPartnersGroup.failed = userIds.length;
-          console.error('❌ Failed to add users to All Partners group');
+          results.allPartnersGroup.error = allPartnersResult.error;
+          console.error('❌ Failed to add users to All Partners group:', allPartnersResult.error);
         }
       } else {
         console.warn('⚠️ All Partners group not found, skipping...');
@@ -2012,6 +2044,132 @@ export const northpassApi = {
       console.error('❌ Error updating group:', error.response?.data || error.message);
       throw error;
     }
+  },
+
+  /**
+   * Create a new person in the LMS
+   * @param {Object} userData - User data { email, firstName, lastName }
+   * @returns {Promise<Object>} Result with success, userId, alreadyExists flags
+   */
+  async createPerson({ email, firstName, lastName }) {
+    console.log(`➕ Creating person: ${email}`);
+    
+    if (!email) {
+      return { success: false, error: 'Email is required' };
+    }
+    
+    try {
+      const response = await rateLimitedApiCall(() => 
+        apiClient.post('/v2/people', {
+          data: {
+            type: 'people',
+            attributes: {
+              email: email.toLowerCase().trim(),
+              first_name: firstName || '',
+              last_name: lastName || ''
+            }
+          }
+        })
+      );
+      
+      const userId = response.data?.data?.id;
+      console.log(`✅ Person created successfully: ${userId}`);
+      return { 
+        success: true, 
+        userId: userId,
+        alreadyExists: false,
+        data: response.data?.data
+      };
+      
+    } catch (error) {
+      // Check if user already exists (422 with specific error)
+      if (error.response?.status === 422) {
+        const errorData = error.response?.data;
+        const errorMessage = JSON.stringify(errorData);
+        
+        // Try to find existing user
+        if (errorMessage.includes('email') && (errorMessage.includes('taken') || errorMessage.includes('exists') || errorMessage.includes('unique'))) {
+          console.log(`⚠️ Person already exists: ${email}, looking up...`);
+          
+          try {
+            const existingUser = await this.getCurrentUser(email);
+            if (existingUser) {
+              return {
+                success: true,
+                userId: existingUser.id,
+                alreadyExists: true,
+                data: existingUser
+              };
+            }
+          } catch (lookupError) {
+            console.error('Error looking up existing user:', lookupError);
+          }
+          
+          return { 
+            success: false, 
+            alreadyExists: true, 
+            error: 'User already exists but could not retrieve ID'
+          };
+        }
+      }
+      
+      console.error(`❌ Error creating person ${email}:`, error.response?.data || error.message);
+      return { 
+        success: false, 
+        error: error.response?.data?.errors?.[0]?.detail || error.message,
+        alreadyExists: false
+      };
+    }
+  },
+
+  /**
+   * Bulk invite people to the school
+   * @param {Array} users - Array of { email, firstName, lastName }
+   * @param {Function} onProgress - Progress callback
+   * @returns {Promise<Object>} Results summary
+   */
+  async bulkInvitePeople(users, onProgress = null) {
+    console.log(`📨 Bulk inviting ${users.length} people...`);
+    
+    const results = {
+      created: 0,
+      alreadyExisted: 0,
+      failed: 0,
+      errors: [],
+      userIds: []
+    };
+    
+    for (let i = 0; i < users.length; i++) {
+      const user = users[i];
+      
+      if (onProgress) {
+        onProgress(i + 1, users.length, `Processing ${user.email}...`);
+      }
+      
+      const result = await this.createPerson(user);
+      
+      if (result.success) {
+        if (result.alreadyExists) {
+          results.alreadyExisted++;
+        } else {
+          results.created++;
+        }
+        if (result.userId) {
+          results.userIds.push(result.userId);
+        }
+      } else {
+        results.failed++;
+        results.errors.push({ email: user.email, error: result.error });
+      }
+      
+      // Small delay between creations
+      if (i < users.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+    }
+    
+    console.log(`✅ Bulk invite complete: ${results.created} created, ${results.alreadyExisted} existed, ${results.failed} failed`);
+    return results;
   },
 
   /**

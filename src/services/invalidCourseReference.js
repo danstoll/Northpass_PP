@@ -1,7 +1,12 @@
-// Invalid Course Reference List
-// This file maintains a list of course IDs that return 404 from the Northpass API
-// These courses are deleted, archived, or otherwise inaccessible
-// Last updated: December 5, 2025 (Added archived/draft course analysis)
+// ============================================================================
+// INVALID COURSE REFERENCE - SINGLE SOURCE OF TRUTH
+// ============================================================================
+// This file is the authoritative reference for all invalid, archived, test,
+// and problematic courses. All other files (failedCourseTracker.js, etc.)
+// should IMPORT from this file rather than maintaining duplicate lists.
+//
+// Last updated: December 19, 2025
+// ============================================================================
 
 // ============================================================================
 // PATTERN-BASED EXCLUSIONS (Preferred method - catches future courses too)

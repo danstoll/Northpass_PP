@@ -3,9 +3,15 @@ import CustomerDashboard from './components/CustomerDashboard'
 import AdminHub from './components/AdminHub'
 import AdminPanel from './components/AdminPanel'
 import GroupAnalysis from './components/GroupAnalysis'
+import GroupAnalysisDB from './components/GroupAnalysisDB'
+import UserManagement from './components/UserManagement'
+import AccountOwnerReport from './components/AccountOwnerReport'
 import PartnerImport from './components/PartnerImport'
 import PartnerReporting from './components/PartnerReporting'
 import DataManagement from './components/DataManagement'
+import DataSync from './components/DataSync'
+import DatabaseReports from './components/DatabaseReports'
+import Maintenance from './components/Maintenance'
 import { extractUrlParams } from './utils/urlEncoder'
 import { extractCustomerParams } from './utils/customerUrlEncoder'
 import './App.css'
@@ -16,8 +22,14 @@ function App() {
   const isAdminRoute = currentPath.startsWith('/admin');
   const isReportingRoute = currentPath === '/admin/reports' || currentPath === '/admin/reports/';
   const isGroupAnalysisRoute = currentPath === '/admin/groups' || currentPath === '/admin/groups/';
+  const isGroupAnalysisDBRoute = currentPath === '/admin/groupsdb' || currentPath === '/admin/groupsdb/';
+  const isUserManagementRoute = currentPath === '/admin/users' || currentPath === '/admin/users/';
+  const isAccountOwnerRoute = currentPath === '/admin/owners' || currentPath === '/admin/owners/';
   const isPartnerImportRoute = currentPath === '/admin/import' || currentPath === '/admin/import/';
   const isDataRoute = currentPath === '/admin/data' || currentPath === '/admin/data/';
+  const isSyncRoute = currentPath === '/admin/sync' || currentPath === '/admin/sync/';
+  const isDbReportsRoute = currentPath === '/admin/dbreports' || currentPath === '/admin/dbreports/';
+  const isMaintenanceRoute = currentPath === '/admin/maintenance' || currentPath === '/admin/maintenance/';
   const isCustomerRoute = currentPath === '/customer' || currentPath === '/customer/';
   
   // Extract parameters based on route type
@@ -50,8 +62,12 @@ function App() {
       isAdminRoute,
       isReportingRoute,
       isGroupAnalysisRoute,
+      isUserManagementRoute,
+      isAccountOwnerRoute,
       isPartnerImportRoute,
       isDataRoute,
+      isSyncRoute,
+      isDbReportsRoute,
       isCustomerRoute,
       routeParams 
     });
@@ -63,6 +79,28 @@ function App() {
       <div className="app">
         <AdminHub currentPage="data">
           <DataManagement />
+        </AdminHub>
+      </div>
+    );
+  }
+
+  // Show database sync for /admin/sync route
+  if (isSyncRoute) {
+    return (
+      <div className="app">
+        <AdminHub currentPage="sync">
+          <DataSync />
+        </AdminHub>
+      </div>
+    );
+  }
+
+  // Show database reports for /admin/dbreports route
+  if (isDbReportsRoute) {
+    return (
+      <div className="app">
+        <AdminHub currentPage="dbreports">
+          <DatabaseReports />
         </AdminHub>
       </div>
     );
@@ -96,6 +134,50 @@ function App() {
       <div className="app">
         <AdminHub currentPage="groups">
           <GroupAnalysis />
+        </AdminHub>
+      </div>
+    );
+  }
+
+  // Show group analysis from DB for /admin/groupsdb route
+  if (isGroupAnalysisDBRoute) {
+    return (
+      <div className="app">
+        <AdminHub currentPage="groupsdb">
+          <GroupAnalysisDB />
+        </AdminHub>
+      </div>
+    );
+  }
+
+  // Show maintenance for /admin/maintenance route
+  if (isMaintenanceRoute) {
+    return (
+      <div className="app">
+        <AdminHub currentPage="maintenance">
+          <Maintenance />
+        </AdminHub>
+      </div>
+    );
+  }
+
+  // Show user management for /admin/users route
+  if (isUserManagementRoute) {
+    return (
+      <div className="app">
+        <AdminHub currentPage="users">
+          <UserManagement />
+        </AdminHub>
+      </div>
+    );
+  }
+
+  // Show account owner report for /admin/owners route
+  if (isAccountOwnerRoute) {
+    return (
+      <div className="app">
+        <AdminHub currentPage="owners">
+          <AccountOwnerReport />
         </AdminHub>
       </div>
     );

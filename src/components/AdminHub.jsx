@@ -70,8 +70,11 @@ const AdminHub = ({ children, currentPage }) => {
               <h3>Available Tools:</h3>
               <ul>
                 <li>💾 <strong>Data Management</strong> - Import partner contact data from Excel</li>
-                <li>📊 <strong>Reporting</strong> - Analytics by Region, Tier & Certification gaps</li>
+                <li>� <strong>DB Sync</strong> - Sync LMS data to MariaDB database</li>
+                <li>�📊 <strong>Reporting</strong> - Analytics by Region, Tier & Certification gaps</li>
+                <li>👔 <strong>Owner Report</strong> - View accounts by owner with dashboard links</li>
                 <li>👥 <strong>Group Analysis</strong> - Find missing users by email domain</li>
+                <li>👤 <strong>User Management</strong> - Add missing CRM contacts to LMS</li>
                 <li>📤 <strong>Partner Import</strong> - Cross-reference XLSX with Northpass groups</li>
                 <li>🔗 <strong>URL Generator</strong> - Bulk generate secure partner URLs</li>
               </ul>
@@ -84,7 +87,7 @@ const AdminHub = ({ children, currentPage }) => {
 
   // Authenticated view with navigation and children
   return (
-    <div className="admin-hub">
+    <div className="admin-hub authenticated">
       <AdminNav currentPage={currentPage} onLogout={handleLogout} />
       <div className="admin-content">
         {children}
