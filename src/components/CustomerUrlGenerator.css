@@ -1,4 +1,4 @@
-/* Customer URL Generator Component Styles */
+﻿/* Customer URL Generator Component Styles */
 .customer-url-generator {
   max-width: 800px;
   margin: 0 auto;
@@ -307,7 +307,7 @@
   }
 }
 
-/* Mobile: ≤767px */
+/* Mobile: â‰¤767px */
 @media (max-width: 767px) {
   .customer-url-generator {
     padding: 1.5rem;

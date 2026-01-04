@@ -68,6 +68,7 @@ function fetchFromNorthpass(apiPath) {
 const northpassProxy = createProxyMiddleware({
   target: 'https://api.northpass.com',
   changeOrigin: true,
+  secure: true,
   pathRewrite: {
     '^/api/northpass': '', // Remove /api/northpass prefix
   },
@@ -83,9 +84,20 @@ const northpassProxy = createProxyMiddleware({
     // ALWAYS set the API key from server-side - don't trust browser header
     proxyReq.setHeader('X-Api-Key', NORTHPASS_API_KEY);
     
+    // Handle POST/PUT/PATCH body data
+    if (req.body && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH')) {
+      const bodyData = JSON.stringify(req.body);
+      proxyReq.setHeader('Content-Type', 'application/json');
+      proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
+      proxyReq.write(bodyData);
+    }
+    
     // Log what we're sending
     console.log(`🔄 Proxying: ${req.method} ${req.url} -> ${proxyReq.path}`);
     console.log(`   Outgoing headers: X-Api-Key=${NORTHPASS_API_KEY.substring(0, 8)}...`);
+    if (req.body) {
+      console.log(`   Body: ${JSON.stringify(req.body)}`);
+    }
   },
   onProxyRes: (proxyRes, req, res) => {
     // Add CORS headers for browser requests
@@ -233,8 +245,20 @@ app.get('/favicon.ico', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'favicon.ico'));
 });
 
+// Serve index.html for root path
+app.get('/', (req, res) => {
+  const indexPath = path.join(__dirname, 'dist', 'index.html');
+  const html = fs.readFileSync(indexPath, 'utf8');
+  res.setHeader('Content-Type', 'text/html; charset=UTF-8');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.send(html);
+});
+
 // ALL other requests get index.html with no caching (SPA routing)
-app.get('{/*splat}', (req, res) => {
+// Use middleware instead of route pattern for catch-all
+app.use((req, res) => {
   const indexPath = path.join(__dirname, 'dist', 'index.html');
   const html = fs.readFileSync(indexPath, 'utf8');
   res.setHeader('Content-Type', 'text/html; charset=UTF-8');

@@ -5,6 +5,17 @@
 
 const { query, transaction } = require('./connection.cjs');
 const XLSX = require('xlsx');
+const progress = require('./importProgress.cjs');
+
+/**
+ * Escape a value for SQL (returns NULL for null/undefined, quoted string otherwise)
+ */
+function escape(value) {
+  if (value === null || value === undefined) return 'NULL';
+  // Escape single quotes and backslashes
+  const escaped = String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return `'${escaped}'`;
+}
 
 /**
  * Parse Excel file buffer and extract contacts
@@ -12,79 +23,249 @@ const XLSX = require('xlsx');
  * @returns {Array} Array of normalized contact objects
  */
 function parseExcelBuffer(fileBuffer) {
-  const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
+  // Ensure we have a proper Buffer
+  let buffer = fileBuffer;
+  if (!Buffer.isBuffer(fileBuffer)) {
+    console.log(`📦 Converting to Buffer from ${fileBuffer?.constructor?.name || typeof fileBuffer}`);
+    if (fileBuffer instanceof Uint8Array || fileBuffer instanceof ArrayBuffer) {
+      buffer = Buffer.from(fileBuffer);
+    } else if (typeof fileBuffer === 'string') {
+      buffer = Buffer.from(fileBuffer, 'base64');
+    } else {
+      buffer = Buffer.from(fileBuffer);
+    }
+  }
+  
+  console.log(`📦 Buffer size: ${buffer.length} bytes`);
+  
+  // Try different parsing options for various Excel formats
+  let workbook;
+  try {
+    // Standard xlsx parsing
+    workbook = XLSX.read(buffer, { type: 'buffer' });
+  } catch (e1) {
+    console.log(`⚠️ Standard parsing failed: ${e1.message}, trying alternatives...`);
+    try {
+      // Try as array buffer
+      workbook = XLSX.read(buffer, { type: 'array' });
+    } catch (e2) {
+      // Try as base64
+      workbook = XLSX.read(buffer.toString('base64'), { type: 'base64' });
+    }
+  }
+  
   const sheetName = workbook.SheetNames[0];
+  console.log(`📑 Sheet name: "${sheetName}", Total sheets: ${workbook.SheetNames.length}`);
+  console.log(`📑 All sheet names: ${workbook.SheetNames.join(', ')}`);
+  
   const worksheet = workbook.Sheets[sheetName];
-  const rawData = XLSX.utils.sheet_to_json(worksheet);
+  
+  // Debug: show worksheet range
+  const range = worksheet['!ref'];
+  console.log(`📐 Worksheet range: ${range || 'empty'}`);
+  
+  // Try standard parsing first
+  let rawData = XLSX.utils.sheet_to_json(worksheet);
+  
+  // If no data, try with different options
+  if (rawData.length === 0 && range) {
+    console.log('⚠️ No data with default parsing, trying with defval option...');
+    rawData = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+  }
+  
+  // If still no data, try raw mode
+  if (rawData.length === 0 && range) {
+    console.log('⚠️ Still no data, trying raw mode...');
+    rawData = XLSX.utils.sheet_to_json(worksheet, { raw: true, defval: '' });
+  }
+  
+  // If still no data, show first few cells for debugging
+  if (rawData.length === 0) {
+    const cells = Object.keys(worksheet).filter(k => !k.startsWith('!')).slice(0, 20);
+    console.log(`📝 First cells in sheet: ${cells.join(', ')}`);
+    cells.forEach(cell => console.log(`   ${cell}: "${worksheet[cell]?.v}" (type: ${worksheet[cell]?.t})`));
+    
+    // Show buffer start for debugging
+    if (buffer.length > 0) {
+      console.log(`📦 Buffer start (hex): ${buffer.slice(0, 50).toString('hex')}`);
+    }
+  }
   
   console.log(`📊 Parsed ${rawData.length} rows from Excel`);
   
+  // Log the column headers found for debugging
+  if (rawData.length > 0) {
+    const foundColumns = Object.keys(rawData[0]);
+    console.log(`📋 Excel columns found: ${foundColumns.join(', ')}`);
+    
+    // Check for common column name variations
+    const hasEmail = foundColumns.some(c => c.toLowerCase().includes('email') && !c.toLowerCase().includes('owner'));
+    const hasAccount = foundColumns.some(c => c.toLowerCase().includes('account'));
+    console.log(`📧 Has Email column: ${hasEmail}, Has Account column: ${hasAccount}`);
+  }
+  
   // Normalize column names and data
-  return rawData.map(row => ({
-    email: (row['Email'] || row.email || '').toLowerCase().trim(),
-    firstName: row['First Name'] || row.firstName || '',
-    lastName: row['Last Name'] || row.lastName || '',
-    title: row['Title'] || row.title || '',
-    phone: row['Phone'] || row.phone || '',
-    accountName: row['Account Name'] || row.accountName || '',
-    accountStatus: row['Account Status'] || row.accountStatus || '',
-    accountRegion: row['Account Region'] || row.accountRegion || '',
-    accountOwner: row['Account Owner'] || row.accountOwner || '',
-    partnerTier: row['Partner Tier'] || row.partnerTier || '',
-    partnerType: row['Partner Type'] || row.partnerType || '',
-    contactStatus: row['Contact Status'] || row.contactStatus || '',
-    salesforceId: row['Account ID'] || row['Salesforce ID'] || row.salesforceId || '',
-    website: row['Website'] || row.website || '',
-    mailingCity: row['Mailing City'] || row.mailingCity || '',
-    mailingCountry: row['Mailing Country'] || row.mailingCountry || ''
-  })).filter(c => c.email); // Only include rows with email
+  // Helper to find column value with flexible matching
+  const getColumn = (row, ...names) => {
+    // Try exact matches first
+    for (const name of names) {
+      if (row[name] !== undefined) return row[name];
+    }
+    // Try case-insensitive matching
+    const keys = Object.keys(row);
+    for (const name of names) {
+      const match = keys.find(k => k.toLowerCase() === name.toLowerCase());
+      if (match && row[match] !== undefined) return row[match];
+    }
+    // Try partial matching for common variations
+    for (const name of names) {
+      const match = keys.find(k => k.toLowerCase().replace(/[^a-z]/g, '').includes(name.toLowerCase().replace(/[^a-z]/g, '')));
+      if (match && row[match] !== undefined) return row[match];
+    }
+    return '';
+  };
+  
+  return rawData.map(row => {
+    // Parse last modified date - handle Excel date formats
+    let lastModified = getColumn(row, 'Last Modified', 'Last Modified Date', 'lastModified', 'Modified Date');
+    if (lastModified) {
+      // Excel might return a serial date number or a string
+      if (typeof lastModified === 'number') {
+        // Excel serial date: days since 1900-01-01 (with a bug for 1900 leap year)
+        const excelEpoch = new Date(1899, 11, 30); // Dec 30, 1899
+        lastModified = new Date(excelEpoch.getTime() + lastModified * 86400000);
+      } else if (typeof lastModified === 'string') {
+        lastModified = new Date(lastModified);
+      }
+      // Validate the date
+      if (isNaN(lastModified.getTime())) {
+        lastModified = null;
+      }
+    }
+    
+    // Get email - try multiple column name variations
+    const email = (getColumn(row, 'Email', 'E-mail', 'email', 'Email Address', 'Contact Email', 'Contact: Email') || '').toLowerCase().trim();
+    
+    return {
+      email,
+      firstName: getColumn(row, 'First Name', 'FirstName', 'firstName', 'Contact: First Name'),
+      lastName: getColumn(row, 'Last Name', 'LastName', 'lastName', 'Contact: Last Name'),
+      title: getColumn(row, 'Title', 'Job Title', 'title'),
+      phone: getColumn(row, 'Phone', 'Mobile', 'phone', 'Phone Number'),
+      accountName: getColumn(row, 'Account Name', 'Account', 'accountName', 'Company', 'Company Name', 'Partner Name'),
+      accountStatus: getColumn(row, 'Account Status', 'Status', 'accountStatus', 'Partner Status'),
+      accountRegion: getColumn(row, 'Account Region', 'Region', 'accountRegion'),
+      accountOwner: getColumn(row, 'Account Owner', 'Owner', 'accountOwner', 'Owner Name'),
+      ownerEmail: (getColumn(row, 'Owner Email', 'Account Owner Email', 'ownerEmail', 'Owner: Email', 'Account Owner: Email') || '').toLowerCase().trim(),
+      partnerTier: getColumn(row, 'Partner Tier', 'Tier', 'partnerTier'),
+      partnerType: getColumn(row, 'Partner Type', 'Type', 'partnerType'),
+      contactStatus: getColumn(row, 'Contact Status', 'contactStatus'),
+      salesforceId: getColumn(row, 'Account ID', 'Salesforce ID', 'salesforceId', 'Account: ID'),
+      website: getColumn(row, 'Website', 'website', 'Web Site'),
+      mailingCity: getColumn(row, 'Mailing City', 'mailingCity', 'City'),
+      mailingCountry: getColumn(row, 'Mailing Country', 'mailingCountry', 'Country'),
+      lastModified: lastModified
+    };
+  }).filter(c => c.email); // Only include rows with email
 }
 
 /**
  * Import contacts and create/update partners
+ * Smart sync: preserves LMS links, updates existing records, removes stale data
  * @param {Buffer} fileBuffer - The Excel file buffer
  * @param {string} fileName - Original file name for logging
  * @param {Object} options - Import options
  * @returns {Promise<Object>} Import results
  */
 async function importContacts(fileBuffer, fileName, options = {}) {
-  const { clearExisting = true } = options;
+  const { clearExisting = false } = options; // Default to false - smart sync
   const startTime = Date.now();
   
   console.log(`📥 Starting import from ${fileName}...`);
+  progress.startImport(0);
+  progress.updateProgress('parsing', 'Parsing Excel file...', 5);
   
   const contacts = parseExcelBuffer(fileBuffer);
   console.log(`📋 Found ${contacts.length} contacts with valid emails`);
+  progress.updateProgress('parsing', `Parsed ${contacts.length} contacts from Excel`, 10, contacts.length);
+  
+  // Early exit if no contacts found - likely column name mismatch
+  if (contacts.length === 0) {
+    console.log('⚠️ No contacts found in file. Check column names match expected format.');
+    progress.updateProgress('error', 'No contacts found - check column names', 100, 0);
+    return {
+      success: false,
+      message: 'No contacts found in Excel file. Expected columns: "Email", "Account Name", "First Name", "Last Name". Check that column headers match exactly.',
+      stats: {
+        totalRows: 0,
+        partnersCreated: 0,
+        partnersUpdated: 0,
+        contactsCreated: 0,
+        contactsUpdated: 0,
+        errors: ['No data rows found - column names may not match expected format']
+      },
+      duration: Date.now() - startTime
+    };
+  }
   
   const stats = {
     totalRows: contacts.length,
     partnersCreated: 0,
     partnersUpdated: 0,
+    partnersRemoved: 0,
     contactsCreated: 0,
     contactsUpdated: 0,
+    contactsRemoved: 0,
     contactsSkipped: 0,
+    contactsUnchanged: 0, // Skipped due to same lastModified date
+    lmsLinksPreserved: 0,
     errors: []
   };
 
   try {
-    // Optionally clear existing data
+    // Get existing data to preserve LMS links
+    progress.updateProgress('preparing', 'Loading existing LMS links...', 15);
+    const existingContacts = await query('SELECT id, email, lms_user_id FROM contacts');
+    const emailToLmsUser = new Map();
+    existingContacts.forEach(c => {
+      if (c.lms_user_id) {
+        emailToLmsUser.set(c.email.toLowerCase(), c.lms_user_id);
+      }
+    });
+    console.log(`🔗 Found ${emailToLmsUser.size} existing LMS links to preserve`);
+
+    // Get existing group links to preserve
+    progress.updateProgress('preparing', 'Loading existing group links...', 18);
+    const existingGroupLinks = await query('SELECT id, name, partner_id FROM lms_groups WHERE partner_id IS NOT NULL');
+    const groupPartnerMap = new Map();
+    existingGroupLinks.forEach(g => groupPartnerMap.set(g.partner_id, g.id));
+    console.log(`🔗 Found ${existingGroupLinks.length} group-partner links to preserve`);
+
+    // Only clear if explicitly requested (not recommended)
     if (clearExisting) {
-      console.log('🧹 Clearing existing data...');
+      console.log('⚠️  Warning: Clear existing enabled - LMS links will be lost!');
+      progress.updateProgress('clearing', 'Clearing existing data...', 20);
       await query('DELETE FROM contacts');
       await query('DELETE FROM partners');
-      console.log('✅ Existing data cleared');
+      console.log('🧹 Existing data cleared');
     }
 
     // Group contacts by account
+    progress.updateProgress('grouping', 'Grouping contacts by partner...', 22);
     const accountMap = new Map();
+    const allEmails = new Set();
+    
     for (const contact of contacts) {
       const accountName = contact.accountName || 'Unknown';
+      allEmails.add(contact.email.toLowerCase());
+      
       if (!accountMap.has(accountName)) {
         accountMap.set(accountName, {
           accountName,
           partnerTier: contact.partnerTier,
           accountRegion: contact.accountRegion,
           accountOwner: contact.accountOwner,
+          ownerEmail: contact.ownerEmail,
           partnerType: contact.partnerType,
           salesforceId: contact.salesforceId,
           website: contact.website,
@@ -95,36 +276,68 @@ async function importContacts(fileBuffer, fileName, options = {}) {
     }
 
     console.log(`📁 Found ${accountMap.size} unique partner accounts`);
+    const allAccountNames = new Set(accountMap.keys());
 
-    // Insert partners first
+    // Step 1: Upsert partners (insert or update)
+    const partnerIdMap = new Map(); // accountName -> partnerId
+    const totalPartners = accountMap.size;
+    let partnerIndex = 0;
+    
     for (const [accountName, partner] of accountMap) {
+      partnerIndex++;
+      if (partnerIndex % 50 === 0 || partnerIndex === totalPartners) {
+        const pct = 25 + Math.round((partnerIndex / totalPartners) * 20);
+        progress.updateProgress('partners', `Processing partners... ${partnerIndex}/${totalPartners}`, pct, partnerIndex);
+      }
+      
       try {
-        const result = await query(
-          `INSERT INTO partners (account_name, partner_tier, account_region, account_owner, partner_type, salesforce_id, website)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE
-             partner_tier = VALUES(partner_tier),
-             account_region = VALUES(account_region),
-             account_owner = VALUES(account_owner),
-             partner_type = VALUES(partner_type),
-             salesforce_id = VALUES(salesforce_id),
-             website = VALUES(website),
-             updated_at = NOW()`,
-          [
-            accountName,
-            partner.partnerTier || null,
-            partner.accountRegion || null,
-            partner.accountOwner || null,
-            partner.partnerType || null,
-            partner.salesforceId || null,
-            partner.website || null
-          ]
-        );
+        // Check if partner exists
+        const existing = await query('SELECT id FROM partners WHERE account_name = ?', [accountName]);
         
-        if (result.affectedRows === 1) {
-          stats.partnersCreated++;
-        } else {
+        if (existing.length > 0) {
+          // Update existing partner
+          await query(
+            `UPDATE partners SET
+               partner_tier = ?,
+               account_region = ?,
+               account_owner = ?,
+               owner_email = ?,
+               partner_type = ?,
+               salesforce_id = ?,
+               website = ?,
+               updated_at = NOW()
+             WHERE id = ?`,
+            [
+              partner.partnerTier || null,
+              partner.accountRegion || null,
+              partner.accountOwner || null,
+              partner.ownerEmail || null,
+              partner.partnerType || null,
+              partner.salesforceId || null,
+              partner.website || null,
+              existing[0].id
+            ]
+          );
+          partnerIdMap.set(accountName, existing[0].id);
           stats.partnersUpdated++;
+        } else {
+          // Insert new partner
+          const result = await query(
+            `INSERT INTO partners (account_name, partner_tier, account_region, account_owner, owner_email, partner_type, salesforce_id, website)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              accountName,
+              partner.partnerTier || null,
+              partner.accountRegion || null,
+              partner.accountOwner || null,
+              partner.ownerEmail || null,
+              partner.partnerType || null,
+              partner.salesforceId || null,
+              partner.website || null
+            ]
+          );
+          partnerIdMap.set(accountName, result.insertId);
+          stats.partnersCreated++;
         }
       } catch (err) {
         stats.errors.push({ type: 'partner', name: accountName, error: err.message });
@@ -133,52 +346,137 @@ async function importContacts(fileBuffer, fileName, options = {}) {
 
     console.log(`✅ Partners: ${stats.partnersCreated} created, ${stats.partnersUpdated} updated`);
 
-    // Now insert contacts with partner_id lookup
-    for (const contact of contacts) {
-      try {
-        // Get partner_id
-        const partnerRows = await query(
-          'SELECT id FROM partners WHERE account_name = ?',
-          [contact.accountName || 'Unknown']
-        );
-        const partnerId = partnerRows[0]?.id || null;
-
-        const result = await query(
-          `INSERT INTO contacts (partner_id, email, first_name, last_name, title, phone, is_primary)
-           VALUES (?, ?, ?, ?, ?, ?, FALSE)
-           ON DUPLICATE KEY UPDATE
-             partner_id = VALUES(partner_id),
-             first_name = VALUES(first_name),
-             last_name = VALUES(last_name),
-             title = VALUES(title),
-             phone = VALUES(phone),
-             updated_at = NOW()`,
-          [
-            partnerId,
-            contact.email,
-            contact.firstName || null,
-            contact.lastName || null,
-            contact.title || null,
-            contact.phone || null
-          ]
-        );
-
-        if (result.affectedRows === 1) {
-          stats.contactsCreated++;
-        } else if (result.affectedRows === 2) {
-          stats.contactsUpdated++;
+    // Step 2: Batch upsert contacts (much faster than one-by-one)
+    console.log(`📊 Processing ${contacts.length} contacts in batches...`);
+    progress.updateProgress('contacts', `Processing ${contacts.length} contacts...`, 45, 0);
+    
+    const BATCH_SIZE = 100; // Smaller batches for reliability
+    const totalContacts = contacts.length;
+    let processedContacts = 0;
+    
+    // First, get all existing contacts in one query (include crm_last_modified for skip logic)
+    const existingContactsResult = await query('SELECT id, email, lms_user_id, crm_last_modified FROM contacts');
+    const existingContactsMap = new Map();
+    existingContactsResult.forEach(c => {
+      existingContactsMap.set(c.email.toLowerCase(), { 
+        id: c.id, 
+        lms_user_id: c.lms_user_id,
+        crm_last_modified: c.crm_last_modified 
+      });
+    });
+    console.log(`📋 Found ${existingContactsMap.size} existing contacts in database`);
+    
+    // Process in batches - use simple individual queries for reliability
+    for (let i = 0; i < contacts.length; i += BATCH_SIZE) {
+      const batch = contacts.slice(i, Math.min(i + BATCH_SIZE, contacts.length));
+      
+      for (const contact of batch) {
+        const email = contact.email.toLowerCase();
+        const partnerId = partnerIdMap.get(contact.accountName || 'Unknown') || null;
+        const existing = existingContactsMap.get(email);
+        const newLastModified = contact.lastModified || null;
+        
+        try {
+          if (existing) {
+            // Skip if record hasn't changed since last import (incremental import optimization)
+            if (newLastModified && existing.crm_last_modified) {
+              const newDate = new Date(newLastModified);
+              const existingDate = new Date(existing.crm_last_modified);
+              if (newDate <= existingDate) {
+                stats.contactsUnchanged++;
+                continue; // Skip unchanged record
+              }
+            }
+            
+            // Track preserved LMS links
+            if (existing.lms_user_id) {
+              stats.lmsLinksPreserved++;
+            }
+            // Update existing contact
+            await query(
+              `UPDATE contacts SET partner_id = ?, first_name = ?, last_name = ?, title = ?, phone = ?, crm_last_modified = ?, updated_at = NOW() WHERE id = ?`,
+              [partnerId, contact.firstName || null, contact.lastName || null, contact.title || null, contact.phone || null, newLastModified, existing.id]
+            );
+            stats.contactsUpdated++;
+          } else {
+            // Insert new contact
+            const preservedLmsUserId = emailToLmsUser.get(email) || null;
+            if (preservedLmsUserId) {
+              stats.lmsLinksPreserved++;
+            }
+            await query(
+              `INSERT INTO contacts (partner_id, email, first_name, last_name, title, phone, lms_user_id, crm_last_modified, is_primary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, FALSE)`,
+              [partnerId, email, contact.firstName || null, contact.lastName || null, contact.title || null, contact.phone || null, preservedLmsUserId, newLastModified]
+            );
+            stats.contactsCreated++;
+            // Add to map so we don't try to insert again if duplicate in file
+            existingContactsMap.set(email, { id: -1, lms_user_id: preservedLmsUserId, crm_last_modified: newLastModified });
+          }
+        } catch (err) {
+          stats.contactsSkipped++;
+          if (stats.errors.length < 5) {
+            stats.errors.push({ type: 'contact', email, error: err.message });
+          }
         }
-      } catch (err) {
-        stats.contactsSkipped++;
-        if (stats.errors.length < 10) {
-          stats.errors.push({ type: 'contact', email: contact.email, error: err.message });
-        }
+      }
+      
+      processedContacts += batch.length;
+      const pct = 45 + Math.round((processedContacts / totalContacts) * 40);
+      progress.updateProgress('contacts', `Processing contacts... ${processedContacts}/${totalContacts}`, pct, processedContacts);
+      
+      // Small delay to yield event loop and allow progress polling
+      await new Promise(r => setTimeout(r, 1));
+      
+      if (processedContacts % 5000 === 0) {
+        console.log(`  📊 Processed ${processedContacts}/${totalContacts} contacts...`);
       }
     }
 
-    console.log(`✅ Contacts: ${stats.contactsCreated} created, ${stats.contactsUpdated} updated, ${stats.contactsSkipped} skipped`);
+    console.log(`✅ Contacts: ${stats.contactsCreated} created, ${stats.contactsUpdated} updated, ${stats.contactsUnchanged} unchanged (skipped), ${stats.lmsLinksPreserved} LMS links preserved`);
+
+    // Step 3: Remove contacts no longer in CRM (but preserve their LMS user record)
+    // Only run if we actually imported some contacts (otherwise we'd delete everything!)
+    if (allEmails.size > 0) {
+      progress.updateProgress('cleanup', 'Removing stale contacts...', 88);
+      const contactsToRemove = await query(
+        `SELECT id, email, lms_user_id FROM contacts WHERE email NOT IN (${Array(allEmails.size).fill('?').join(',')})`,
+        [...allEmails]
+      );
+      
+      if (contactsToRemove.length > 0) {
+        const idsToRemove = contactsToRemove.map(c => c.id);
+        await query(`DELETE FROM contacts WHERE id IN (${idsToRemove.map(() => '?').join(',')})`, idsToRemove);
+        stats.contactsRemoved = contactsToRemove.length;
+        console.log(`🧹 Removed ${stats.contactsRemoved} contacts no longer in CRM`);
+      }
+    } else {
+      console.log('⚠️ No contacts parsed from file - skipping stale contact removal');
+    }
+
+    // Step 4: Remove partners no longer in CRM (preserving group links by nulling partner_id)
+    // Only run if we actually imported some partners
+    if (allAccountNames.size > 0) {
+      progress.updateProgress('cleanup', 'Removing stale partners...', 92);
+      const partnersToCheck = await query('SELECT id, account_name FROM partners');
+      const partnersToRemove = partnersToCheck.filter(p => !allAccountNames.has(p.account_name));
+      
+      if (partnersToRemove.length > 0) {
+        // Null out partner_id in lms_groups before deleting (preserve group, just unlink)
+        for (const partner of partnersToRemove) {
+          await query('UPDATE lms_groups SET partner_id = NULL WHERE partner_id = ?', [partner.id]);
+        }
+        
+        const idsToRemove = partnersToRemove.map(p => p.id);
+        await query(`DELETE FROM partners WHERE id IN (${idsToRemove.map(() => '?').join(',')})`, idsToRemove);
+        stats.partnersRemoved = partnersToRemove.length;
+        console.log(`🧹 Removed ${stats.partnersRemoved} partners no longer in CRM`);
+      }
+    } else {
+      console.log('⚠️ No partners parsed from file - skipping stale partner removal');
+    }
 
     // Log the import
+    progress.updateProgress('finalizing', 'Saving import log...', 96);
     await query(
       `INSERT INTO sync_logs (sync_type, status, started_at, completed_at, records_processed, records_created, details)
        VALUES ('excel_import', 'completed', ?, NOW(), ?, ?, ?)`,
@@ -192,6 +490,7 @@ async function importContacts(fileBuffer, fileName, options = {}) {
 
     const duration = Math.round((Date.now() - startTime) / 1000);
     console.log(`✅ Import completed in ${duration}s`);
+    progress.completeImport(true);
 
     return {
       success: true,
@@ -200,6 +499,7 @@ async function importContacts(fileBuffer, fileName, options = {}) {
     };
   } catch (error) {
     console.error('❌ Import failed:', error);
+    progress.completeImport(false, error.message);
     
     await query(
       `INSERT INTO sync_logs (sync_type, status, started_at, completed_at, error_message, details)
@@ -479,6 +779,13 @@ async function clearAllData() {
   return { success: true };
 }
 
+/**
+ * Get current import progress
+ */
+function getImportProgress() {
+  return progress.getProgress();
+}
+
 module.exports = {
   parseExcelBuffer,
   importContacts,
@@ -493,5 +800,6 @@ module.exports = {
   getContactsPreview,
   getUnmatchedContacts,
   getMatchStats,
-  clearAllData
+  clearAllData,
+  getImportProgress
 };

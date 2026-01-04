@@ -154,8 +154,8 @@ const PartnerReporting = () => {
     return contacts;
   };
 
-  // Sorting helper
-  const sortData = (data, sortConfig) => {
+  // Sorting helper - Memoized for performance
+  const sortData = useCallback((data, sortConfig) => {
     const entries = Object.entries(data);
     return entries.sort((a, b) => {
       let aVal = a[1][sortConfig.field];
@@ -181,22 +181,22 @@ const PartnerReporting = () => {
       // Numeric comparison
       return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
     });
-  };
+  }, []);
 
-  // Toggle sort direction
-  const toggleSort = (currentSort, setSort, field) => {
+  // Toggle sort direction - Memoized
+  const toggleSort = useCallback((currentSort, setSort, field) => {
     if (currentSort.field === field) {
       setSort({ field, direction: currentSort.direction === 'asc' ? 'desc' : 'asc' });
     } else {
       setSort({ field, direction: 'desc' });
     }
-  };
+  }, []);
 
-  // Render sort indicator
-  const SortIcon = ({ field, currentSort }) => {
+  // Render sort indicator - Memoized component
+  const SortIcon = React.memo(({ field, currentSort }) => {
     if (currentSort.field !== field) return <span className="sort-icon">↕</span>;
     return <span className="sort-icon active">{currentSort.direction === 'asc' ? '↑' : '↓'}</span>;
-  };
+  });
 
   const handleFileUpload = (e) => {
     const file = e.target.files[0];

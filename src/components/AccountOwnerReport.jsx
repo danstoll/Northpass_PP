@@ -1,6 +1,20 @@
-import { useState, useEffect, useMemo } from 'react';
-import partnerDatabase from '../services/partnerDatabase';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { Box, FormControl, InputLabel, Select, MenuItem } from '@mui/material';
 import { generateEncodedUrl } from '../utils/urlEncoder';
+import {
+  PageHeader,
+  PageContent,
+  StatsRow,
+  StatCard,
+  SectionCard,
+  SearchInput,
+  FilterSelect,
+  ActionButton,
+  TierBadge,
+  DataTable,
+  LoadingState,
+  EmptyState,
+} from './ui/NintexUI';
 import './AccountOwnerReport.css';
 
 const BASE_URL = 'http://20.125.24.28:3000/';
@@ -12,16 +26,51 @@ export default function AccountOwnerReport() {
   const [loading, setLoading] = useState(false);
   const [loadingOwners, setLoadingOwners] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortField, setSortField] = useState('accountName');
-  const [sortDirection, setSortDirection] = useState('asc');
-  const [tierFilter, setTierFilter] = useState('all');
-  const [regionFilter, setRegionFilter] = useState('all');
+  const [tierFilter, setTierFilter] = useState('');
+  const [regionFilter, setRegionFilter] = useState('');
   const [copiedLink, setCopiedLink] = useState(null);
 
-  // Load account owners on mount
+  // Load account owners from MariaDB on mount
+  const loadAccountOwners = useCallback(async () => {
+    setLoadingOwners(true);
+    try {
+      const response = await fetch('/api/db/reports/owners');
+      if (response.ok) {
+        const data = await response.json();
+        setAccountOwners(data);
+      } else {
+        console.error('Failed to load owners');
+      }
+    } catch (error) {
+      console.error('Error loading account owners:', error);
+    } finally {
+      setLoadingOwners(false);
+    }
+  }, []);
+
+  // Load accounts for selected owner from MariaDB
+  const loadAccountsForOwner = useCallback(async (ownerName) => {
+    setLoading(true);
+    try {
+      const response = await fetch(`/api/db/reports/owner-accounts?owner=${encodeURIComponent(ownerName)}`);
+      if (response.ok) {
+        const data = await response.json();
+        setAccounts(data);
+      } else {
+        console.error('Failed to load accounts for owner');
+        setAccounts([]);
+      }
+    } catch (error) {
+      console.error('Error loading accounts:', error);
+      setAccounts([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadAccountOwners();
-  }, []);
+  }, [loadAccountOwners]);
 
   // Load accounts when owner changes
   useEffect(() => {
@@ -30,32 +79,7 @@ export default function AccountOwnerReport() {
     } else {
       setAccounts([]);
     }
-  }, [selectedOwner]);
-
-  async function loadAccountOwners() {
-    setLoadingOwners(true);
-    try {
-      const owners = await partnerDatabase.getAccountOwners();
-      setAccountOwners(owners);
-    } catch (error) {
-      console.error('Error loading account owners:', error);
-    } finally {
-      setLoadingOwners(false);
-    }
-  }
-
-  async function loadAccountsForOwner(ownerName) {
-    setLoading(true);
-    try {
-      const ownerAccounts = await partnerDatabase.getAccountsByOwner(ownerName);
-      setAccounts(ownerAccounts);
-    } catch (error) {
-      console.error('Error loading accounts:', error);
-      setAccounts([]);
-    } finally {
-      setLoading(false);
-    }
-  }
+  }, [selectedOwner, loadAccountsForOwner]);
 
   // Get unique tiers and regions for filters
   const { uniqueTiers, uniqueRegions } = useMemo(() => {
@@ -63,8 +87,8 @@ export default function AccountOwnerReport() {
     const regions = new Set();
     
     accounts.forEach(account => {
-      if (account.tier) tiers.add(account.tier);
-      if (account.region) regions.add(account.region);
+      if (account.partner_tier) tiers.add(account.partner_tier);
+      if (account.account_region) regions.add(account.account_region);
     });
     
     return {
@@ -81,57 +105,37 @@ export default function AccountOwnerReport() {
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
       result = result.filter(account =>
-        account.accountName.toLowerCase().includes(term) ||
-        (account.tier && account.tier.toLowerCase().includes(term)) ||
-        (account.region && account.region.toLowerCase().includes(term))
+        (account.account_name || '').toLowerCase().includes(term) ||
+        (account.partner_tier || '').toLowerCase().includes(term) ||
+        (account.account_region || '').toLowerCase().includes(term)
       );
     }
 
     // Apply tier filter
-    if (tierFilter !== 'all') {
-      result = result.filter(account => account.tier === tierFilter);
+    if (tierFilter) {
+      result = result.filter(account => account.partner_tier === tierFilter);
     }
 
     // Apply region filter
-    if (regionFilter !== 'all') {
-      result = result.filter(account => account.region === regionFilter);
+    if (regionFilter) {
+      result = result.filter(account => account.account_region === regionFilter);
     }
 
-    // Apply sorting
+    // Sort by account name
     result.sort((a, b) => {
-      let aVal = a[sortField] || '';
-      let bVal = b[sortField] || '';
-
-      if (sortField === 'contactCount') {
-        aVal = Number(aVal) || 0;
-        bVal = Number(bVal) || 0;
-      } else {
-        aVal = String(aVal).toLowerCase();
-        bVal = String(bVal).toLowerCase();
-      }
-
-      if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1;
-      if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1;
-      return 0;
+      const aVal = (a.account_name || '').toLowerCase();
+      const bVal = (b.account_name || '').toLowerCase();
+      return aVal.localeCompare(bVal);
     });
 
     return result;
-  }, [accounts, searchTerm, tierFilter, regionFilter, sortField, sortDirection]);
-
-  function handleSort(field) {
-    if (sortField === field) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortField(field);
-      setSortDirection('asc');
-    }
-  }
+  }, [accounts, searchTerm, tierFilter, regionFilter]);
 
   function generateDashboardLink(account) {
     // Use company name and tier to generate the encoded URL
     const params = {
-      company: account.accountName,
-      tier: account.tier || 'Registered'
+      company: account.account_name,
+      tier: account.partner_tier || 'Registered'
     };
     return generateEncodedUrl(BASE_URL, params);
   }
@@ -151,221 +155,206 @@ export default function AccountOwnerReport() {
     window.open(url, '_blank');
   }
 
-  function getSortIcon(field) {
-    if (sortField !== field) return '↕️';
-    return sortDirection === 'asc' ? '↑' : '↓';
-  }
-
   // Calculate summary stats
   const summaryStats = useMemo(() => {
     const tierCounts = {};
     const regionCounts = {};
     let totalContacts = 0;
+    let totalNpcu = 0;
+    let contactsInLms = 0;
 
     filteredAccounts.forEach(account => {
       // Count by tier
-      const tier = account.tier || 'Unknown';
+      const tier = account.partner_tier || 'Unknown';
       tierCounts[tier] = (tierCounts[tier] || 0) + 1;
 
       // Count by region
-      const region = account.region || 'Unknown';
+      const region = account.account_region || 'Unknown';
       regionCounts[region] = (regionCounts[region] || 0) + 1;
 
-      // Sum contacts
-      totalContacts += account.contactCount || 0;
+      // Sum contacts and NPCU - ensure numeric conversion
+      totalContacts += parseInt(account.contact_count, 10) || 0;
+      totalNpcu += parseInt(account.total_npcu, 10) || 0;
+      contactsInLms += parseInt(account.contacts_in_lms, 10) || 0;
     });
 
     return {
       totalAccounts: filteredAccounts.length,
       totalContacts,
+      totalNpcu,
+      contactsInLms,
       tierCounts,
       regionCounts
     };
   }, [filteredAccounts]);
 
-  return (
-    <div className="account-owner-report">
-      <div className="report-header">
-        <h2>📊 Account Owner Report</h2>
-        <p className="report-description">
-          View accounts by owner and access partner dashboards
-        </p>
-      </div>
+  // Table columns for DataTable
+  const tableColumns = [
+    { 
+      id: 'account_name', 
+      label: 'Partner Name',
+      render: (val) => <span style={{ fontWeight: 500 }}>{val}</span>
+    },
+    { 
+      id: 'partner_tier', 
+      label: 'Tier',
+      render: (val) => <TierBadge tier={val || 'Unknown'} />
+    },
+    { id: 'account_region', label: 'Region', render: (val) => val || 'N/A' },
+    { id: 'contact_count', label: 'Contacts', align: 'center', render: (val) => parseInt(val, 10) || 0 },
+    { id: 'contacts_in_lms', label: 'In LMS', align: 'center', render: (val) => parseInt(val, 10) || 0 },
+    { 
+      id: 'total_npcu', 
+      label: 'NPCU', 
+      align: 'center',
+      render: (val) => (
+        <span style={{ color: parseInt(val, 10) > 0 ? '#43E97B' : 'inherit', fontWeight: 600 }}>
+          {parseInt(val, 10) || 0}
+        </span>
+      )
+    },
+    {
+      id: 'actions',
+      label: 'Dashboard',
+      render: (_, row) => (
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <ActionButton
+            size="small"
+            onClick={() => openDashboard(row)}
+          >
+            🔗 Open
+          </ActionButton>
+          <ActionButton
+            size="small"
+            variant="outlined"
+            onClick={() => copyToClipboard(generateDashboardLink(row), row.account_name)}
+          >
+            {copiedLink === row.account_name ? '✓ Copied' : '📋 Copy'}
+          </ActionButton>
+        </Box>
+      )
+    },
+  ];
 
-      <div className="owner-selector-section">
-        <label htmlFor="owner-select">Select Account Owner:</label>
-        <select
-          id="owner-select"
-          value={selectedOwner}
-          onChange={(e) => setSelectedOwner(e.target.value)}
-          disabled={loadingOwners}
-          className="owner-select"
-        >
-          <option value="">
-            {loadingOwners ? 'Loading owners...' : '-- Select an Account Owner --'}
-          </option>
-          {accountOwners.map(owner => (
-            <option key={owner.ownerName} value={owner.ownerName}>
-              {owner.ownerName} ({owner.accountCount} accounts)
-            </option>
-          ))}
-        </select>
-      </div>
+  return (
+    <PageContent>
+      <PageHeader 
+        icon="📊" 
+        title="Account Owner Report" 
+        subtitle="View partners by account owner with certification and NPCU details"
+      />
+
+      {/* Owner Selector */}
+      <SectionCard title="Select Account Owner" icon="👤">
+        <FormControl fullWidth size="small" disabled={loadingOwners}>
+          <InputLabel>Account Owner</InputLabel>
+          <Select
+            value={selectedOwner}
+            label="Account Owner"
+            onChange={(e) => setSelectedOwner(e.target.value)}
+          >
+            <MenuItem value="">
+              {loadingOwners ? 'Loading owners...' : '-- Select an Account Owner --'}
+            </MenuItem>
+            {accountOwners.map(owner => (
+              <MenuItem key={owner.account_owner} value={owner.account_owner}>
+                {owner.account_owner} ({owner.partner_count} partners)
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+      </SectionCard>
 
       {selectedOwner && (
         <>
           {/* Summary Stats */}
-          <div className="summary-stats">
-            <div className="stat-card">
-              <span className="stat-value">{summaryStats.totalAccounts}</span>
-              <span className="stat-label">Accounts</span>
-            </div>
-            <div className="stat-card">
-              <span className="stat-value">{summaryStats.totalContacts}</span>
-              <span className="stat-label">Total Contacts</span>
-            </div>
-            {Object.entries(summaryStats.tierCounts).map(([tier, count]) => (
-              <div key={tier} className={`stat-card tier-${tier.toLowerCase()}`}>
-                <span className="stat-value">{count}</span>
-                <span className="stat-label">{tier}</span>
-              </div>
-            ))}
-          </div>
+          <StatsRow columns={4}>
+            <StatCard icon="🏢" value={summaryStats.totalAccounts} label="Partners" variant="primary" />
+            <StatCard icon="👥" value={summaryStats.totalContacts} label="Total Contacts" />
+            <StatCard icon="📚" value={summaryStats.contactsInLms} label="In LMS" variant="success" />
+            <StatCard icon="🏆" value={summaryStats.totalNpcu} label="Total NPCU" variant="primary" />
+          </StatsRow>
 
-          {/* Filters */}
-          <div className="filters-section">
-            <div className="filter-group">
-              <label>Search:</label>
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search accounts..."
-                className="search-input"
-              />
-            </div>
-
-            <div className="filter-group">
-              <label>Tier:</label>
-              <select
-                value={tierFilter}
-                onChange={(e) => setTierFilter(e.target.value)}
-                className="filter-select"
-              >
-                <option value="all">All Tiers</option>
-                {uniqueTiers.map(tier => (
-                  <option key={tier} value={tier}>{tier}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="filter-group">
-              <label>Region:</label>
-              <select
-                value={regionFilter}
-                onChange={(e) => setRegionFilter(e.target.value)}
-                className="filter-select"
-              >
-                <option value="all">All Regions</option>
-                {uniqueRegions.map(region => (
-                  <option key={region} value={region}>{region}</option>
-                ))}
-              </select>
-            </div>
-
-            {(searchTerm || tierFilter !== 'all' || regionFilter !== 'all') && (
-              <button
-                className="clear-filters-btn"
-                onClick={() => {
-                  setSearchTerm('');
-                  setTierFilter('all');
-                  setRegionFilter('all');
-                }}
-              >
-                Clear Filters
-              </button>
-            )}
-          </div>
-
-          {/* Accounts Table */}
-          {loading ? (
-            <div className="loading-message">
-              <span className="spinner">⏳</span> Loading accounts...
-            </div>
-          ) : filteredAccounts.length === 0 ? (
-            <div className="no-results">
-              No accounts found matching your criteria.
-            </div>
-          ) : (
-            <div className="accounts-table-container">
-              <table className="accounts-table">
-                <thead>
-                  <tr>
-                    <th onClick={() => handleSort('accountName')} className="sortable">
-                      Account Name {getSortIcon('accountName')}
-                    </th>
-                    <th onClick={() => handleSort('tier')} className="sortable">
-                      Tier {getSortIcon('tier')}
-                    </th>
-                    <th onClick={() => handleSort('region')} className="sortable">
-                      Region {getSortIcon('region')}
-                    </th>
-                    <th onClick={() => handleSort('contactCount')} className="sortable">
-                      Contacts {getSortIcon('contactCount')}
-                    </th>
-                    <th>Dashboard</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredAccounts.map((account, index) => (
-                    <tr key={`${account.accountName}-${index}`}>
-                      <td className="account-name-cell">
-                        <span className="account-name">{account.accountName}</span>
-                      </td>
-                      <td>
-                        <span className={`tier-badge tier-${(account.tier || 'unknown').toLowerCase()}`}>
-                          {account.tier || 'N/A'}
-                        </span>
-                      </td>
-                      <td>{account.region || 'N/A'}</td>
-                      <td className="contact-count">{account.contactCount}</td>
-                      <td className="actions-cell">
-                        <div className="action-buttons">
-                          <button
-                            className="open-btn"
-                            onClick={() => openDashboard(account)}
-                            title="Open Dashboard"
-                          >
-                            🔗 Open
-                          </button>
-                          <button
-                            className={`copy-btn ${copiedLink === account.accountName ? 'copied' : ''}`}
-                            onClick={() => copyToClipboard(generateDashboardLink(account), account.accountName)}
-                            title="Copy Link"
-                          >
-                            {copiedLink === account.accountName ? '✓ Copied' : '📋 Copy'}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          {/* Tier Stats */}
+          {Object.keys(summaryStats.tierCounts).length > 0 && (
+            <StatsRow columns={Object.keys(summaryStats.tierCounts).length}>
+              {Object.entries(summaryStats.tierCounts).map(([tier, count]) => (
+                <StatCard 
+                  key={tier} 
+                  value={count} 
+                  label={tier}
+                  variant={tier.toLowerCase() === 'premier' ? 'primary' : 'default'}
+                />
+              ))}
+            </StatsRow>
           )}
 
+          {/* Filters */}
+          <SectionCard title="Filters" icon="🔍">
+            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+              <SearchInput
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                onClear={() => setSearchTerm('')}
+                placeholder="Search partners..."
+                fullWidth={false}
+                sx={{ minWidth: 250 }}
+              />
+              <FilterSelect
+                label="Tier"
+                value={tierFilter}
+                onChange={setTierFilter}
+                options={uniqueTiers.map(t => ({ value: t, label: t }))}
+                minWidth={150}
+              />
+              <FilterSelect
+                label="Region"
+                value={regionFilter}
+                onChange={setRegionFilter}
+                options={uniqueRegions.map(r => ({ value: r, label: r }))}
+                minWidth={180}
+              />
+              {(searchTerm || tierFilter || regionFilter) && (
+                <ActionButton
+                  variant="outlined"
+                  size="small"
+                  onClick={() => {
+                    setSearchTerm('');
+                    setTierFilter('');
+                    setRegionFilter('');
+                  }}
+                >
+                  Clear Filters
+                </ActionButton>
+              )}
+            </Box>
+          </SectionCard>
+
+          {/* Partners Table */}
+          <SectionCard title="Partners" icon="📋" noPadding>
+            {loading ? (
+              <LoadingState message="Loading partners..." />
+            ) : (
+              <DataTable
+                columns={tableColumns}
+                data={filteredAccounts}
+                emptyMessage="No partners found matching your criteria"
+              />
+            )}
+          </SectionCard>
+
           {/* Export Section */}
-          <div className="export-section">
-            <h3>Export Options</h3>
-            <div className="export-buttons">
-              <button
-                className="export-btn"
+          <SectionCard title="Export Options" icon="📥">
+            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+              <ActionButton
                 onClick={() => {
                   const data = filteredAccounts.map(acc => ({
-                    'Account Name': acc.accountName,
-                    'Tier': acc.tier || 'N/A',
-                    'Region': acc.region || 'N/A',
-                    'Contacts': acc.contactCount,
+                    'Partner Name': acc.account_name,
+                    'Tier': acc.partner_tier || 'N/A',
+                    'Region': acc.account_region || 'N/A',
+                    'Contacts': acc.contact_count || 0,
+                    'In LMS': acc.contacts_in_lms || 0,
+                    'NPCU': acc.total_npcu || 0,
                     'Dashboard URL': generateDashboardLink(acc)
                   }));
                   
@@ -378,23 +367,25 @@ export default function AccountOwnerReport() {
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement('a');
                   a.href = url;
-                  a.download = `${selectedOwner.replace(/[^a-z0-9]/gi, '_')}_accounts.csv`;
+                  a.download = `${selectedOwner.replace(/[^a-z0-9]/gi, '_')}_partners.csv`;
                   a.click();
                   URL.revokeObjectURL(url);
                 }}
                 disabled={filteredAccounts.length === 0}
               >
                 📥 Export to CSV
-              </button>
+              </ActionButton>
               
-              <button
-                className="export-btn"
+              <ActionButton
+                variant="outlined"
                 onClick={() => {
                   const data = filteredAccounts.map(acc => ({
-                    accountName: acc.accountName,
-                    tier: acc.tier,
-                    region: acc.region,
-                    contacts: acc.contactCount,
+                    partnerName: acc.account_name,
+                    tier: acc.partner_tier,
+                    region: acc.account_region,
+                    contacts: acc.contact_count,
+                    contactsInLms: acc.contacts_in_lms,
+                    npcu: acc.total_npcu,
                     dashboardUrl: generateDashboardLink(acc)
                   }));
                   
@@ -402,25 +393,25 @@ export default function AccountOwnerReport() {
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement('a');
                   a.href = url;
-                  a.download = `${selectedOwner.replace(/[^a-z0-9]/gi, '_')}_accounts.json`;
+                  a.download = `${selectedOwner.replace(/[^a-z0-9]/gi, '_')}_partners.json`;
                   a.click();
                   URL.revokeObjectURL(url);
                 }}
                 disabled={filteredAccounts.length === 0}
               >
                 📄 Export to JSON
-              </button>
+              </ActionButton>
 
-              <button
-                className="export-btn copy-all-btn"
+              <ActionButton
+                variant="outlined"
                 onClick={async () => {
                   const links = filteredAccounts.map(acc => 
-                    `${acc.accountName}\t${acc.tier || 'N/A'}\t${generateDashboardLink(acc)}`
+                    `${acc.account_name}\t${acc.partner_tier || 'N/A'}\t${acc.total_npcu || 0} NPCU\t${generateDashboardLink(acc)}`
                   ).join('\n');
                   
                   try {
                     await navigator.clipboard.writeText(links);
-                    alert(`Copied ${filteredAccounts.length} account links to clipboard!`);
+                    alert(`Copied ${filteredAccounts.length} partner links to clipboard!`);
                   } catch (err) {
                     console.error('Failed to copy:', err);
                   }
@@ -428,37 +419,27 @@ export default function AccountOwnerReport() {
                 disabled={filteredAccounts.length === 0}
               >
                 📋 Copy All Links
-              </button>
-            </div>
-          </div>
+              </ActionButton>
+            </Box>
+          </SectionCard>
         </>
       )}
 
       {!selectedOwner && !loadingOwners && accountOwners.length > 0 && (
-        <div className="welcome-message">
-          <div className="welcome-icon">👋</div>
-          <h3>Select an Account Owner</h3>
-          <p>
-            Choose an account owner from the dropdown above to view their assigned accounts
-            and access partner dashboard links.
-          </p>
-          <div className="owner-summary">
-            <strong>{accountOwners.length}</strong> account owners found with 
-            <strong> {accountOwners.reduce((sum, o) => sum + o.accountCount, 0)}</strong> total accounts
-          </div>
-        </div>
+        <EmptyState
+          icon="👋"
+          title="Select an Account Owner"
+          message={`Choose an account owner from the dropdown above to view their assigned partners. ${accountOwners.length} account owners found with ${accountOwners.reduce((sum, o) => sum + (o.partner_count || 0), 0)} total partners.`}
+        />
       )}
 
       {!loadingOwners && accountOwners.length === 0 && (
-        <div className="no-data-message">
-          <div className="warning-icon">⚠️</div>
-          <h3>No Data Available</h3>
-          <p>
-            No account owners found in the database. Please import partner data first
-            using the Data Import feature.
-          </p>
-        </div>
+        <EmptyState
+          icon="⚠️"
+          title="No Data Available"
+          message="No account owners found in the database. Please import partner data first using the Data Import feature."
+        />
       )}
-    </div>
+    </PageContent>
   );
 }

@@ -1,5 +1,6 @@
 /* Import Nintex Design System */
 @import './styles/nintex-variables.css';
+@import './styles/nintex-utilities.css';
 
 :root {
   font-family: var(--font-family-base);

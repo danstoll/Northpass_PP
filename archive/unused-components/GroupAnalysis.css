@@ -799,7 +799,7 @@
 .filter-btn.active {
   background: rgba(255, 107, 53, 0.3);
   border-color: rgba(255, 107, 53, 0.6);
-  color: #ffffff;
+  color: var(--admin-text-primary);
 }
 
 /* Match Badges on Cards */
@@ -830,7 +830,7 @@
 .header-left h3 {
   margin: 0;
   font-size: 1.1rem;
-  color: #ffffff;
+  color: var(--admin-text-primary);
 }
 
 .match-badge {
@@ -842,18 +842,18 @@
 }
 
 .match-badge.exact {
-  background: rgba(76, 175, 80, 0.2);
-  color: #4caf50;
+  background: var(--admin-success-bg);
+  color: var(--admin-success);
 }
 
 .match-badge.close {
-  background: rgba(255, 152, 0, 0.2);
-  color: #ff9800;
+  background: var(--admin-warning-bg);
+  color: var(--admin-warning);
 }
 
 .match-badge.none {
-  background: rgba(244, 67, 54, 0.2);
-  color: #f44336;
+  background: var(--admin-error-bg);
+  color: var(--admin-error);
 }
 
 .edit-btn {
@@ -910,13 +910,13 @@
 }
 
 .match-details .tier-badge.tier-premier {
-  background: linear-gradient(135deg, #FF6B35, #FF8F5C);
-  color: #ffffff;
+  background: linear-gradient(135deg, var(--nintex-orange), var(--nintex-orange-light));
+  color: var(--admin-text-primary);
 }
 
 .match-details .tier-badge.tier-certified {
-  background: linear-gradient(135deg, #6B4C9A, #8B6BBF);
-  color: #ffffff;
+  background: linear-gradient(135deg, var(--nintex-purple), var(--nintex-purple-light));
+  color: var(--admin-text-primary);
 }
 
 .match-details .tier-badge.tier-registered {
@@ -931,30 +931,30 @@
 
 /* Summary Cards Variants */
 .summary-card.success {
-  background: rgba(76, 175, 80, 0.15);
+  background: var(--admin-success-bg);
   border-color: rgba(76, 175, 80, 0.3);
 }
 
 .summary-card.success .summary-value {
-  color: #4caf50;
+  color: var(--admin-success);
 }
 
 .summary-card.warning {
-  background: rgba(255, 152, 0, 0.15);
+  background: var(--admin-warning-bg);
   border-color: rgba(255, 152, 0, 0.3);
 }
 
 .summary-card.warning .summary-value {
-  color: #ff9800;
+  color: var(--admin-warning);
 }
 
 .summary-card.error {
-  background: rgba(244, 67, 54, 0.15);
+  background: var(--admin-error-bg);
   border-color: rgba(244, 67, 54, 0.3);
 }
 
 .summary-card.error .summary-value {
-  color: #f44336;
+  color: var(--admin-error);
 }
 
 /* Edit Modal */
@@ -978,7 +978,7 @@
   background: rgba(255, 255, 255, 0.1);
   padding: 12px 16px;
   border-radius: 8px;
-  color: #ffffff;
+  color: var(--admin-text-primary);
   font-weight: 500;
 }
 
@@ -988,7 +988,7 @@
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 8px;
-  color: #ffffff;
+  color: var(--admin-text-primary);
   font-size: 1rem;
   box-sizing: border-box;
 }
@@ -1032,7 +1032,7 @@
 }
 
 .account-suggestion .account-name {
-  color: #ffffff;
+  color: var(--admin-text-primary);
   font-size: 0.9rem;
 }
 
@@ -1059,7 +1059,7 @@
 }
 
 .delete-warning {
-  color: #f44336;
+  color: var(--admin-error);
   font-weight: 500;
 }
 
@@ -1135,7 +1135,7 @@
 }
 
 .link-btn:hover {
-  color: #ffffff;
+  color: var(--admin-text-primary);
 }
 
 .selection-actions {
@@ -1166,7 +1166,7 @@
 }
 
 .confirm-text {
-  color: #ffffff;
+  color: var(--admin-text-primary);
   font-weight: 500;
 }
 
@@ -1207,12 +1207,12 @@
 
 .user-count-badge.has-users {
   background: rgba(76, 175, 80, 0.2);
-  color: #4caf50;
+  color: var(--admin-success);
 }
 
 .user-count-badge.empty {
-  background: rgba(244, 67, 54, 0.2);
-  color: #f44336;
+  background: var(--admin-error-bg);
+  color: var(--admin-error);
 }
 
 .user-count-badge.uncounted {
@@ -1241,7 +1241,7 @@
 .group-card-header .header-left h3 {
   margin: 0;
   font-size: 1rem;
-  color: #ffffff;
+  color: var(--admin-text-primary);
   word-break: break-word;
 }
 
@@ -1321,21 +1321,21 @@
 }
 
 .merge-group-item input[type="radio"] {
-  accent-color: #4caf50;
+  accent-color: var(--admin-success);
   width: 18px;
   height: 18px;
 }
 
 .merge-group-item .group-name {
   flex: 1;
-  color: #ffffff;
+  color: var(--admin-text-primary);
   font-size: 0.95rem;
 }
 
 .merge-group-item .target-badge {
   padding: 4px 10px;
   background: rgba(76, 175, 80, 0.3);
-  color: #4caf50;
+  color: var(--admin-success);
   border-radius: 12px;
   font-size: 0.75rem;
   font-weight: 500;
@@ -1343,8 +1343,8 @@
 
 .merge-group-item .source-badge {
   padding: 4px 10px;
-  background: rgba(244, 67, 54, 0.2);
-  color: #f44336;
+  background: var(--admin-error-bg);
+  color: var(--admin-error);
   border-radius: 12px;
   font-size: 0.75rem;
   font-weight: 500;
@@ -1436,13 +1436,13 @@
 }
 
 .view-tab:hover {
-  color: #ffffff;
+  color: var(--admin-text-primary);
   background: rgba(255, 255, 255, 0.1);
 }
 
 .view-tab.active {
-  background: linear-gradient(135deg, #FF6B35, #FF8F5C);
-  color: #ffffff;
+  background: linear-gradient(135deg, var(--nintex-orange), var(--nintex-orange-light));
+  color: var(--admin-text-primary);
   font-weight: 500;
 }
 
@@ -1489,7 +1489,7 @@
 .partner-card-header h3 {
   margin: 0;
   font-size: 1rem;
-  color: #ffffff;
+  color: var(--admin-text-primary);
   word-break: break-word;
 }
 
@@ -1528,7 +1528,7 @@
 
 .partner-summary h3 {
   margin: 0 0 10px 0;
-  color: #ffffff;
+  color: var(--admin-text-primary);
   font-size: 1.1rem;
 }
 
@@ -1575,7 +1575,7 @@
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 8px;
-  color: #ffffff;
+  color: var(--admin-text-primary);
   font-size: 1rem;
 }
 
@@ -1599,7 +1599,7 @@
 
 .preview-results h4 {
   margin: 0 0 12px 0;
-  color: #ffffff;
+  color: var(--admin-text-primary);
   font-size: 0.95rem;
 }
 
@@ -1621,7 +1621,7 @@
 }
 
 .preview-user .user-name {
-  color: #ffffff;
+  color: var(--admin-text-primary);
 }
 
 .preview-user .user-email {
@@ -1691,7 +1691,7 @@
 
 .crm-match-section h4 {
   margin: 0 0 12px 0;
-  color: #ffffff;
+  color: var(--admin-text-primary);
   font-size: 0.95rem;
   display: flex;
   align-items: center;
@@ -1699,7 +1699,7 @@
 }
 
 .match-count {
-  color: #4caf50;
+  color: var(--admin-success);
   font-weight: 500;
 }
 
@@ -1758,7 +1758,7 @@
 }
 
 .toggle-checkbox:hover {
-  color: #ffffff;
+  color: var(--admin-text-primary);
 }
 
 /* Loading Preview State */
@@ -2103,7 +2103,7 @@
 
 .success-message h3 {
   margin: 0 0 8px 0;
-  color: #4CAF50;
+  color: var(--admin-success);
 }
 
 .success-message p {

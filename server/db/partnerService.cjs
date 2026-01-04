@@ -42,22 +42,24 @@ async function importPartners(partners) {
           (partner.tier || partner.partnerTier || partner['Partner Tier'] || '').trim(),
           (partner.region || partner.accountRegion || partner['Account Region'] || '').trim(),
           (partner.owner || partner.accountOwner || partner['Account Owner'] || '').trim(),
+          (partner.ownerEmail || partner['Owner Email'] || partner['Account Owner Email'] || '').trim().toLowerCase(),
           (partner.partnerType || partner['Partner Type'] || '').trim(),
           (partner.website || partner['Website'] || '').trim(),
           (partner.salesforce_id || partner['Account ID'] || '').trim()
         );
-        placeholders.push('(?, ?, ?, ?, ?, ?, ?)');
+        placeholders.push('(?, ?, ?, ?, ?, ?, ?, ?)');
         stats.processed++;
       }
 
       if (placeholders.length > 0) {
         const sql = `
-          INSERT INTO partners (account_name, partner_tier, account_region, account_owner, partner_type, website, salesforce_id)
+          INSERT INTO partners (account_name, partner_tier, account_region, account_owner, owner_email, partner_type, website, salesforce_id)
           VALUES ${placeholders.join(', ')}
           ON DUPLICATE KEY UPDATE
             partner_tier = COALESCE(NULLIF(VALUES(partner_tier), ''), partner_tier),
             account_region = COALESCE(NULLIF(VALUES(account_region), ''), account_region),
             account_owner = COALESCE(NULLIF(VALUES(account_owner), ''), account_owner),
+            owner_email = COALESCE(NULLIF(VALUES(owner_email), ''), owner_email),
             partner_type = COALESCE(NULLIF(VALUES(partner_type), ''), partner_type),
             website = COALESCE(NULLIF(VALUES(website), ''), website),
             salesforce_id = COALESCE(NULLIF(VALUES(salesforce_id), ''), salesforce_id),

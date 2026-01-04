@@ -36,10 +36,59 @@
   --nintex-warning: #FFA726;       /* Warning states */
   --nintex-error: #FF5252;         /* Error states */
   
+  /* ===== ADMIN THEME COLORS (Light Mode - Default) ===== */
+  /* Themeable variables for admin UI - use these in all admin components */
+  
+  /* Admin Background Colors - Light Theme */
+  --admin-bg-page: #f5f5f5;                   /* Page background */
+  --admin-bg-card: #ffffff;                    /* Card/panel background */
+  --admin-bg-elevated: #f8f9fa;                /* Subtle elevated sections */
+  --admin-bg-hover: rgba(0, 0, 0, 0.04);       /* Hover state */
+  --admin-bg-input: #ffffff;                   /* Form inputs */
+  
+  /* Admin Text Colors - Light Theme */
+  --admin-text-primary: #333333;               /* Main headings and important text */
+  --admin-text-secondary: #666666;             /* Body text */
+  --admin-text-muted: #999999;                 /* Secondary/helper text */
+  --admin-text-subtle: #aaaaaa;                /* Placeholder/hint text */
+  
+  /* Admin Border Colors - Light Theme */
+  --admin-border-default: #dddddd;             /* Default borders */
+  --admin-border-light: #eeeeee;               /* Light borders */
+  --admin-border-focus: var(--nintex-orange);  /* Focus state */
+  
+  /* Admin Status Colors - Bootstrap-style (works on light backgrounds) */
+  --admin-success: #28a745;
+  --admin-success-text: #155724;
+  --admin-success-bg: #d4edda;
+  --admin-success-border: #c3e6cb;
+  
+  --admin-warning: #ffc107;
+  --admin-warning-text: #856404;
+  --admin-warning-bg: #fff3cd;
+  --admin-warning-border: #ffeeba;
+  
+  --admin-error: #dc3545;
+  --admin-error-text: #721c24;
+  --admin-error-bg: #f8d7da;
+  --admin-error-border: #f5c6cb;
+  
+  --admin-info: #17a2b8;
+  --admin-info-text: #004085;
+  --admin-info-bg: #cce5ff;
+  --admin-info-border: #b8daff;
+  
   /* Gradient Backgrounds */
-  --nintex-gradient-primary: linear-gradient(135deg, #6B4C9A 0%, #4A148C 100%);
+  --nintex-gradient-primary: linear-gradient(135deg, #6B4C9A 0%, #FF6B35 100%);
   --nintex-gradient-orange: linear-gradient(135deg, #FF6B35 0%, #E55A2B 100%);
-  --nintex-gradient-card: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.05) 100%);
+  --nintex-gradient-purple: linear-gradient(135deg, #6B4C9A 0%, #4A3570 100%);
+  --nintex-gradient-brand: linear-gradient(135deg, #6B4C9A 0%, #FF6B35 100%);
+  
+  /* Table Colors */
+  --admin-table-header-bg: #f5f5f5;
+  --admin-table-header-text: #333333;
+  --admin-table-row-hover: rgba(0, 0, 0, 0.04);
+  --admin-table-border: #eeeeee;
   
   /* ===== TYPOGRAPHY ===== */
   
@@ -306,4 +355,84 @@
     --nintex-gray-200: #999999;
     --nintex-gray-700: #444444;
   }
+}
+
+/* ===== DARK THEME ===== */
+/* Apply .dark-theme class to body or admin container to switch themes */
+.dark-theme {
+  /* Admin Background Colors - Dark Theme */
+  --admin-bg-page: #1a1535;
+  --admin-bg-card: rgba(255, 255, 255, 0.05);
+  --admin-bg-elevated: rgba(255, 255, 255, 0.08);
+  --admin-bg-hover: rgba(255, 255, 255, 0.1);
+  --admin-bg-input: rgba(255, 255, 255, 0.05);
+  
+  /* Admin Text Colors - Dark Theme */
+  --admin-text-primary: #ffffff;
+  --admin-text-secondary: rgba(255, 255, 255, 0.85);
+  --admin-text-muted: rgba(255, 255, 255, 0.6);
+  --admin-text-subtle: rgba(255, 255, 255, 0.4);
+  
+  /* Admin Border Colors - Dark Theme */
+  --admin-border-default: rgba(255, 255, 255, 0.15);
+  --admin-border-light: rgba(255, 255, 255, 0.1);
+  
+  /* Admin Status Colors - Vibrant for dark backgrounds */
+  --admin-success: #4caf50;
+  --admin-success-text: #4caf50;
+  --admin-success-bg: rgba(76, 175, 80, 0.15);
+  --admin-success-border: rgba(76, 175, 80, 0.3);
+  
+  --admin-warning: #ff9800;
+  --admin-warning-text: #ff9800;
+  --admin-warning-bg: rgba(255, 152, 0, 0.15);
+  --admin-warning-border: rgba(255, 152, 0, 0.3);
+  
+  --admin-error: #f44336;
+  --admin-error-text: #f44336;
+  --admin-error-bg: rgba(244, 67, 54, 0.15);
+  --admin-error-border: rgba(244, 67, 54, 0.3);
+  
+  --admin-info: #2196f3;
+  --admin-info-text: #2196f3;
+  --admin-info-bg: rgba(33, 150, 243, 0.15);
+  --admin-info-border: rgba(33, 150, 243, 0.3);
+  
+  /* Table Colors - Dark Theme */
+  --admin-table-header-bg: rgba(255, 255, 255, 0.05);
+  --admin-table-header-text: #ffffff;
+  --admin-table-row-hover: rgba(255, 255, 255, 0.05);
+  --admin-table-border: rgba(255, 255, 255, 0.1);
+}
+
+/* Auto dark theme based on system preference */
+@media (prefers-color-scheme: dark) {
+  .auto-theme {
+    /* Same as .dark-theme */
+    --admin-bg-page: #1a1535;
+    --admin-bg-card: rgba(255, 255, 255, 0.05);
+    --admin-bg-elevated: rgba(255, 255, 255, 0.08);
+    --admin-bg-hover: rgba(255, 255, 255, 0.1);
+    --admin-bg-input: rgba(255, 255, 255, 0.05);
+    --admin-text-primary: #ffffff;
+    --admin-text-secondary: rgba(255, 255, 255, 0.85);
+    --admin-text-muted: rgba(255, 255, 255, 0.6);
+    --admin-text-subtle: rgba(255, 255, 255, 0.4);
+    --admin-border-default: rgba(255, 255, 255, 0.15);
+    --admin-border-light: rgba(255, 255, 255, 0.1);
+    --admin-table-header-bg: rgba(255, 255, 255, 0.05);
+    --admin-table-header-text: #ffffff;
+    --admin-table-row-hover: rgba(255, 255, 255, 0.05);
+    --admin-table-border: rgba(255, 255, 255, 0.1);
+  }
+}
+
+/* Legacy variable aliases for backward compatibility */
+:root {
+  --nintex-dark: var(--admin-text-primary);
+  --nintex-light: var(--admin-bg-page);
+  --success: var(--admin-success);
+  --warning: var(--admin-warning);
+  --error: var(--admin-error);
+  --info: var(--admin-info);
 }

@@ -52,8 +52,8 @@ function northpassRequest(endpoint, method = 'GET') {
 async function fetchAllPages(endpoint, dataKey = 'data') {
   const allData = [];
   let currentUrl = endpoint.includes('?') 
-    ? `${endpoint}&per_page=100` 
-    : `${endpoint}?per_page=100`;
+    ? `${endpoint}&limit=100` 
+    : `${endpoint}?limit=100`;
   let pageNum = 1;
 
   while (currentUrl) {
@@ -84,6 +84,28 @@ async function fetchAllPages(endpoint, dataKey = 'data') {
   }
 
   return allData;
+}
+
+/**
+ * Get the last successful sync time for a given sync type
+ */
+async function getLastSyncTime(syncType = 'users') {
+  const rows = await query(
+    `SELECT completed_at FROM sync_logs 
+     WHERE sync_type = ? AND status = 'completed' 
+     ORDER BY completed_at DESC LIMIT 1`,
+    [syncType]
+  );
+  return rows[0]?.completed_at || null;
+}
+
+/**
+ * Format date for API filter (ISO 8601)
+ */
+function formatDateForApi(date) {
+  if (!date) return null;
+  if (typeof date === 'string') date = new Date(date);
+  return date.toISOString();
 }
 
 /**
@@ -220,30 +242,18 @@ async function fetchUsersBatch(userIds) {
 }
 
 /**
- * Sync LMS users - only partner users (members of "All Partner" group)
+ * Sync LMS users - ALL users from Northpass (not just partner group)
  * Uses batch inserts for performance
  */
 async function syncUsers(logId, onProgress) {
-  console.log('👥 Syncing LMS users (partner users only)...');
+  console.log('👥 Syncing ALL LMS users...');
   const stats = { processed: 0, created: 0, updated: 0, failed: 0 };
   const BATCH_SIZE = 100;
 
   try {
-    // Find the All Partner group
-    const allPartnerGroupId = await findAllPartnerGroupId();
-    
-    let users;
-    if (allPartnerGroupId) {
-      // Fetch member IDs first, then get full user details
-      const memberIds = await fetchGroupMemberIds(allPartnerGroupId);
-      console.log(`📥 Found ${memberIds.length} member IDs, fetching user details...`);
-      users = await fetchUsersBatch(memberIds);
-      console.log(`📥 Fetched ${users.length} partner users from LMS`);
-    } else {
-      // Fallback to all users if group not found
-      users = await fetchAllPages('/v2/people');
-      console.log(`📥 Fetched ${users.length} users from LMS (no partner group filter)`);
-    }
+    // Fetch ALL users from Northpass (not just partner group)
+    const users = await fetchAllPages('/v2/people');
+    console.log(`📥 Fetched ${users.length} total users from LMS`);
 
     // Process in batches for better performance
     for (let i = 0; i < users.length; i += BATCH_SIZE) {
@@ -323,8 +333,135 @@ async function syncUsers(logId, onProgress) {
       }
     }
 
-    stats.created = stats.processed - stats.failed;
+    // Note: Using upserts, so we can't distinguish created vs updated - report as processed
+    stats.created = stats.processed; // For backwards compatibility with sync log schema
     console.log(`✅ Users synced: ${stats.processed} processed, ${stats.failed} failed`);
+  } catch (error) {
+    console.error('❌ User sync failed:', error);
+    throw error;
+  }
+
+  return stats;
+}
+
+/**
+ * Sync LMS users - INCREMENTAL mode
+ * Only fetches users updated since the last successful sync
+ * Uses API filter: filter[updated_at][gteq]=<timestamp>
+ */
+async function syncUsersIncremental(logId, onProgress) {
+  console.log('👥 Syncing LMS users (INCREMENTAL mode)...');
+  const stats = { processed: 0, created: 0, updated: 0, failed: 0, skipped: 0, mode: 'incremental' };
+  const BATCH_SIZE = 100;
+
+  try {
+    // Get last successful sync time
+    const lastSyncTime = await getLastSyncTime('users');
+    
+    // Build API endpoint with filter
+    let endpoint = '/v2/people';
+    if (lastSyncTime) {
+      const sinceDate = formatDateForApi(lastSyncTime);
+      endpoint = `/v2/people?filter[updated_at][gteq]=${encodeURIComponent(sinceDate)}`;
+      console.log(`📅 Fetching users updated since: ${sinceDate}`);
+    } else {
+      console.log('📅 No previous sync found - performing full sync');
+    }
+
+    // Fetch users (only changed ones if we have a last sync time)
+    const users = await fetchAllPages(endpoint);
+    console.log(`📥 Fetched ${users.length} users ${lastSyncTime ? '(incremental)' : '(full)'}`);
+
+    if (users.length === 0) {
+      console.log('✅ No new/updated users to sync');
+      stats.skipped = 0;
+      return stats;
+    }
+
+    // Get total user count for context
+    const totalCount = await query('SELECT COUNT(*) as count FROM lms_users');
+    stats.skipped = (totalCount[0]?.count || 0) - users.length;
+
+    // Process in batches for better performance
+    for (let i = 0; i < users.length; i += BATCH_SIZE) {
+      const batch = users.slice(i, i + BATCH_SIZE);
+      
+      try {
+        // Build batch insert values
+        const values = batch.map(user => {
+          const attrs = user.attributes || {};
+          return [
+            user.id,
+            attrs.email?.toLowerCase() || '',
+            attrs.first_name || '',
+            attrs.last_name || '',
+            attrs.created_at ? new Date(attrs.created_at) : null,
+            attrs.last_active_at ? new Date(attrs.last_active_at) : null,
+            attrs.deactivated_at ? new Date(attrs.deactivated_at) : null,
+            attrs.deactivated_at ? 'deactivated' : 'active'
+          ];
+        });
+
+        // Batch upsert
+        const placeholders = values.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, NOW())').join(', ');
+        const flatValues = values.flat();
+        
+        await query(
+          `INSERT INTO lms_users (id, email, first_name, last_name, created_at_lms, last_active_at, deactivated_at, status, synced_at)
+           VALUES ${placeholders}
+           ON DUPLICATE KEY UPDATE
+             email = VALUES(email),
+             first_name = VALUES(first_name),
+             last_name = VALUES(last_name),
+             last_active_at = VALUES(last_active_at),
+             deactivated_at = VALUES(deactivated_at),
+             status = VALUES(status),
+             synced_at = NOW()`,
+          flatValues
+        );
+
+        stats.processed += batch.length;
+        console.log(`  Processed ${stats.processed}/${users.length} users`);
+        onProgress && onProgress('users', stats.processed, users.length);
+      } catch (error) {
+        // If batch fails, fall back to individual inserts
+        console.warn(`  Batch ${i}-${i+BATCH_SIZE} failed, falling back to individual inserts`);
+        for (const user of batch) {
+          try {
+            const attrs = user.attributes || {};
+            await query(
+              `INSERT INTO lms_users (id, email, first_name, last_name, created_at_lms, last_active_at, deactivated_at, status, synced_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+               ON DUPLICATE KEY UPDATE
+                 email = VALUES(email),
+                 first_name = VALUES(first_name),
+                 last_name = VALUES(last_name),
+                 last_active_at = VALUES(last_active_at),
+                 deactivated_at = VALUES(deactivated_at),
+                 status = VALUES(status),
+                 synced_at = NOW()`,
+              [
+                user.id,
+                attrs.email?.toLowerCase() || '',
+                attrs.first_name || '',
+                attrs.last_name || '',
+                attrs.created_at ? new Date(attrs.created_at) : null,
+                attrs.last_active_at ? new Date(attrs.last_active_at) : null,
+                attrs.deactivated_at ? new Date(attrs.deactivated_at) : null,
+                attrs.deactivated_at ? 'deactivated' : 'active'
+              ]
+            );
+            stats.processed++;
+          } catch (err) {
+            stats.failed++;
+            console.error(`  Failed to sync user ${user.id}:`, err.message);
+          }
+        }
+      }
+    }
+
+    stats.updated = stats.processed;
+    console.log(`✅ Users synced (incremental): ${stats.processed} processed, ${stats.skipped} unchanged, ${stats.failed} failed`);
   } catch (error) {
     console.error('❌ User sync failed:', error);
     throw error;
@@ -344,17 +481,18 @@ async function syncGroups(logId, onProgress) {
     const groups = await fetchAllPages('/v2/groups');
     console.log(`📥 Fetched ${groups.length} groups from LMS`);
 
-    // Filter to only partner groups
+    // Filter to partner groups PLUS the "All Partners" group (needed for partner-only training access)
     const partnerGroups = groups.filter(g => {
       const name = (g.attributes?.name || '').toLowerCase();
+      // Always include "All Partners" group - it's needed for partner access control
+      if (name === 'all partners') return true;
       // Include groups with ptr_ prefix, or exclude system groups
       return name.startsWith('ptr_') || 
-             (!name.includes('all partner') && 
-              !name.includes('admin') && 
+             (!name.includes('admin') && 
               !name.includes('internal') &&
               !name.includes('test'));
     });
-    console.log(`📋 Filtering to ${partnerGroups.length} partner groups`);
+    console.log(`📋 Filtering to ${partnerGroups.length} partner groups (including All Partners)`);
 
     for (const group of partnerGroups) {
       try {
@@ -396,9 +534,101 @@ async function syncGroups(logId, onProgress) {
       }
     }
 
-    stats.created = stats.processed - stats.failed;
+    // Note: Using upserts, so we can't distinguish created vs updated - report as processed
+    stats.created = stats.processed; // For backwards compatibility with sync log schema
     stats.skipped = groups.length - partnerGroups.length;
     console.log(`✅ Groups synced: ${stats.processed} processed, ${stats.skipped} skipped (non-partner), ${stats.failed} failed`);
+  } catch (error) {
+    console.error('❌ Group sync failed:', error);
+    throw error;
+  }
+
+  return stats;
+}
+
+/**
+ * Sync LMS groups - INCREMENTAL mode
+ * Only fetches groups updated since the last successful sync
+ */
+async function syncGroupsIncremental(logId, onProgress) {
+  console.log('📁 Syncing LMS groups (INCREMENTAL mode)...');
+  const stats = { processed: 0, created: 0, updated: 0, failed: 0, skipped: 0, mode: 'incremental' };
+
+  try {
+    // Get last successful sync time
+    const lastSyncTime = await getLastSyncTime('groups');
+    
+    // Build API endpoint with filter
+    let endpoint = '/v2/groups';
+    if (lastSyncTime) {
+      const sinceDate = formatDateForApi(lastSyncTime);
+      endpoint = `/v2/groups?filter[updated_at][gteq]=${encodeURIComponent(sinceDate)}`;
+      console.log(`📅 Fetching groups updated since: ${sinceDate}`);
+    } else {
+      console.log('📅 No previous sync found - performing full sync');
+    }
+
+    const groups = await fetchAllPages(endpoint);
+    console.log(`📥 Fetched ${groups.length} groups ${lastSyncTime ? '(incremental)' : '(full)'}`);
+
+    if (groups.length === 0) {
+      console.log('✅ No new/updated groups to sync');
+      return stats;
+    }
+
+    // Filter to partner groups PLUS the "All Partners" group
+    const partnerGroups = groups.filter(g => {
+      const name = (g.attributes?.name || '').toLowerCase();
+      if (name === 'all partners') return true;
+      return name.startsWith('ptr_') || 
+             (!name.includes('admin') && 
+              !name.includes('internal') &&
+              !name.includes('test'));
+    });
+    console.log(`📋 Processing ${partnerGroups.length} partner groups`);
+
+    for (const group of partnerGroups) {
+      try {
+        const attrs = group.attributes || {};
+        
+        const cleanName = attrs.name?.replace(/^ptr_/, '');
+        const partnerMatch = await query(
+          `SELECT id FROM partners WHERE account_name = ? OR account_name = ?`,
+          [attrs.name, cleanName]
+        );
+        const partnerId = partnerMatch[0]?.id || null;
+
+        await query(
+          `INSERT INTO lms_groups (id, name, description, user_count, partner_id, synced_at)
+           VALUES (?, ?, ?, ?, ?, NOW())
+           ON DUPLICATE KEY UPDATE
+             name = VALUES(name),
+             description = VALUES(description),
+             user_count = VALUES(user_count),
+             partner_id = VALUES(partner_id),
+             synced_at = NOW()`,
+          [
+            group.id,
+            attrs.name || '',
+            attrs.description || '',
+            attrs.user_count || 0,
+            partnerId
+          ]
+        );
+
+        stats.processed++;
+        if (stats.processed % 50 === 0) {
+          onProgress && onProgress('groups', stats.processed, partnerGroups.length);
+        }
+      } catch (error) {
+        stats.failed++;
+        console.error(`  Failed to sync group ${group.id}:`, error.message);
+      }
+    }
+
+    stats.updated = stats.processed;
+    stats.skipped = groups.length - partnerGroups.length;
+    console.log(`✅ Groups synced (incremental): ${stats.processed} processed, ${stats.skipped} skipped, ${stats.failed} failed`);
   } catch (error) {
     console.error('❌ Group sync failed:', error);
     throw error;
@@ -415,27 +645,39 @@ async function syncGroupMembers(logId, onProgress) {
   const stats = { processed: 0, created: 0, updated: 0, failed: 0 };
 
   try {
-    // Get all groups
-    const groups = await query('SELECT id, name FROM lms_groups');
-    console.log(`📥 Syncing members for ${groups.length} groups`);
+    // Only sync partner groups (those linked to partners) + the special "All Partners" group
+    // This avoids syncing large non-partner groups that can have thousands of members
+    const groups = await query(`
+      SELECT g.id, g.name FROM lms_groups g
+      WHERE g.partner_id IS NOT NULL 
+         OR LOWER(g.name) = 'all partners'
+      ORDER BY g.name
+    `);
+    console.log(`📥 Syncing members for ${groups.length} partner groups (+ All Partners)`);
 
     for (let i = 0; i < groups.length; i++) {
       const group = groups[i];
       try {
-        // Fetch members for this group
-        const members = await fetchAllPages(`/v2/groups/${group.id}/people`);
+        // Fetch memberships for this group (using /memberships endpoint which works)
+        const memberships = await fetchAllPages(`/v2/groups/${group.id}/memberships`);
         
         // Clear existing memberships for this group
         await query('DELETE FROM lms_group_members WHERE group_id = ?', [group.id]);
 
-        // Insert new memberships
-        for (const member of members) {
+        // Insert new memberships - extract user ID from relationships
+        let memberCount = 0;
+        for (const membership of memberships) {
           try {
-            await query(
-              `INSERT IGNORE INTO lms_group_members (group_id, user_id, added_at) VALUES (?, ?, NOW())`,
-              [group.id, member.id]
-            );
-            stats.processed++;
+            // Membership structure: { relationships: { person: { data: { id: 'user-id' } } } }
+            const userId = membership.relationships?.person?.data?.id;
+            if (userId) {
+              await query(
+                `INSERT IGNORE INTO lms_group_members (group_id, user_id, added_at) VALUES (?, ?, NOW())`,
+                [group.id, userId]
+              );
+              memberCount++;
+              stats.processed++;
+            }
           } catch (e) {
             // Ignore foreign key errors (user might not be synced)
           }
@@ -444,7 +686,7 @@ async function syncGroupMembers(logId, onProgress) {
         // Update user count
         await query(
           'UPDATE lms_groups SET user_count = ? WHERE id = ?',
-          [members.length, group.id]
+          [memberCount, group.id]
         );
 
         if ((i + 1) % 10 === 0) {
@@ -509,6 +751,77 @@ async function syncCourses(logId, onProgress) {
 
     stats.created = stats.processed - stats.failed;
     console.log(`✅ Courses synced: ${stats.processed} processed, ${stats.failed} failed`);
+  } catch (error) {
+    console.error('❌ Course sync failed:', error);
+    throw error;
+  }
+
+  return stats;
+}
+
+/**
+ * Sync LMS courses - INCREMENTAL mode
+ * Only fetches courses updated since the last successful sync
+ */
+async function syncCoursesIncremental(logId, onProgress) {
+  console.log('📚 Syncing LMS courses (INCREMENTAL mode)...');
+  const stats = { processed: 0, created: 0, updated: 0, failed: 0, skipped: 0, mode: 'incremental' };
+
+  try {
+    // Get last successful sync time
+    const lastSyncTime = await getLastSyncTime('courses');
+    
+    // Build API endpoint with filter
+    let endpoint = '/v2/courses';
+    if (lastSyncTime) {
+      const sinceDate = formatDateForApi(lastSyncTime);
+      endpoint = `/v2/courses?filter[updated_at][gteq]=${encodeURIComponent(sinceDate)}`;
+      console.log(`📅 Fetching courses updated since: ${sinceDate}`);
+    } else {
+      console.log('📅 No previous sync found - performing full sync');
+    }
+
+    const courses = await fetchAllPages(endpoint);
+    console.log(`📥 Fetched ${courses.length} courses ${lastSyncTime ? '(incremental)' : '(full)'}`);
+
+    if (courses.length === 0) {
+      console.log('✅ No new/updated courses to sync');
+      return stats;
+    }
+
+    // Get total count for context
+    const totalCount = await query('SELECT COUNT(*) as count FROM lms_courses');
+    stats.skipped = (totalCount[0]?.count || 0);
+
+    for (const course of courses) {
+      try {
+        const attrs = course.attributes || {};
+        
+        await query(
+          `INSERT INTO lms_courses (id, name, description, status, synced_at)
+           VALUES (?, ?, ?, ?, NOW())
+           ON DUPLICATE KEY UPDATE
+             name = VALUES(name),
+             description = VALUES(description),
+             status = VALUES(status),
+             synced_at = NOW()`,
+          [
+            course.id,
+            attrs.name || attrs.title || '',
+            attrs.description || '',
+            attrs.status || 'active'
+          ]
+        );
+
+        stats.processed++;
+      } catch (error) {
+        stats.failed++;
+        console.error(`  Failed to sync course ${course.id}:`, error.message);
+      }
+    }
+
+    stats.updated = stats.processed;
+    console.log(`✅ Courses synced (incremental): ${stats.processed} processed, ${stats.failed} failed`);
   } catch (error) {
     console.error('❌ Course sync failed:', error);
     throw error;
@@ -788,9 +1101,12 @@ async function getSyncHistory(limit = 10) {
 
 module.exports = {
   syncUsers,
+  syncUsersIncremental,
   syncGroups,
+  syncGroupsIncremental,
   syncGroupMembers,
   syncCourses,
+  syncCoursesIncremental,
   syncCourseProperties,
   syncEnrollments,
   linkContactsToLmsUsers,

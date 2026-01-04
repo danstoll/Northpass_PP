@@ -1,17 +1,16 @@
 import CompanyWidget from './components/CompanyWidget'
 import CustomerDashboard from './components/CustomerDashboard'
+import PartnerDashboardDB from './components/PartnerDashboardDB'
 import AdminHub from './components/AdminHub'
 import AdminPanel from './components/AdminPanel'
-import GroupAnalysis from './components/GroupAnalysis'
-import GroupAnalysisDB from './components/GroupAnalysisDB'
 import UserManagement from './components/UserManagement'
 import AccountOwnerReport from './components/AccountOwnerReport'
-import PartnerImport from './components/PartnerImport'
-import PartnerReporting from './components/PartnerReporting'
 import DataManagement from './components/DataManagement'
-import DataSync from './components/DataSync'
+import SyncDashboard from './components/SyncDashboard'
 import DatabaseReports from './components/DatabaseReports'
-import Maintenance from './components/Maintenance'
+import AdminUsers from './components/AdminUsers'
+import BulkUrlGenerator from './components/BulkUrlGenerator'
+import Settings from './components/Settings'
 import { extractUrlParams } from './utils/urlEncoder'
 import { extractCustomerParams } from './utils/customerUrlEncoder'
 import './App.css'
@@ -19,18 +18,20 @@ import './App.css'
 function App() {
   // Check route types
   const currentPath = window.location.pathname;
+  const searchParams = new URLSearchParams(window.location.search);
+  const useDatabase = searchParams.get('source') === 'db';
+  
   const isAdminRoute = currentPath.startsWith('/admin');
-  const isReportingRoute = currentPath === '/admin/reports' || currentPath === '/admin/reports/';
-  const isGroupAnalysisRoute = currentPath === '/admin/groups' || currentPath === '/admin/groups/';
-  const isGroupAnalysisDBRoute = currentPath === '/admin/groupsdb' || currentPath === '/admin/groupsdb/';
   const isUserManagementRoute = currentPath === '/admin/users' || currentPath === '/admin/users/';
+  const isAdminUsersRoute = currentPath === '/admin/admin-users' || currentPath === '/admin/admin-users/';
   const isAccountOwnerRoute = currentPath === '/admin/owners' || currentPath === '/admin/owners/';
-  const isPartnerImportRoute = currentPath === '/admin/import' || currentPath === '/admin/import/';
   const isDataRoute = currentPath === '/admin/data' || currentPath === '/admin/data/';
-  const isSyncRoute = currentPath === '/admin/sync' || currentPath === '/admin/sync/';
+  const isSyncDashboardRoute = currentPath === '/admin/sync-dashboard' || currentPath === '/admin/sync-dashboard/' || currentPath === '/admin/sync' || currentPath === '/admin/sync/';
   const isDbReportsRoute = currentPath === '/admin/dbreports' || currentPath === '/admin/dbreports/';
-  const isMaintenanceRoute = currentPath === '/admin/maintenance' || currentPath === '/admin/maintenance/';
+  const isBulkUrlRoute = currentPath === '/admin/bulk-urls' || currentPath === '/admin/bulk-urls/';
+  const isSettingsRoute = currentPath === '/admin/settings' || currentPath === '/admin/settings/';
   const isCustomerRoute = currentPath === '/customer' || currentPath === '/customer/';
+  const isPartnerDbRoute = currentPath === '/partner' || currentPath === '/partner/';
   
   // Extract parameters based on route type
   let routeParams = {};
@@ -60,15 +61,14 @@ function App() {
     console.log('Route Info:', { 
       currentPath, 
       isAdminRoute,
-      isReportingRoute,
-      isGroupAnalysisRoute,
       isUserManagementRoute,
       isAccountOwnerRoute,
-      isPartnerImportRoute,
       isDataRoute,
-      isSyncRoute,
+      isSyncDashboardRoute,
       isDbReportsRoute,
       isCustomerRoute,
+      isPartnerDbRoute,
+      useDatabase,
       routeParams 
     });
   }
@@ -84,12 +84,23 @@ function App() {
     );
   }
 
-  // Show database sync for /admin/sync route
-  if (isSyncRoute) {
+  // Show admin users for /admin/admin-users route
+  if (isAdminUsersRoute) {
     return (
       <div className="app">
-        <AdminHub currentPage="sync">
-          <DataSync />
+        <AdminHub currentPage="admin-users">
+          <AdminUsers />
+        </AdminHub>
+      </div>
+    );
+  }
+
+  // Show sync dashboard for /admin/sync or /admin/sync-dashboard route
+  if (isSyncDashboardRoute) {
+    return (
+      <div className="app">
+        <AdminHub currentPage="sync-dashboard">
+          <SyncDashboard />
         </AdminHub>
       </div>
     );
@@ -106,56 +117,23 @@ function App() {
     );
   }
 
-  // Show reporting for /admin/reports route
-  if (isReportingRoute) {
+  // Show bulk URL generator for /admin/bulk-urls route
+  if (isBulkUrlRoute) {
     return (
       <div className="app">
-        <AdminHub currentPage="reports">
-          <PartnerReporting />
+        <AdminHub currentPage="bulk-urls">
+          <BulkUrlGenerator />
         </AdminHub>
       </div>
     );
   }
 
-  // Show partner import for /admin/import route
-  if (isPartnerImportRoute) {
+  // Show settings for /admin/settings route
+  if (isSettingsRoute) {
     return (
       <div className="app">
-        <AdminHub currentPage="import">
-          <PartnerImport />
-        </AdminHub>
-      </div>
-    );
-  }
-
-  // Show group analysis for /admin/groups route
-  if (isGroupAnalysisRoute) {
-    return (
-      <div className="app">
-        <AdminHub currentPage="groups">
-          <GroupAnalysis />
-        </AdminHub>
-      </div>
-    );
-  }
-
-  // Show group analysis from DB for /admin/groupsdb route
-  if (isGroupAnalysisDBRoute) {
-    return (
-      <div className="app">
-        <AdminHub currentPage="groupsdb">
-          <GroupAnalysisDB />
-        </AdminHub>
-      </div>
-    );
-  }
-
-  // Show maintenance for /admin/maintenance route
-  if (isMaintenanceRoute) {
-    return (
-      <div className="app">
-        <AdminHub currentPage="maintenance">
-          <Maintenance />
+        <AdminHub currentPage="settings">
+          <Settings />
         </AdminHub>
       </div>
     );
@@ -202,6 +180,20 @@ function App() {
           <CustomerDashboard 
             company={routeParams.company}
             companyId={routeParams.companyId}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // Show DB-backed partner dashboard for /partner route or when source=db
+  if (isPartnerDbRoute || useDatabase) {
+    return (
+      <div className="app">
+        <div className="app-container">
+          <PartnerDashboardDB 
+            company={routeParams.groupName}
+            tier={routeParams.tier}
           />
         </div>
       </div>

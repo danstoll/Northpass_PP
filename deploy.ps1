@@ -127,7 +127,8 @@ try {
 # Step 4: Upload server files
 Write-Step "Step 4: Uploading Server Configuration"
 try {
-    Invoke-SCP "server-with-proxy.js" "$($Config.RemotePath)/"
+    Invoke-SCP "server-with-proxy.cjs" "$($Config.RemotePath)/"
+    Invoke-SCP "server" "$($Config.RemotePath)/"
     Invoke-SCP "server-package.json" "$($Config.RemotePath)/package.json"
     
     if ($LASTEXITCODE -ne 0) { throw "Server file upload failed" }
@@ -140,8 +141,12 @@ try {
 # Step 5: Install dependencies and restart
 Write-Step "Step 5: Installing Dependencies and Restarting Server"
 try {
-    Invoke-SSH "cd $($Config.RemotePath) && npm install --production && pm2 restart $($Config.ProcessName) || pm2 start server-with-proxy.js --name $($Config.ProcessName) && pm2 save"
-    Write-Success "Server restarted"
+    # Upload ecosystem config
+    Invoke-SCP "ecosystem.config.cjs" "$($Config.RemotePath)/"
+    
+    # Create logs directory and restart using ecosystem file
+    Invoke-SSH "cd $($Config.RemotePath) && npm install --production && mkdir -p logs && pm2 delete $($Config.ProcessName) 2>/dev/null; pm2 start ecosystem.config.cjs --env production && pm2 save"
+    Write-Success "Server restarted with production environment"
 } catch {
     Write-Err "Restart failed: $_"
     exit 1

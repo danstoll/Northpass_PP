@@ -242,28 +242,49 @@ export const northpassApi = {
     }
   },
 
-  // Validate if a course ID exists in the current catalog
-  // Now uses the NPCU cache as source of truth since it comes from the bulk Properties API
+  // Validate if a course ID exists and try to fetch NPCU if not in cache
+  // Returns { isValid: boolean, npcu: number }
   async validateCourseInCatalog(courseId, courseName = 'Unknown Course') {
     if (!courseId) return false;
     
-    // Ensure NPCU cache is loaded (this is our source of truth for valid courses)
+    // Ensure NPCU cache is loaded
     if (!this._npcuCacheLoaded) {
       await this.loadAllCourseNPCU();
     }
     
-    // If the course is in the NPCU cache, it exists in the system
-    const isValid = this._courseNPCUCache.has(courseId);
-    
-    if (!isValid) {
-      console.log(`⚠️ Course not found in system: ${courseName} (${courseId})`);
-      trackFailedCourse(courseId, courseName, '404_NOT_FOUND', {
-        cacheSize: this._courseNPCUCache.size,
-        validationAttempt: new Date().toISOString()
-      });
+    // If the course is in the NPCU cache, it's valid
+    if (this._courseNPCUCache.has(courseId)) {
+      return true;
     }
     
-    return isValid;
+    // Not in bulk cache - try to fetch individually as fallback
+    // This catches archived courses or courses not returned by bulk API
+    console.log(`📡 Course not in bulk cache, trying individual fetch: ${courseName} (${courseId})`);
+    
+    try {
+      const response = await rateLimitedApiCall(() => 
+        apiClient.get(`/v2/properties/courses/${courseId}`)
+      );
+      
+      const properties = response.data?.data?.attributes?.properties || {};
+      const npcu = this.validateNPCUValue(properties.npcu);
+      
+      // Add to cache for future lookups
+      this._courseNPCUCache.set(courseId, npcu);
+      
+      console.log(`✅ Found course via individual fetch: ${courseName} - NPCU: ${npcu}`);
+      return true;
+      
+    } catch (error) {
+      // 403 or 404 means the course truly doesn't exist or isn't accessible
+      console.log(`⚠️ Course not found in system: ${courseName} (${courseId}) - Status: ${error.response?.status || 'unknown'}`);
+      trackFailedCourse(courseId, courseName, '404_NOT_FOUND', {
+        cacheSize: this._courseNPCUCache.size,
+        validationAttempt: new Date().toISOString(),
+        errorStatus: error.response?.status
+      });
+      return false;
+    }
   },
 
   // Cache for course NPCU values from Properties API
@@ -695,14 +716,18 @@ export const northpassApi = {
       console.log(`🔍 Pre-validation: Found ${certifications.length} completed items`);
       
       // Validate each certification against the current course catalog
+      // validateCourseInCatalog now fetches NPCU individually for courses not in bulk cache
       const validatedCertifications = [];
       const invalidCertifications = [];
       
       for (const cert of certifications) {
         const isValid = await this.validateCourseInCatalog(cert.resourceId, cert.name);
         if (isValid) {
+          // Re-fetch NPCU from cache in case it was added by validateCourseInCatalog
+          const updatedNpcu = this._courseNPCUCache.get(cert.resourceId) || cert.npcu;
           validatedCertifications.push({
             ...cert,
+            npcu: updatedNpcu,
             isValidCourse: true
           });
         } else {
@@ -2176,7 +2201,7 @@ export const northpassApi = {
    * Create a new group
    * @param {string} name - The name for the group
    * @param {string} description - Optional description
-   * @returns {Promise<Object>} Created group data
+   * @returns {Promise<Object>} Created group data (or existing group if 409 conflict)
    */
   async createGroup(name, description = '') {
     console.log(`➕ Creating group "${name}"`);
@@ -2197,6 +2222,21 @@ export const northpassApi = {
       console.log(`✅ Group created successfully:`, response.data?.data?.id);
       return response.data?.data;
     } catch (error) {
+      // Handle 409 Conflict - group already exists
+      if (error.response?.status === 409) {
+        console.log(`⚠️ Group "${name}" already exists, looking up...`);
+        
+        // Search for the existing group
+        const existingGroup = await this.findGroupByName(name);
+        if (existingGroup) {
+          console.log(`✅ Found existing group: ${existingGroup.id}`);
+          return existingGroup;
+        }
+        
+        console.error('❌ Group exists but could not be found');
+        throw new Error(`Group "${name}" already exists but could not be retrieved`);
+      }
+      
       console.error('❌ Error creating group:', error.response?.data || error.message);
       throw error;
     }

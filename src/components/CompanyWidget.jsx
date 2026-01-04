@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import './CompanyWidget.css';
 import northpassApi from '../services/northpassApi';
 import NintexButton from './NintexButton';
-import UrlGenerator from './UrlGenerator';
 
 // Tier badge images
 import PremierBadge from '../assets/images/PartnerNetworkPremierPartner_Horizontal.png';
@@ -245,10 +244,10 @@ const CompanyWidget = ({ groupName, tier }) => {
     'Nintex for Salesforce': { count: 0, npcu: 0, courses: [] },
     'Other': { count: 0, npcu: 0, courses: [] }
   });
-  const [showUrlGenerator, setShowUrlGenerator] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [cacheStats, setCacheStats] = useState(null);
   const [sortBy, setSortBy] = useState('npcu');
+  const [expandedUserId, setExpandedUserId] = useState(null);
   
   // Learning activity summary
   const [learningStats, setLearningStats] = useState({
@@ -266,7 +265,7 @@ const CompanyWidget = ({ groupName, tier }) => {
   const [progressLogs, setProgressLogs] = useState([]);
   const [usersProcessed, setUsersProcessed] = useState(0);
   const [totalUsersToProcess, setTotalUsersToProcess] = useState(0);
-  const [coursesLoaded, setCoursesLoaded] = useState(0);
+  // coursesLoaded tracking removed - not currently displayed
   
   // Helper to add log entry
   const addProgressLog = (message, type = 'info') => {
@@ -296,8 +295,24 @@ const CompanyWidget = ({ groupName, tier }) => {
     }
   };
 
+  // Fetch tier requirements from API on mount
   useEffect(() => {
-    setTierRequirement(TIER_REQUIREMENTS[tier] || 20);
+    const fetchTierRequirements = async () => {
+      try {
+        const response = await fetch('/api/db/settings/tier-requirements');
+        if (response.ok) {
+          const tierReqs = await response.json();
+          // Update the TIER_REQUIREMENTS object dynamically
+          Object.assign(TIER_REQUIREMENTS, tierReqs);
+          // Set the tier requirement for current tier
+          setTierRequirement(tierReqs[tier] || 20);
+        }
+      } catch (error) {
+        console.warn('Failed to fetch tier requirements, using defaults:', error);
+        setTierRequirement(TIER_REQUIREMENTS[tier] || 20);
+      }
+    };
+    fetchTierRequirements();
   }, [tier]);
 
   const fetchGroupUsers = useCallback(async () => {
@@ -311,194 +326,89 @@ const CompanyWidget = ({ groupName, tier }) => {
       setLoading(true);
       setError(null);
       setCurrentStep(0);
-      setTotalSteps(4); // 1) Find group, 2) Get users, 3) Load catalog, 4) Process certifications
+      setTotalSteps(2);
       setProgressLogs([]);
       setUsersProcessed(0);
       setTotalUsersToProcess(0);
-      setCoursesLoaded(0);
       
       console.log(`🏢 Starting company analysis for: ${groupName} (${tier || 'Premier'} tier)`);
-      addProgressLog(`Starting analysis for ${groupName}`, 'start');
+      addProgressLog(`Loading data for ${groupName}`, 'start');
       
-      // Step 1: Find the group by name
+      // Fetch from database API - much faster than live API
       setCurrentStep(1);
-      setProgressStatus('Searching for group...');
-      setProgressDetail(`Looking for "${groupName}" in Northpass`);
-      addProgressLog(`Searching for group: ${groupName}`, 'search');
-      console.log('📋 Searching for group...');
+      setProgressStatus('Loading from database...');
+      setProgressDetail(`Fetching data for "${groupName}"`);
+      addProgressLog(`Querying database for: ${groupName}`, 'search');
       
-      const group = await northpassApi.findGroupByName(groupName);
+      const response = await fetch(`/api/db/dashboard/group?name=${encodeURIComponent(groupName)}`);
       
-      if (!group) {
-        throw new Error(`Group "${groupName}" not found`);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Group "${groupName}" not found`);
       }
       
-      console.log(`✅ Found group: ${group.attributes.name} (ID: ${group.id})`);
-      addProgressLog(`✓ Found group: ${group.attributes.name}`, 'success');
-      setGroupData(group);
+      const data = await response.json();
+      console.log(`✅ Database returned data for: ${data.group.name}`);
+      addProgressLog(`✓ Found group: ${data.group.name}`, 'success');
       
-      // Step 2: Get all users in the group
+      // Set group data
+      setGroupData({
+        id: data.group.id,
+        attributes: { name: data.group.name }
+      });
+      setTotalUsersToProcess(data.group.memberCount);
+      
+      // Process users
       setCurrentStep(2);
-      setProgressStatus('Fetching group members...');
-      setProgressDetail('Loading user list from group');
-      addProgressLog('Loading group members...', 'loading');
-      console.log('👥 Fetching group members...');
+      setProgressStatus('Processing results...');
+      addProgressLog(`Processing ${data.users.length} users`, 'loading');
       
-      const groupUsers = await northpassApi.getGroupUsers(group.id);
-      console.log(`📊 Found ${groupUsers.length} users in group`);
-      addProgressLog(`✓ Found ${groupUsers.length} users`, 'success');
-      setTotalUsersToProcess(groupUsers.length);
+      const processedUsers = data.users;
       
-      // Update total steps for parallel processing
-      setTotalSteps(4);
-      setProgressDetail(`Found ${groupUsers.length} users - analyzing certifications...`);
-      addProgressLog('Loading course catalog...', 'loading');
-      
-      // Step 3: Process all users' certifications in parallel
-      setCurrentStep(3);
-      setProgressStatus('Analyzing certifications...');
-      setProgressDetail('Fetching course catalog and NPCU values...');
-      
-      let lastLoggedUser = '';
-      let courseBatchCount = 0;
-      
-      const processedUsers = await northpassApi.processUsersInParallel(
-        groupUsers, 
-        (currentUser, totalUsers, user) => {
-          // Update progress during parallel processing
-          const firstName = user?.attributes?.first_name || '';
-          const lastName = user?.attributes?.last_name || '';
-          const email = user?.attributes?.email || '';
-          const userId = user?.id || user?.attributes?.id || 'Unknown';
-          
-          let displayName;
-          if (firstName.trim() && lastName.trim()) {
-            displayName = `${firstName.trim()} ${lastName.trim()}`;
-          } else if (email) {
-            displayName = email;
-          } else {
-            displayName = `User ${userId.substring(0, 8)}...`;
-          }
-          
-          setUsersProcessed(currentUser);
-          setProgressDetail(`Processing ${displayName} (${currentUser}/${totalUsers})`);
-          
-          // Log every 5th user to avoid spam
-          if (currentUser % 5 === 0 || currentUser === totalUsers) {
-            addProgressLog(`Processing users: ${currentUser}/${totalUsers}`, 'progress');
-          }
-        }
-      );
-      
-      addProgressLog(`✓ Processed ${processedUsers.length} users`, 'success');
-      
-      // Calculate totals from processed results (COMPANY-LEVEL AGGREGATION)
-      let runningTotal = 0;
-      let usersWithCertifications = 0;
-      
-      // Initialize company product breakdown aggregation
-      const companyBreakdown = {
-        'Nintex CE': { count: 0, npcu: 0, courses: [] },
-        'Nintex K2': { count: 0, npcu: 0, courses: [] },
-        'Nintex for Salesforce': { count: 0, npcu: 0, courses: [] },
-        'Other': { count: 0, npcu: 0, courses: [] }
-      };
-      
+      // Add company context to users
+      const companyMeetsTierRequirement = data.totals.totalNPCU >= tierRequirement;
       processedUsers.forEach(user => {
-        runningTotal += user.totalNPCU;
-        
-        // Count users who have any certifications (NPCU > 0)
-        if (user.totalNPCU > 0) {
-          usersWithCertifications++;
+        user.contributesToCompany = user.totalNPCU > 0;
+        user.companyQualified = companyMeetsTierRequirement;
+        // Ensure productBreakdown exists for each user (may not have it from DB)
+        if (!user.productBreakdown) {
+          user.productBreakdown = {
+            'Nintex CE': { count: 0, npcu: 0, courses: [] },
+            'Nintex K2': { count: 0, npcu: 0, courses: [] },
+            'Nintex for Salesforce': { count: 0, npcu: 0, courses: [] },
+            'Other': { count: 0, npcu: 0, courses: [] }
+          };
         }
-        
-        // Aggregate product breakdown from each user
-        if (user.productBreakdown) {
-          Object.keys(companyBreakdown).forEach(category => {
-            if (user.productBreakdown[category]) {
-              companyBreakdown[category].count += user.productBreakdown[category].count;
-              companyBreakdown[category].npcu += user.productBreakdown[category].npcu;
-              companyBreakdown[category].courses.push(...user.productBreakdown[category].courses);
-            }
-          });
-        }
-        
-        console.log(`✅ ${user.name}: ${user.totalNPCU} NPCU (contributes to company total)`);
       });
       
-      // Update company product breakdown state
-      setCompanyProductBreakdown(companyBreakdown);
+      // Set all state from database response
+      setUsers(processedUsers);
+      setTotalNPCU(data.totals.totalNPCU);
+      setCertifiedUsers(data.totals.certifiedUsers);
+      setCompanyProductBreakdown(data.productBreakdown);
+      setLearningStats({
+        totalEnrolled: data.totals.totalEnrolled,
+        totalInProgress: data.totals.totalInProgress,
+        totalCompleted: data.totals.totalCompleted,
+        totalCertifications: data.totals.totalCertifications
+      });
       
-      // Log company product breakdown summary
+      // Final step
+      setProgressStatus('Analysis complete!');
+      setProgressDetail(`Loaded ${processedUsers.length} users from database`);
+      addProgressLog(`✓ Analysis complete: ${data.totals.totalNPCU} total NPCU`, 'success');
+      
+      console.log(`🏢 Company Summary (from database):`);
+      console.log(`   Total Users: ${processedUsers.length}`);
+      console.log(`   Company Total NPCU: ${data.totals.totalNPCU}`);
+      console.log(`   Users with Certifications: ${data.totals.certifiedUsers}`);
+      console.log(`   Company ${tier} Status: ${companyMeetsTierRequirement ? 'QUALIFIED' : 'NOT QUALIFIED'} (${data.totals.totalNPCU}/${tierRequirement} NPCU)`);
       console.log('🏢 COMPANY PRODUCT BREAKDOWN:');
-      Object.entries(companyBreakdown).forEach(([category, stats]) => {
+      Object.entries(data.productBreakdown).forEach(([category, stats]) => {
         if (stats.count > 0) {
           console.log(`   ${category}: ${stats.count} certifications, ${stats.npcu} NPCU`);
         }
       });
-      
-      // Company-level tier assessment
-      const companyMeetsTierRequirement = runningTotal >= tierRequirement;
-      console.log(`🏢 Company ${tier} Status: ${runningTotal}/${tierRequirement} NPCU ${companyMeetsTierRequirement ? '✅ QUALIFIED' : '❌ NOT QUALIFIED'}`);
-      
-      // Update users with company context (not individual requirements)
-      processedUsers.forEach(user => {
-        // Users don't have individual requirements - they contribute to company total
-        user.contributesToCompany = user.totalNPCU > 0;
-        user.companyQualified = companyMeetsTierRequirement;
-      });
-      
-      // Final step: Complete analysis
-      setCurrentStep(4);
-      setProgressStatus('Analysis complete!');
-      setProgressDetail(`Processed ${processedUsers.length} users in parallel`);
-      addProgressLog(`✓ Analysis complete: ${runningTotal} total NPCU`, 'success');
-      
-      setUsers(processedUsers);
-      setTotalNPCU(runningTotal);
-      setCertifiedUsers(usersWithCertifications);
-      
-      // Calculate learning activity statistics
-      const learningTotals = processedUsers.reduce((acc, user) => ({
-        totalEnrolled: acc.totalEnrolled + (user.enrolledCourses || 0),
-        totalInProgress: acc.totalInProgress + (user.inProgressCourses || 0),
-        totalCompleted: acc.totalCompleted + (user.completedCourses || 0),
-        totalCertifications: acc.totalCertifications + (user.certificationCount || 0)
-      }), { totalEnrolled: 0, totalInProgress: 0, totalCompleted: 0, totalCertifications: 0 });
-      
-      setLearningStats(learningTotals);
-      console.log('📚 Learning Stats:', learningTotals);
-      
-      // Calculate validation statistics
-      let totalCertifications = 0;
-      let validCertifications = 0;
-      let invalidCertifications = 0;
-      
-      processedUsers.forEach(user => {
-        totalCertifications += user.certifications.length;
-        user.certifications.forEach(cert => {
-          if (cert.isValidCourse !== false) {
-            validCertifications++;
-          } else {
-            invalidCertifications++;
-          }
-        });
-      });
-
-      console.log(`🎯 Company Summary:`);
-      console.log(`   Total Users: ${processedUsers.length}`);
-      console.log(`   Company Total NPCU: ${runningTotal}`);
-      console.log(`   Users with Certifications: ${usersWithCertifications}`);
-      console.log(`   Company ${tier} Status: ${companyMeetsTierRequirement ? 'QUALIFIED' : 'NOT QUALIFIED'} (${runningTotal}/${tierRequirement} NPCU)`);
-      console.log(`   User Participation Rate: ${((usersWithCertifications / processedUsers.length) * 100).toFixed(1)}%`);
-      console.log(`📚 Course Validation Summary:`);
-      console.log(`   Total Certifications: ${totalCertifications}`);
-      console.log(`   Valid Courses: ${validCertifications}`);
-      console.log(`   Invalid/Outdated Courses: ${invalidCertifications}`);
-      console.log(`   Course Validity Rate: ${totalCertifications > 0 ? ((validCertifications / totalCertifications) * 100).toFixed(1) : 0}%`);
-      
-      // Run comprehensive course validation analysis
-      northpassApi.analyzeCompanyCourseValidation(processedUsers);
       
     } catch (err) {
       console.error('❌ Company widget error:', err);
@@ -517,9 +427,9 @@ const CompanyWidget = ({ groupName, tier }) => {
   }, [fetchGroupUsers]);
 
   const getCertificationBadgeColor = (npcu) => {
-    if (npcu >= tierRequirement) return 'certification-badge-success';
-    if (npcu >= tierRequirement * 0.5) return 'certification-badge-warning';
-    return 'certification-badge-danger';
+    if (npcu >= tierRequirement) return 'success';
+    if (npcu >= tierRequirement * 0.5) return 'warning';
+    return 'danger';
   };
 
   // Show instructions when no parameters are provided
@@ -528,72 +438,20 @@ const CompanyWidget = ({ groupName, tier }) => {
       <div className="company-widget">
         <div className="widget-header">
           <h2>🏢 Nintex Partner Portal</h2>
-          <div className="tier-badge tier-info">Ready</div>
+          <div className="tier-badge tier-info">Partner Access</div>
         </div>
         <div className="welcome-state">
-          <div className="welcome-icon">🎯</div>
-          <h3>Welcome to Nintex Partner Certification Tracking</h3>
-          
-          {!showUrlGenerator ? (
-            <>
-              <p>Generate secure URLs to access partner certification data:</p>
-              <div className="welcome-actions">
-                <NintexButton
-                  variant="primary"
-                  size="large"
-                  onClick={() => setShowUrlGenerator(true)}
-                  leftIcon="🔗"
-                >
-                  Generate Secure URL
-                </NintexButton>
-              </div>
-              
-              <div className="features-list">
-                <h4>Features:</h4>
-                <ul>
-                  <li>📊 Real-time NPCU tracking</li>
-                  <li>🏆 Certification status monitoring</li>
-                  <li>📅 Expiry date management</li>
-                  <li>📈 Partner tier qualification</li>
-                  <li>🔒 Secure parameter encoding</li>
-                </ul>
-              </div>
-              
-              <div className="manual-params">
-                <details>
-                  <summary>💡 Manual URL Parameters (Legacy)</summary>
-                  <div className="url-examples">
-                    <h4>Required Parameters:</h4>
-                    <ul>
-                      <li><code>group</code> or <code>company</code> - Company group name (exact match)</li>
-                      <li><code>tier</code> - Partner tier (Premier, Select, Registered, Certified)</li>
-                    </ul>
-                    <h4>Example URLs:</h4>
-                    <div className="example-url">
-                      <code>?group=YourCompanyName&tier=Premier</code>
-                    </div>
-                    <div className="example-url">
-                      <code>?company=Acme Corporation&tier=Certified</code>
-                    </div>
-                  </div>
-                </details>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="back-action">
-                <NintexButton
-                  variant="secondary"
-                  size="medium"
-                  onClick={() => setShowUrlGenerator(false)}
-                  leftIcon="←"
-                >
-                  Back to Welcome
-                </NintexButton>
-              </div>
-              <UrlGenerator />
-            </>
-          )}
+          <div className="welcome-icon">🔒</div>
+          <h3>Partner Certification Portal</h3>
+          <p className="welcome-message">
+            This portal provides certification tracking for Nintex partners.
+          </p>
+          <p className="welcome-info">
+            If you are a Nintex partner, please use the secure link provided by your account manager to access your certification dashboard.
+          </p>
+          <div className="contact-info">
+            <p>Need access? Contact your Nintex Partner Account Manager.</p>
+          </div>
         </div>
       </div>
     );
@@ -705,19 +563,19 @@ const CompanyWidget = ({ groupName, tier }) => {
 
       <div className="company-stats">
         <div className="stat-card">
-          <div className="stat-number">{users.length}</div>
+          <div className="stat-number">{users?.length ?? 0}</div>
           <div className="stat-label">Total Users</div>
         </div>
         <div className="stat-card">
-          <div className="stat-number">{totalNPCU}</div>
+          <div className="stat-number">{totalNPCU ?? 0}</div>
           <div className="stat-label">Total NPCU Points</div>
         </div>
         <div className="stat-card">
-          <div className="stat-number">{certifiedUsers}</div>
+          <div className="stat-number">{certifiedUsers ?? 0}</div>
           <div className="stat-label">Certified Users</div>
         </div>
         <div className="stat-card">
-          <div className="stat-number">{certificationRate}%</div>
+          <div className="stat-number">{certificationRate ?? 0}%</div>
           <div className="stat-label">Certification Rate</div>
         </div>
       </div>
@@ -726,11 +584,11 @@ const CompanyWidget = ({ groupName, tier }) => {
       <div className="learning-stats">
         <h3>📚 Learning Activity Summary</h3>
         <div className="learning-tiles">
-          <div className="learning-tile enrolled">
-            <div className="tile-icon">📝</div>
+          <div className="learning-tile total-courses">
+            <div className="tile-icon">📚</div>
             <div className="tile-content">
               <div className="tile-number">{learningStats.totalEnrolled}</div>
-              <div className="tile-label">Enrolled</div>
+              <div className="tile-label">Total Courses</div>
             </div>
           </div>
           <div className="learning-tile in-progress">
@@ -815,77 +673,51 @@ const CompanyWidget = ({ groupName, tier }) => {
             </select>
           </div>
         </div>
-        {[...users].sort(SORT_OPTIONS[sortBy].sortFn).map(user => (
-          <div key={user.id} className="user-card">
-            <div className="user-header">
-              <div className="user-info">
-                <h4>{user.name}</h4>
-                <p className="user-email">{user.email}</p>
-                <p className="user-last-login">
-                  🕐 Last login: {formatLastLogin(user.lastLoginAt)}
-                </p>
-              </div>
-              <div className="user-stats-badges">
-                <div className={`certification-badge ${getCertificationBadgeColor(user.totalNPCU)}`}>
-                  {user.totalNPCU} NPCU
+        <div className="user-cards-grid">
+          {[...users].sort(SORT_OPTIONS[sortBy].sortFn).map(user => {
+            const isExpanded = expandedUserId === user.id;
+            return (
+              <div 
+                key={user.id} 
+                className={`user-card-compact ${isExpanded ? 'expanded' : ''}`}
+                onClick={() => setExpandedUserId(isExpanded ? null : user.id)}
+              >
+                <div className="user-card-top">
+                  <div className="user-name-email">
+                    <h4>{user.name}</h4>
+                    <p className="user-email">{user.email}</p>
+                  </div>
+                  <div className={`npcu-badge ${getCertificationBadgeColor(user.totalNPCU)}`}>
+                    {user.totalNPCU}
+                  </div>
                 </div>
-              </div>
-            </div>
-            
-            {/* User Learning Stats Row */}
-            <div className="user-learning-stats">
-              <div className="user-stat-item enrolled">
-                <span className="stat-icon">📝</span>
-                <span className="stat-value">{user.enrolledCourses || 0}</span>
-                <span className="stat-name">Enrolled</span>
-              </div>
-              <div className="user-stat-item in-progress">
-                <span className="stat-icon">⏳</span>
-                <span className="stat-value">{user.inProgressCourses || 0}</span>
-                <span className="stat-name">In Progress</span>
-              </div>
-              <div className="user-stat-item completed">
-                <span className="stat-icon">✅</span>
-                <span className="stat-value">{user.completedCourses || 0}</span>
-                <span className="stat-name">Completed</span>
-              </div>
-              <div className="user-stat-item certifications">
-                <span className="stat-icon">🎓</span>
-                <span className="stat-value">{user.certificationCount || 0}</span>
-                <span className="stat-name">Certs</span>
-              </div>
-            </div>
-            
-            {user.error ? (
-              <div className="user-error">
-                <p>❌ Error loading certifications: {user.error}</p>
-              </div>
-            ) : (
-              <div className="user-certifications">
-                {user.certifications.length > 0 ? (
-                  <>
-                    <p className="certification-count">
-                      🎓 {user.certifications.length} certification{user.certifications.length !== 1 ? 's' : ''}
-                    </p>
-                    <div className="certification-list">
-                      {user.certifications.map((cert, index) => (
-                        <div key={index} className={`certification-item ${cert.isValidCourse === false ? 'invalid-course' : ''}`}>
-                          <span className="cert-name">
-                            {cert.name}
-                            {cert.isValidCourse === false && <span className="invalid-badge">❌ Invalid</span>}
-                          </span>
-                          <span className="cert-npcu">{cert.npcu} NPCU</span>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                ) : (
-                  <p className="no-certifications">No certifications completed</p>
+                
+                <div className="user-mini-stats">
+                  <span className="mini-stat" title="Completed">✅ {user.completedCourses || 0}</span>
+                  <span className="mini-stat" title="Certifications">🎓 {user.certificationCount || 0}</span>
+                  <span className="mini-stat last-login" title={`Last login: ${formatLastLogin(user.lastLoginAt)}`}>
+                    🕐 {formatLastLogin(user.lastLoginAt)}
+                  </span>
+                  <span className="expand-icon">{isExpanded ? '▲' : '▼'}</span>
+                </div>
+                
+                {user.certifications.length > 0 && (
+                  <div className={`user-certs-mini ${isExpanded ? 'expanded' : ''}`}>
+                    {(isExpanded ? user.certifications : user.certifications.slice(0, 2)).map((cert, index) => (
+                      <div key={index} className={`cert-tag ${isExpanded ? 'cert-tag-full' : ''}`}>
+                        <span className="cert-tag-name">{isExpanded ? cert.name : (cert.name.length > 30 ? cert.name.substring(0, 30) + '...' : cert.name)}</span>
+                        <span className="cert-tag-npcu">{cert.npcu}</span>
+                      </div>
+                    ))}
+                    {!isExpanded && user.certifications.length > 2 && (
+                      <div className="cert-more">+{user.certifications.length - 2} more</div>
+                    )}
+                  </div>
                 )}
               </div>
-            )}
-          </div>
-        ))}
+            );
+          })}
+        </div>
       </div>
 
       <div className="widget-footer">

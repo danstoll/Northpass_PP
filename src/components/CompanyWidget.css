@@ -1,4 +1,4 @@
-.company-widget {
+﻿.company-widget {
   background: rgba(255, 255, 255, 0.85);
   backdrop-filter: blur(20px);
   border-radius: var(--radius-xl);
@@ -20,6 +20,13 @@
   margin-bottom: var(--space-6);
   padding-bottom: var(--space-4);
   border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.widget-header h2 {
+  color: #333333 !important;
+  margin: 0;
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-bold);
 }
 
 .header-actions {
@@ -147,6 +154,10 @@
   font-weight: var(--font-weight-bold);
   margin-bottom: var(--space-1);
   color: #333333 !important;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .stat-label {
@@ -408,7 +419,7 @@
 }
 
 .sort-select option {
-  background: white;
+  background: var(--admin-bg-card);
   color: var(--nintex-gray-800);
 }
 
@@ -465,7 +476,7 @@
 .learning-tile .tile-number {
   font-size: var(--font-size-2xl);
   font-weight: var(--font-weight-bold);
-  color: #6B4C9A !important;
+  color: var(--nintex-purple) !important;
   line-height: 1.1;
 }
 
@@ -569,6 +580,204 @@
   border: 1px solid rgba(0, 0, 0, 0.08);
 }
 
+/* ====== Compact Card Grid Layout ====== */
+.user-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.user-card-compact {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(8px);
+  border-radius: 10px;
+  padding: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  transition: all 0.2s ease;
+}
+
+.user-card-compact:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  border-color: rgba(107, 76, 154, 0.2);
+}
+
+.user-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.user-name-email {
+  flex: 1;
+  min-width: 0;
+}
+
+.user-name-email h4 {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--nintex-gray-800);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-name-email .user-email {
+  margin: 2px 0 0;
+  font-size: 0.75rem;
+  color: var(--nintex-gray-600);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.npcu-badge {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.npcu-badge.success {
+  background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+  color: var(--admin-text-primary);
+}
+
+.npcu-badge.warning {
+  background: linear-gradient(135deg, #fee140 0%, #fa709a 100%);
+  color: var(--admin-text-primary);
+}
+
+.npcu-badge.danger {
+  background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%);
+  color: var(--admin-text-primary);
+}
+
+.user-mini-stats {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.mini-stat {
+  font-size: 0.7rem;
+  color: var(--nintex-gray-600);
+}
+
+.mini-stat strong {
+  color: var(--nintex-gray-800);
+  font-weight: 600;
+}
+
+.user-certs-mini {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.cert-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(107, 76, 154, 0.1);
+  padding: 2px 6px;
+  border-radius: 8px;
+  font-size: 0.65rem;
+  max-width: 100%;
+}
+
+.cert-tag-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+  color: var(--nintex-gray-700);
+}
+
+.cert-tag-npcu {
+  font-weight: 700;
+  color: #28a745;
+  flex-shrink: 0;
+}
+
+.cert-more {
+  font-size: 0.65rem;
+  color: var(--nintex-gray-500);
+  font-style: italic;
+  padding: 2px 4px;
+}
+
+.user-card-compact .no-certifications {
+  font-size: 0.75rem;
+  color: var(--nintex-gray-500);
+  margin: 0;
+}
+
+/* Expanded Card State */
+.user-card-compact {
+  cursor: pointer;
+  transition: all 0.25s ease;
+}
+
+.user-card-compact.expanded {
+  grid-column: span 1;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 8px 24px rgba(107, 76, 154, 0.15);
+  border-color: rgba(107, 76, 154, 0.3);
+  z-index: 10;
+}
+
+.expand-icon {
+  margin-left: auto;
+  font-size: 0.6rem;
+  color: var(--nintex-gray-400);
+  transition: transform 0.2s ease;
+}
+
+.user-card-compact:hover .expand-icon {
+  color: var(--nintex-purple);
+}
+
+.user-certs-mini.expanded {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.cert-tag-full {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, rgba(107, 76, 154, 0.08) 0%, rgba(107, 76, 154, 0.15) 100%);
+  justify-content: space-between;
+}
+
+.cert-tag-full .cert-tag-name {
+  white-space: normal;
+  max-width: none;
+  font-size: 0.75rem;
+}
+
+.cert-tag-full .cert-tag-npcu {
+  font-size: 0.8rem;
+  padding: 2px 8px;
+  background: rgba(40, 167, 69, 0.15);
+  border-radius: 10px;
+}
+
+/* ====== End Compact Card Grid ====== */
+
 .user-header {
   display: flex;
   justify-content: space-between;
@@ -601,17 +810,17 @@
 
 .certification-badge-success {
   background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
-  color: #333;
+  color: var(--admin-text-primary);
 }
 
 .certification-badge-warning {
   background: linear-gradient(135deg, #fee140 0%, #fa709a 100%);
-  color: #333;
+  color: var(--admin-text-primary);
 }
 
 .certification-badge-danger {
   background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%);
-  color: #333;
+  color: var(--admin-text-primary);
 }
 
 .check-mark {
@@ -1097,7 +1306,7 @@
 }
 
 /* Responsive Design - Standard Breakpoints */
-/* Desktop: ≥1200px (default styles above) */
+/* Desktop: â‰¥1200px (default styles above) */
 
 /* Laptop: 992-1199px */
 @media (min-width: 992px) and (max-width: 1199px) {
@@ -1143,7 +1352,7 @@
   }
 }
 
-/* Mobile: ≤767px */
+/* Mobile: â‰¤767px */
 @media (max-width: 767px) {
   .company-widget {
     margin: 10px;
@@ -1394,7 +1603,7 @@
 }
 
 .manual-params summary::before {
-  content: "▶";
+  content: "â–¶";
   margin-right: var(--space-2);
   transition: transform var(--transition-normal);
 }
@@ -1416,3 +1625,33 @@
   margin-bottom: var(--space-6);
   text-align: left;
 }
+
+/* Public Landing Page Styles */
+.welcome-message {
+  font-size: var(--font-size-lg);
+  color: var(--nintex-gray-700);
+  margin-bottom: var(--space-4);
+}
+
+.welcome-info {
+  font-size: var(--font-size-base);
+  color: var(--nintex-gray-600);
+  max-width: 500px;
+  margin: 0 auto var(--space-6);
+  line-height: 1.6;
+}
+
+.contact-info {
+  background: rgba(107, 76, 154, 0.08);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-6);
+  margin-top: var(--space-6);
+  border: 1px solid rgba(107, 76, 154, 0.15);
+}
+
+.contact-info p {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--nintex-gray-700);
+}
+

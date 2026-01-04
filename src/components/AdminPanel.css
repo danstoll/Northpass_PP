@@ -1,109 +1,47 @@
 /* Admin Panel Styles */
 .admin-panel {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 2rem;
-  background: rgba(255, 255, 255, 0.95);
-  border-radius: 12px;
+  width: 100%;
+  padding: 0;
   min-height: auto;
   font-family: var(--font-family-base, 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  color: var(--admin-text-primary);
+  background: var(--admin-bg-page);
 }
 
-.admin-header {
-  text-align: center;
-  margin-bottom: 3rem;
-  padding-bottom: 2rem;
-  border-bottom: 2px solid var(--border-color, #e5e7eb);
-}
-
-.admin-header h1 {
-  color: var(--nintex-orange, #FF6B35);
-  margin-bottom: 1rem;
-  font-size: 2.5rem;
-  font-weight: 700;
-}
-
-.admin-header p {
-  color: var(--text-secondary, #6b7280);
-  font-size: 1.2rem;
-  margin: 0;
-}
-
-.tab-selector {
-  display: flex;
-  gap: 0;
-  margin-bottom: 2rem;
-  background: var(--border-color, #e5e7eb);
-  border-radius: 8px;
-  padding: 4px;
-  max-width: 400px;
-  margin-left: auto;
-  margin-right: auto;
-}
-
-.tab-button {
-  flex: 1;
-  padding: 0.75rem 1.5rem;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary, #6b7280);
-  font-size: 1rem;
-  font-weight: 500;
-  cursor: pointer;
-  border-radius: 6px;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-}
-
-.tab-button:hover {
-  color: var(--text-primary, #111827);
-  background: rgba(255, 255, 255, 0.5);
-}
-
-.tab-button.active {
-  background: white;
-  color: var(--nintex-orange, #FF6B35);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.admin-content {
+/* Content wrapper - no centering */
+.admin-panel-content {
   display: flex;
   flex-direction: column;
   gap: 2rem;
 }
 
 .input-section {
-  background: var(--card-background, #ffffff);
-  border: 2px solid var(--border-color, #e5e7eb);
+  background: var(--admin-bg-card);
+  border: 1px solid var(--admin-border-default);
   border-radius: 12px;
   padding: 2rem;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
 .input-section h3 {
-  color: var(--text-primary, #111827);
+  color: var(--admin-text-primary);
   margin-bottom: 1rem;
   font-size: 1.5rem;
   font-weight: 600;
 }
 
 .input-section p {
-  color: var(--text-secondary, #6b7280);
+  color: var(--admin-text-secondary);
   margin-bottom: 1.5rem;
   line-height: 1.6;
 }
 
 .input-section code {
-  background: var(--code-background, #f3f4f6);
+  background: var(--admin-bg-elevated);
   padding: 0.25rem 0.5rem;
   border-radius: 4px;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: 0.875rem;
-  color: var(--nintex-purple, #6B4C9A);
+  color: var(--nintex-orange);
 }
 
 .sample-data {
@@ -111,7 +49,7 @@
 }
 
 .load-sample-btn {
-  background: var(--nintex-purple, #6B4C9A);
+  background: var(--nintex-purple);
   color: white;
   border: none;
   padding: 0.5rem 1rem;
@@ -130,25 +68,25 @@
   width: 100%;
   min-height: 200px;
   padding: 1rem;
-  border: 2px solid var(--border-color, #e5e7eb);
+  border: 1px solid var(--admin-border-default);
   border-radius: 8px;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: 0.875rem;
   line-height: 1.5;
   resize: vertical;
-  background: var(--input-background, #ffffff);
-  color: var(--text-primary, #111827);
+  background: var(--admin-bg-card);
+  color: var(--admin-text-primary);
   transition: border-color 0.2s ease;
 }
 
 .companies-input:focus {
   outline: none;
-  border-color: var(--nintex-orange, #FF6B35);
-  box-shadow: 0 0 0 3px rgba(255, 107, 53, 0.1);
+  border-color: var(--nintex-orange);
+  box-shadow: 0 0 0 3px rgba(255, 107, 53, 0.2);
 }
 
 .companies-input::placeholder {
-  color: var(--text-tertiary, #9ca3af);
+  color: var(--admin-text-muted);
   line-height: 1.5;
 }
 
@@ -176,13 +114,13 @@
 }
 
 .generate-urls-btn {
-  background: linear-gradient(135deg, var(--nintex-orange, #FF6B35), #ff8c42);
+  background: linear-gradient(135deg, var(--nintex-orange), #ff8c42);
   color: white;
   box-shadow: 0 2px 8px rgba(255, 107, 53, 0.3);
 }
 
 .generate-urls-btn:hover:not(:disabled) {
-  background: linear-gradient(135deg, #e55a2b, var(--nintex-orange, #FF6B35));
+  background: linear-gradient(135deg, #e55a2b, var(--nintex-orange, var(--nintex-orange)));
   box-shadow: 0 4px 12px rgba(255, 107, 53, 0.4);
   transform: translateY(-1px);
 }
@@ -194,17 +132,18 @@
 }
 
 .clear-all-btn {
-  background: var(--border-color, #e5e7eb);
-  color: var(--text-secondary, #6b7280);
+  background: var(--admin-bg-elevated);
+  color: var(--admin-text-primary);
+  border: 1px solid var(--admin-border-default);
 }
 
 .clear-all-btn:hover {
-  background: #d1d5db;
-  color: var(--text-primary, #111827);
+  background: var(--admin-bg-hover);
+  color: var(--admin-text-primary);
 }
 
 .download-csv-btn {
-  background: var(--success, #10b981);
+  background: var(--admin-success);
   color: white;
   box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
 }
@@ -216,14 +155,14 @@
 }
 
 .errors-section {
-  background: #fef2f2;
-  border: 2px solid #fecaca;
+  background: rgba(220, 38, 38, 0.15);
+  border: 1px solid rgba(220, 38, 38, 0.3);
   border-radius: 12px;
   padding: 2rem;
 }
 
 .errors-section h3 {
-  color: #dc2626;
+  color: #FF5252;
   margin-bottom: 1.5rem;
   font-size: 1.25rem;
 }
@@ -235,14 +174,14 @@
 }
 
 .error-item {
-  background: white;
+  background: var(--admin-bg-card);
   padding: 1rem;
   border-radius: 8px;
-  border-left: 4px solid #dc2626;
+  border-left: 4px solid #FF5252;
 }
 
 .error-item strong {
-  color: #dc2626;
+  color: #FF5252;
   display: block;
   margin-bottom: 0.5rem;
 }
@@ -250,7 +189,7 @@
 .error-item ul {
   margin: 0;
   padding-left: 1.5rem;
-  color: #7f1d1d;
+  color: var(--admin-text-primary);
 }
 
 .error-item li {
@@ -258,8 +197,8 @@
 }
 
 .results-section {
-  background: #f0f9ff;
-  border: 2px solid #bae6fd;
+  background: rgba(67, 233, 123, 0.1);
+  border: 1px solid rgba(67, 233, 123, 0.3);
   border-radius: 12px;
   padding: 2rem;
 }
@@ -272,16 +211,16 @@
 }
 
 .results-header h3 {
-  color: var(--success, #10b981);
+  color: #43E97B;
   margin: 0;
   font-size: 1.5rem;
 }
 
 .results-table {
-  background: white;
+  background: var(--admin-bg-card);
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border: 1px solid var(--admin-border-light);
 }
 
 .results-table table {
@@ -293,25 +232,25 @@
 .results-table td {
   padding: 1rem;
   text-align: left;
-  border-bottom: 1px solid var(--border-color, #e5e7eb);
+  border-bottom: 1px solid var(--admin-border-light);
 }
 
 .results-table th {
-  background: var(--code-background, #f9fafb);
+  background: rgba(26, 26, 46, 0.8);
   font-weight: 600;
-  color: var(--text-primary, #111827);
+  color: var(--admin-text-primary);
   font-size: 0.875rem;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
 .results-table tbody tr:hover {
-  background: var(--hover-background, #f9fafb);
+  background: var(--admin-bg-card);
 }
 
 .company-name {
   font-weight: 500;
-  color: var(--text-primary, #111827);
+  color: var(--admin-text-primary);
 }
 
 .tier-badge {
@@ -325,12 +264,12 @@
 }
 
 .tier-premier {
-  background: linear-gradient(135deg, var(--nintex-orange, #FF6B35), #ff8c42);
+  background: linear-gradient(135deg, var(--nintex-orange), #ff8c42);
   color: white;
 }
 
 .tier-select {
-  background: linear-gradient(135deg, var(--nintex-purple, #6B4C9A), #8b5fbf);
+  background: linear-gradient(135deg, var(--nintex-purple), #8b5fbf);
   color: white;
 }
 
@@ -340,7 +279,7 @@
 }
 
 .tier-certified {
-  background: linear-gradient(135deg, var(--success, #10b981), #34d399);
+  background: linear-gradient(135deg, #10b981, #34d399);
   color: white;
 }
 
@@ -357,10 +296,10 @@
   display: block;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: 0.75rem;
-  color: var(--text-secondary, #6b7280);
+  color: var(--admin-text-secondary);
   word-break: break-all;
   line-height: 1.4;
-  background: var(--code-background, #f3f4f6);
+  background: var(--admin-bg-card);
   padding: 0.5rem;
   border-radius: 4px;
 }
@@ -379,7 +318,7 @@
 }
 
 .copy-url-btn {
-  background: var(--nintex-purple, #6B4C9A);
+  background: var(--nintex-purple);
   color: white;
 }
 
@@ -388,7 +327,7 @@
 }
 
 .test-url-btn {
-  background: var(--success, #10b981);
+  background: var(--admin-success);
   color: white;
 }
 
@@ -397,14 +336,14 @@
 }
 
 .admin-info {
-  background: var(--info-background, #eff6ff);
-  border: 2px solid var(--info-border, #bfdbfe);
+  background: rgba(255, 107, 53, 0.1);
+  border: 1px solid rgba(255, 107, 53, 0.3);
   border-radius: 12px;
   padding: 2rem;
 }
 
 .admin-info h3 {
-  color: var(--info-text, #1e40af);
+  color: var(--nintex-orange);
   margin-bottom: 1.5rem;
   font-size: 1.25rem;
 }
@@ -417,9 +356,9 @@
 
 .admin-info li {
   padding: 0.75rem 0;
-  color: var(--text-secondary, #6b7280);
+  color: var(--admin-text-secondary);
   line-height: 1.6;
-  border-bottom: 1px solid var(--info-border, #bfdbfe);
+  border-bottom: 1px solid var(--admin-border-light);
 }
 
 .admin-info li:last-child {
@@ -427,12 +366,12 @@
 }
 
 .admin-info strong {
-  color: var(--text-primary, #111827);
+  color: var(--admin-text-primary);
 }
 
 .admin-info code {
-  background: white;
-  border: 1px solid var(--info-border, #bfdbfe);
+  background: var(--admin-bg-elevated);
+  border: 1px solid var(--admin-border-default);
 }
 
 /* Responsive Design - Standard Breakpoints */
@@ -495,36 +434,4 @@
   }
 }
 
-/* Dark mode support */
-@media (prefers-color-scheme: dark) {
-  .admin-panel {
-    --card-background: #1f2937;
-    --border-color: #374151;
-    --text-primary: #f9fafb;
-    --text-secondary: #d1d5db;
-    --text-tertiary: #9ca3af;
-    --input-background: #374151;
-    --code-background: #374151;
-    --hover-background: #374151;
-    --info-background: #1e3a8a;
-    --info-border: #3b82f6;
-    --info-text: #bfdbfe;
-  }
-  
-  .admin-panel {
-    background: #111827;
-  }
-  
-  .input-section,
-  .results-table {
-    background: #1f2937;
-  }
-  
-  .results-table table {
-    background: #1f2937;
-  }
-  
-  .results-table th {
-    background: #374151;
-  }
-}
+

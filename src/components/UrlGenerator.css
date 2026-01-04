@@ -1,12 +1,14 @@
-/* URL Generator Component Styles */
+﻿/* URL Generator Component Styles */
+/* Uses CSS variables from nintex-variables.css for theme support */
+
 .url-generator {
-  max-width: 800px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: 900px;
   padding: 2rem;
-  background: var(--card-background, #ffffff);
-  border-radius: 12px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  border: 1px solid var(--border-color, #e5e7eb);
+  background: var(--admin-bg-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--admin-border-light);
+  color: var(--admin-text-primary);
 }
 
 .generator-header {
@@ -15,16 +17,16 @@
 }
 
 .generator-header h3 {
-  color: var(--nintex-orange, #FF6B35);
+  color: var(--admin-text-primary);
   margin-bottom: 0.5rem;
-  font-size: 1.5rem;
-  font-weight: 600;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
 }
 
 .generator-header p {
-  color: var(--text-secondary, #6b7280);
-  font-size: 1rem;
-  line-height: 1.5;
+  color: var(--admin-text-secondary);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
 }
 
 .generator-form {
@@ -38,32 +40,37 @@
 .form-group label {
   display: block;
   margin-bottom: 0.5rem;
-  color: var(--text-primary, #111827);
-  font-weight: 500;
-  font-size: 0.875rem;
+  color: var(--admin-text-primary);
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-sm);
 }
 
 .form-input,
 .form-select {
   width: 100%;
   padding: 0.75rem 1rem;
-  border: 2px solid var(--border-color, #e5e7eb);
-  border-radius: 8px;
-  font-size: 1rem;
-  transition: all 0.2s ease;
-  background: var(--input-background, #ffffff);
-  color: var(--text-primary, #111827);
+  border: 1px solid var(--admin-border-default);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-base);
+  transition: all var(--transition-fast);
+  background: var(--admin-bg-input);
+  color: var(--admin-text-primary);
 }
 
 .form-input:focus,
 .form-select:focus {
   outline: none;
-  border-color: var(--nintex-orange, #FF6B35);
-  box-shadow: 0 0 0 3px rgba(255, 107, 53, 0.1);
+  border-color: var(--nintex-orange);
+  box-shadow: var(--input-focus-ring);
 }
 
 .form-input::placeholder {
-  color: var(--text-tertiary, #9ca3af);
+  color: var(--admin-text-muted);
+}
+
+.form-select option {
+  background: var(--admin-bg-card);
+  color: var(--admin-text-primary);
 }
 
 .form-actions {
@@ -78,91 +85,87 @@
 .copy-btn {
   padding: 0.75rem 1.5rem;
   border: none;
-  border-radius: 8px;
-  font-size: 1rem;
-  font-weight: 500;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all var(--transition-fast);
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
 }
 
 .generate-btn {
-  background: linear-gradient(135deg, var(--nintex-orange, #FF6B35), #ff8c42);
+  background: var(--nintex-gradient-orange);
   color: white;
-  box-shadow: 0 2px 8px rgba(255, 107, 53, 0.3);
+  box-shadow: var(--shadow-orange);
 }
 
 .generate-btn:hover {
-  background: linear-gradient(135deg, #e55a2b, var(--nintex-orange, #FF6B35));
   box-shadow: 0 4px 12px rgba(255, 107, 53, 0.4);
   transform: translateY(-1px);
 }
 
 .clear-btn {
-  background: var(--border-color, #e5e7eb);
-  color: var(--text-secondary, #6b7280);
+  background: var(--admin-bg-elevated);
+  color: var(--admin-text-secondary);
+  border: 1px solid var(--admin-border-default);
 }
 
 .clear-btn:hover {
-  background: #d1d5db;
-  color: var(--text-primary, #111827);
+  background: var(--admin-bg-hover);
+  color: var(--admin-text-primary);
 }
 
 .generated-result {
-  background: var(--success-light, #f0f9ff);
-  border: 2px solid var(--success, #10b981);
-  border-radius: 12px;
+  background: var(--admin-success-bg);
+  border: 1px solid var(--admin-success-border);
+  border-radius: var(--radius-lg);
   padding: 1.5rem;
   margin-top: 2rem;
 }
 
 .result-header h4 {
-  color: var(--success, #10b981);
+  color: var(--admin-success-text);
   margin-bottom: 1rem;
-  font-size: 1.25rem;
+  font-size: var(--font-size-xl);
 }
 
 .url-display {
   display: flex;
   gap: 1rem;
   align-items: center;
-  background: white;
-  border: 1px solid var(--border-color, #e5e7eb);
-  border-radius: 8px;
+  background: var(--admin-bg-card);
+  border: 1px solid var(--admin-border-light);
+  border-radius: var(--radius-md);
   padding: 1rem;
   margin-bottom: 1.5rem;
 }
 
 .url-text {
   flex: 1;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-  font-size: 0.875rem;
-  color: var(--text-primary, #111827);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--admin-text-primary);
   word-break: break-all;
-  line-height: 1.5;
+  line-height: var(--line-height-normal);
 }
 
 .copy-btn {
-  background: var(--nintex-purple, #6B4C9A);
+  background: var(--nintex-purple);
   color: white;
   padding: 0.5rem 1rem;
-  font-size: 0.875rem;
+  font-size: var(--font-size-sm);
   white-space: nowrap;
   flex-shrink: 0;
 }
 
 .copy-btn:hover {
-  background: #5a3d82;
+  background: var(--nintex-purple-dark);
 }
 
 .copy-btn.copied {
-  background: var(--success, #10b981);
-}
-
-.copy-btn.copied:hover {
-  background: var(--success, #10b981);
+  background: var(--admin-success);
 }
 
 .url-info {
@@ -170,8 +173,8 @@
 }
 
 .info-text {
-  color: var(--text-primary, #111827);
-  font-weight: 500;
+  color: var(--admin-text-primary);
+  font-weight: var(--font-weight-medium);
   margin-bottom: 0.5rem;
 }
 
@@ -183,8 +186,8 @@
 
 .benefits-list li {
   padding: 0.25rem 0;
-  color: var(--text-secondary, #6b7280);
-  font-size: 0.875rem;
+  color: var(--admin-text-secondary);
+  font-size: var(--font-size-sm);
 }
 
 .comparison {
@@ -192,9 +195,9 @@
 }
 
 .comparison h5 {
-  color: var(--text-primary, #111827);
+  color: var(--admin-text-primary);
   margin-bottom: 1rem;
-  font-size: 1rem;
+  font-size: var(--font-size-base);
 }
 
 .url-comparison {
@@ -206,43 +209,42 @@
 .old-url,
 .new-url {
   padding: 1rem;
-  border-radius: 8px;
-  background: white;
-  border-left: 4px solid var(--border-color, #e5e7eb);
+  border-radius: var(--radius-md);
+  background: var(--admin-bg-card);
+  border-left: 4px solid var(--admin-border-default);
 }
 
 .old-url {
-  border-left-color: #fbbf24;
+  border-left-color: var(--admin-warning);
 }
 
 .new-url {
-  border-left-color: var(--success, #10b981);
+  border-left-color: var(--admin-success);
 }
 
 .old-url strong,
 .new-url strong {
   display: block;
   margin-bottom: 0.5rem;
-  font-size: 0.875rem;
-  color: var(--text-primary, #111827);
+  font-size: var(--font-size-sm);
+  color: var(--admin-text-primary);
 }
 
 .old-url code,
 .new-url code {
   display: block;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-  font-size: 0.75rem;
-  color: var(--text-secondary, #6b7280);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--admin-text-secondary);
   word-break: break-all;
   line-height: 1.4;
-  background: var(--code-background, #f9fafb);
+  background: var(--admin-bg-elevated);
   padding: 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   margin-top: 0.5rem;
 }
 
-/* Responsive Design - Standard Breakpoints */
-/* Tablet: 768-991px */
+/* Responsive Design */
 @media (min-width: 768px) and (max-width: 991px) {
   .url-generator {
     padding: 1.75rem;
@@ -250,7 +252,6 @@
   }
 }
 
-/* Mobile: ≤767px */
 @media (max-width: 767px) {
   .url-generator {
     padding: 1.5rem;
@@ -264,28 +265,5 @@
   .url-display {
     flex-direction: column;
     align-items: stretch;
-  }
-  
-  .url-comparison {
-    gap: 0.75rem;
-  }
-  
-  .old-url code,
-  .new-url code {
-    font-size: 0.7rem;
-  }
-}
-
-/* Dark mode support */
-@media (prefers-color-scheme: dark) {
-  .url-generator {
-    --card-background: #1f2937;
-    --border-color: #374151;
-    --text-primary: #f9fafb;
-    --text-secondary: #d1d5db;
-    --text-tertiary: #9ca3af;
-    --input-background: #374151;
-    --success-light: #064e3b;
-    --code-background: #374151;
   }
 }

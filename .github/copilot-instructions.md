@@ -78,22 +78,397 @@ Invoke-WebRequest -Uri "http://20.125.24.28:3000/assets/index-*.js" -Method Head
 - 📈 **Partner Tier Qualification**: Automatic tier status calculation
 - 🔄 **Collapsible Categories**: Product-based certification grouping
 - ✨ **Welcome Screen**: Professional onboarding when no parameters provided
+- 💾 **MariaDB Integration**: Full partner and contact database with sync capabilities
+- 👤 **Admin Tools Suite**: Comprehensive administration interface with 11+ tools
+- 📥 **Excel Import**: Partner and contact data import from Excel files
+- 🔄 **LMS Synchronization**: Automated 2-hour sync with Northpass API
+- 📊 **Database Reports**: Paginated analytics with 1000-record chunks
+- 👥 **User Management**: Find CRM contacts missing from LMS and bulk add
+- 🔗 **Group Matching**: Automatic partner-to-group linking with ptr_ prefix handling
+- 🎯 **Manager Assignment**: Track partner account managers
+- 🔍 **Group Analysis**: Advanced LMS group management and partner matching
 
 ## Technical Architecture
-- **Frontend**: React + Vite with Nintex design system
+- **Frontend**: React 18 + Vite with MUI (Material-UI) v5 + Nintex design system
+- **UI Components**: @mui/material, @mui/icons-material with custom Nintex theme
 - **Backend**: Express.js with API proxy and static file serving
+- **Database**: MariaDB 11.6.2 at `20.29.25.238:31337` (username: `northpass`, password: `Nintex2025!`)
 - **Deployment**: PM2 process management with SSH key authentication
 - **Security**: CORS resolution, security headers, graceful error handling
 
+## MUI Component Library
+
+### Nintex Theme (`src/theme/nintexTheme.js`)
+Custom Material-UI theme with Nintex brand colors (LIGHT MODE):
+- **Primary Orange**: `#FF6B35` - Main buttons, highlights
+- **Primary Purple**: `#6B4C9A` - Navigation sidebar, accent
+- **Success Green**: `#28a745` (Bootstrap-style) - Completion states
+- **Warning Yellow**: `#856404` (Bootstrap-style) - Warnings
+- **Error Red**: `#dc3545` (Bootstrap-style) - Errors, expiry states
+- **Light Mode**: White backgrounds (`#ffffff` cards, `#f5f5f5` page), dark text (`#333` primary, `#666` secondary)
+
+### Reusable Components (`src/components/ui/NintexUI.jsx`)
+**Layout Components:**
+- `PageHeader` - Consistent page headers with icon, title, subtitle, back button
+- `PageContent` - Content wrapper with proper padding
+- `StatsRow` - Grid layout for stat cards (responsive columns)
+- `SectionCard` - Card wrapper with title, icon, collapsible option
+- `TabPanel` - MUI Tabs content wrapper
+
+**Stat Display Components:**
+- `StatCard` - Metric display cards with variants (success/warning/error/primary)
+- `StatusChip` - Status indicators with appropriate icons
+- `TierBadge` - Partner tier badges with gradient backgrounds
+- `LabeledProgress` - Progress bars with labels and percentage
+
+**Input Components:**
+- `SearchInput` - Search field with clear button
+- `FilterSelect` - Dropdown select with "All" option
+
+**Button Components:**
+- `ActionButton` - Buttons with loading spinner state
+- `RefreshButton` - Icon button with spinner
+
+**Feedback Components:**
+- `ResultAlert` - Operation result notifications
+- `EmptyState` - Empty state placeholder
+- `LoadingState` - Loading spinner with message
+
+**Table Components:**
+- `DataTable` - MUI table wrapper with sorting, click handlers
+
+### Code Splitting (vite.config.js)
+MUI is split into separate chunks for optimal loading:
+- `vendor-mui`: @mui/material, @mui/icons-material (~230KB)
+- `vendor-emotion`: @emotion/react, @emotion/styled (~13KB)
+
+## MariaDB Database Architecture
+
+### Database Connection
+- **Host**: `20.29.25.238`
+- **Port**: `31337`
+- **Database**: `northpass`
+- **User**: `northpass`
+- **Password**: `Nintex2025!`
+- **Connection Module**: `server/db/connection.cjs`
+
+### Database Tables
+1. **partners** - Partner companies with tier, region, owner info
+2. **contacts** - Contact information linked to partners
+3. **lms_users** - Northpass LMS user data synced from API
+4. **enrollments** - Course enrollment and completion data
+5. **certifications** - Active certifications with expiry dates
+6. **sync_log** - Tracks database sync operations
+
+### Key Database Files
+- **Schema**: `server/db/schema.cjs` - Table definitions and indexes
+- **Connection**: `server/db/connection.cjs` - MariaDB connection pool
+- **Routes**: `server/dbRoutes.cjs` - API endpoints for database operations
+- **Services**:
+  - `server/db/partnerService.cjs` - Partner and contact management
+  - `server/db/lmsSyncService.cjs` - Sync LMS data from Northpass API
+  - `server/db/partnerImportService.cjs` - Excel import processing
+  - `server/db/scheduledSync.cjs` - Automatic sync scheduler (every 2 hours)
+
+### Database API Endpoints
+- **POST /api/db/partners/import** - Import partners from Excel
+- **POST /api/db/contacts/import** - Import contacts from Excel
+- **GET /api/db/contacts** - Get all contacts with optional filters
+- **GET /api/db/partners** - Get all partners
+- **POST /api/db/sync/lms-users** - Sync users from Northpass
+- **POST /api/db/sync/enrollments** - Sync enrollments from Northpass
+- **GET /api/db/reports/overview** - Overview statistics
+- **GET /api/db/reports/user-certifications** - User certification report (paginated, default 1000)
+- **GET /api/db/reports/contacts-not-in-lms** - Contacts missing from LMS (paginated, default 1000)
+- **GET /api/db/reports/partners-without-groups** - Partners without LMS groups
+- **GET /api/db/reports/compliance-gaps** - Partner tier compliance gaps
+
+### Performance Optimizations
+- **Pagination**: Database reports default to 1000 records with LIMIT/OFFSET
+- **Filtered Joins**: Only completed enrollments included in certification queries
+- **Indexed Columns**: Email, account_name, lms_user_id for fast lookups
+- **Connection Pooling**: Managed by MariaDB connection pool (10 connections)
+
+## Admin Tools
+
+### Admin Hub (`/admin`)
+- **Password**: `Nintex2025!`
+- **Session-based authentication** stored in sessionStorage
+
+### Admin Pages (6 tools - streamlined January 2025)
+1. **Data Management** (`/admin/data`) - Import partner/contact Excel files to MariaDB
+2. **LMS Sync** (`/admin/sync-dashboard` or `/admin/sync`) - **Consolidated sync dashboard** with:
+   - **Quick Sync**: Users, Groups, Courses, NPCU reference data
+   - **Enrollment Sync**: Incremental or Full enrollment synchronization
+   - **Scheduled Tasks**: 4 database-backed tasks (LMS Sync, Group Analysis, Group Members, Cleanup)
+   - **History Tab**: View sync logs and task execution history
+3. **Reports** (`/admin/dbreports`) - 10 on-demand reports across 3 categories:
+   - **Partner Analytics**: Overview Dashboard, Partner Leaderboard, Certification Gaps, Partners Without Groups
+   - **User Reports**: User Certifications, Contacts Not in LMS, Inactive Users
+   - **Course & Activity**: Popular Courses, Recent Activity, Expiring Certifications
+4. **Owner Report** (`/admin/owners`) - Account owner certification tracking
+5. **User Management** (`/admin/users`) - Comprehensive user and group management with 5 tabs:
+   - **Missing CRM Users**: Find CRM contacts not in LMS and add them
+   - **Domain Analysis**: Match LMS users to partners by email domain
+   - **Partners Without Groups**: Find partners without LMS groups
+   - **Contact Group Audit**: Audit contacts for proper LMS group memberships (merged from Maintenance)
+   - **All Partners Sync**: Ensure partner users are in "All Partners" group (merged from Maintenance)
+6. **URL Generator** (`/admin`) - Generate partner portal URLs
+7. **Bulk URLs** (`/admin/bulk-urls`) - Batch generate portal URLs
+
+### Archived Tools (in archive/unused-components/)
+- PartnerImport - Replaced by Data Management
+- PartnerReporting/LMS Reporting - Replaced by DB Reports
+- GroupAnalysis (Live) - Replaced by GroupAnalysisDB
+- DataSync - Replaced by LMS Sync Dashboard (consolidated January 2025)
+- Maintenance - Merged into User Management (January 2025)
+
+### Database Sync Architecture
+**Two Scheduling Systems (both managed from LMS Sync Dashboard):**
+1. **sync_schedule table**: Legacy enrollment auto-sync (interval_hours, sync_mode, enabled)
+2. **scheduled_tasks table**: Full task scheduler with 4 task types:
+   - `lms_sync` - LMS Data Sync (every 2 hours)
+   - `group_analysis` - Group Analysis (every 6 hours)
+   - `group_members_sync` - Group Members Sync (every hour)
+   - `cleanup` - Database Cleanup (daily)
+
+**Sync Features:**
+- **Task Scheduler** (`server/db/taskScheduler.cjs`): Database-backed with mutex locks, retry logic, execution history
+- **Quick Sync**: On-demand sync for users, groups, courses, NPCU from Northpass API
+- **Incremental User Sync**: Uses API filter `filter[updated_at][gteq]` to only fetch changed users (99%+ reduction in API calls)
+- **Sync Logging**: All operations logged to `sync_log` and `scheduled_tasks` tables
+
+### Incremental Sync (January 2025)
+All major syncs now use **incremental mode by default**, dramatically reducing API calls:
+
+| Sync Type | Before (Full) | After (Incremental) | Typical Reduction |
+|-----------|---------------|---------------------|-------------------|
+| Users | ~32,844 records | ~100-200 changed | **99%+** |
+| Groups | ~1,400 records | ~20-50 changed | **96%+** |
+| Courses | ~450 records | 0-10 changed | **98%+** |
+
+**How it works**: Uses Northpass API filter `filter[updated_at][gteq]=<timestamp>` to only fetch records modified since last sync.
+
+**Sync Modes:**
+```powershell
+# Incremental sync (default) - only changed records since last sync
+Invoke-RestMethod -Uri "http://20.125.24.28:3000/api/db/sync/users" -Method Post
+Invoke-RestMethod -Uri "http://20.125.24.28:3000/api/db/sync/groups" -Method Post
+Invoke-RestMethod -Uri "http://20.125.24.28:3000/api/db/sync/courses" -Method Post
+
+# Full sync - force fetch ALL records (use sparingly)
+Invoke-RestMethod -Uri "http://20.125.24.28:3000/api/db/sync/users?mode=full" -Method Post
+Invoke-RestMethod -Uri "http://20.125.24.28:3000/api/db/sync/groups?mode=full" -Method Post
+Invoke-RestMethod -Uri "http://20.125.24.28:3000/api/db/sync/courses?mode=full" -Method Post
+```
+
+**Task Scheduler Sync Types:**
+- `users` - Incremental user sync (default)
+- `users_full` - Full user sync (fetches all ~32K users)
+- `groups` - Incremental group sync (default)
+- `groups_full` - Full group sync (fetches all ~1.4K groups)
+- `courses` - Incremental course sync (default)
+- `courses_full` - Full course sync (fetches all ~450 courses)
+
+## Proxy Configuration
+
+### Northpass API Proxy
+The Express server includes a proxy that handles all Northpass API requests to resolve CORS issues and inject the API key server-side.
+
+**Proxy Features**:
+- **Target**: `https://api.northpass.com`
+- **Path Rewrite**: `/api/northpass` → `` (removes prefix)
+- **API Key Injection**: Server adds `X-Api-Key` header automatically
+- **POST Body Handling**: Properly forwards JSON bodies with Content-Type and Content-Length headers
+- **Error Handling**: Graceful ECONNRESET and timeout handling
+
+**Example**:
+```javascript
+// Client makes request to:
+POST /api/northpass/v2/groups
+Body: { "group": { "name": "New Partner" } }
+
+// Proxy forwards to:
+POST https://api.northpass.com/v2/groups
+Headers: X-Api-Key: wcU0QRpN9jnPvXEc5KXMiuVWk
+Body: { "group": { "name": "New Partner" } }
+```
+
 ## Development Workflow
-1. **Local Development**: `npm run dev` (port 5173)
-2. **Build**: `npm run build` → `dist/` folder
-3. **Deploy**: Run `.\deploy.ps1` (or manual upload + PM2 restart)
-4. **Monitor**: `ssh NTXPTRAdmin@20.125.24.28 "pm2 logs northpass-portal"`
-5. **Verify**: Check cache headers with deployment script output
+
+### Local Development (Two Servers Required)
+For local development, you need **both** servers running:
+
+1. **Start Express Backend** (Terminal 1):
+   ```powershell
+   node server-with-proxy.cjs
+   ```
+   - Runs on port 3000
+   - Provides `/api/db/*` database endpoints
+   - Provides `/api/northpass/*` API proxy
+   - Connects to MariaDB
+
+2. **Start Vite Dev Server** (Terminal 2):
+   ```powershell
+   npm run dev
+   ```
+   - Runs on port 5173
+   - Hot module replacement for React
+   - Proxies API requests to Express (port 3000)
+
+3. **Access**: Open `http://localhost:5173` in browser
+
+### Build & Deploy
+1. **Build**: `npm run build` → `dist/` folder
+2. **Deploy**: Run `.\deploy.ps1` (or manual upload + PM2 restart)
+3. **Monitor**: `ssh NTXPTRAdmin@20.125.24.28 "pm2 logs northpass-portal"`
+4. **Verify**: Check cache headers with deployment script output
+
+### Common Issues
+- **ECONNREFUSED on /api/db/**: Express server not running - start with `node server-with-proxy.cjs`
+- **Database connection failed**: Check MariaDB is accessible at `20.29.25.238:31337`
+- **Cache issues**: Bump cache version in `src/services/cacheService.js` or hard refresh (Ctrl+Shift+R)
 
 ## Known Limitations
 - Some course IDs return 403 on properties API calls (gracefully handled)
 - Course properties access depends on permissions (fallback implemented)
 - Group names must match exactly (case-sensitive)
 - Expiry date calculation based on completion date + 24 months default
+- Database reports paginated at 1000 records by default for performance
+- Excel imports require specific column names (see Data Management page)
+- LMS sync operations can take several minutes for large partner datasets
+- Cache version changes require hard refresh (Ctrl+Shift+R) to load new assets
+
+## CSS Architecture
+
+### Centralized Theme System (CSS Variables)
+All styles use CSS variables from `src/styles/nintex-variables.css` for light/dark theme support:
+
+**How to switch themes:**
+```jsx
+// Light theme (default) - no class needed
+<div className="admin-hub">
+
+// Dark theme - add .dark-theme class
+<div className="admin-hub dark-theme">
+
+// Auto (follows system preference) - add .auto-theme class
+<div className="admin-hub auto-theme">
+```
+
+### Light Theme Variables (Default)
+```css
+--admin-bg-page: #f5f5f5;           /* Page background */
+--admin-bg-card: #ffffff;            /* Card/panel background */
+--admin-bg-elevated: #f8f9fa;        /* Subtle elevated sections */
+--admin-bg-hover: rgba(0,0,0,0.04);  /* Hover state */
+--admin-bg-input: #ffffff;           /* Form inputs */
+
+--admin-text-primary: #333333;       /* Main headings */
+--admin-text-secondary: #666666;     /* Body text */
+--admin-text-muted: #999999;         /* Helper text */
+
+--admin-border-default: #dddddd;     /* Default borders */
+--admin-border-light: #eeeeee;       /* Light borders */
+```
+
+### Status Colors (Bootstrap-style)
+```css
+--admin-success-bg: #d4edda;  --admin-success-text: #155724;
+--admin-warning-bg: #fff3cd;  --admin-warning-text: #856404;
+--admin-error-bg: #f8d7da;    --admin-error-text: #721c24;
+--admin-info-bg: #cce5ff;     --admin-info-text: #004085;
+```
+
+### Brand Colors
+```css
+--nintex-orange: #FF6B35;            /* Primary brand, buttons */
+--nintex-purple: #6B4C9A;            /* Secondary, nav sidebar */
+--nintex-gradient-orange: linear-gradient(135deg, #FF6B35 0%, #E55A2B 100%);
+--nintex-gradient-purple: linear-gradient(135deg, #6B4C9A 0%, #4A3570 100%);
+--nintex-gradient-brand: linear-gradient(135deg, #6B4C9A 0%, #FF6B35 100%);
+```
+
+### Key CSS Files
+- `src/styles/nintex-variables.css` - **Master theme variables** (light/dark support)
+- `src/styles/nintex-utilities.css` - Bootstrap-like utility classes
+- `src/components/ui/NintexUI.jsx` - Shared MUI components using CSS variables
+- `src/components/*.css` - Component styles using CSS variables
+
+### CSS Variable Usage
+All component CSS files now use CSS variables:
+```css
+/* DO use CSS variables */
+background: var(--admin-bg-card);
+color: var(--admin-text-primary);
+border: 1px solid var(--admin-border-default);
+
+/* DON'T use hardcoded colors */
+background: white;
+color: #333;
+border: 1px solid #ddd;
+```
+
+## Recent Fixes (December 2025)
+
+### LMS Sync Dashboard Consolidation (January 2025)
+- ✅ All sync functions consolidated onto LMS Sync Dashboard (`/admin/sync`)
+- ✅ Quick Sync (users, groups, courses, NPCU) moved from DataManagement
+- ✅ Scheduled Tasks panel shows all 4 database-backed tasks with enable/disable toggles
+- ✅ Tabbed interface: Overview, Scheduled Tasks, History
+- ✅ Task execution with manual run buttons
+- ✅ DataManagement sync tab now redirects to LMS Sync Dashboard
+
+### Top Navigation & Theme Toggle (December 28, 2025)
+- ✅ Added `TopNavbar` component with JustDo-style dashboard design
+- ✅ Theme toggle (light/dark mode) with localStorage persistence
+- ✅ Search box, quick stats display, notifications, and user profile menu
+- ✅ Mobile-responsive hamburger menu integration
+- ✅ Sidebar now positioned below top navbar (64px offset)
+- ✅ Current cache version: **84**
+
+### CSS Variable Theming System
+- ✅ All 14 CSS files converted to use CSS variables
+- ✅ Theme switching via `.light-theme` / `.dark-theme` classes
+- ✅ `nintex-variables.css` contains complete light/dark theme definitions
+- ✅ NintexUI.jsx components updated for theme support
+
+### Proxy & API Fixes
+- ✅ Fixed ECONNRESET on POST /v2/groups by adding body forwarding
+- ✅ Added Content-Type and Content-Length headers for POST requests
+- ✅ Proxy now properly handles POST/PUT/PATCH with JSON bodies
+
+### Routing Fixes
+- ✅ Changed Express catch-all from `app.get('*')` to `app.use()` middleware
+- ✅ Fixed PathError with wildcard routes and path-to-regexp compatibility
+
+### Database Performance
+- ✅ Added LIMIT/OFFSET pagination (default 1000 records)
+- ✅ Optimized JOIN queries to filter completed enrollments only
+- ✅ Indexed key columns for faster lookups
+
+### CSS & UI Fixes
+- ✅ UserManagement summary cards: Added visible borders and gradient backgrounds
+- ✅ DatabaseReports tables: Fixed blue backgrounds with `!important` flags
+- ✅ Added hidden username field to password forms for accessibility
+- ✅ Changed search inputs to type="search" with autoComplete="off"
+- ✅ All password inputs have `autoComplete="current-password"`
+
+### MUI Migration (December 2025)
+- ✅ Installed MUI v5 packages (@mui/material, @mui/icons-material, @emotion/react, @emotion/styled)
+- ✅ Created Nintex theme with brand colors in `src/theme/nintexTheme.js`
+- ✅ Built comprehensive NintexUI component library (`src/components/ui/NintexUI.jsx`)
+- ✅ AdminNav converted to MUI Drawer with responsive behavior
+- ✅ AdminHub login page using MUI Card, TextField, Button components
+- ✅ DatabaseReports landing page using MUI PageHeader, StatsRow, SectionCard
+- ✅ DataManagement header, upload, tabs, overview using MUI components
+- ✅ UserManagement fully converted to MUI (PageHeader, StatsRow, StatCard, SearchInput, FilterSelect, TierBadge, StatusChip)
+- ✅ GroupAnalysisDB fully converted to MUI (PageHeader, StatsRow, StatCard, SectionCard, ActionButton, ToggleButtonGroup, TierBadge)
+- ✅ Vite code splitting configured for MUI chunks (~320KB vendor-mui)
+- ✅ IndexedDB for course data caching with 24-hour TTL
+
+### CSS Refactoring (December 2025)
+- ✅ Created `nintex-utilities.css` with Bootstrap-like utility classes
+- ✅ All admin components now use full-width layout (removed max-width constraints)
+- ✅ Utility classes: `d-flex`, `gap-*`, `mb-*`, `text-center`, `opacity-*`, `ntx-spinner`, etc.
+- ✅ Reduced CSS bundle from 170KB to 148KB

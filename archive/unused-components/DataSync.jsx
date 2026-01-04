@@ -240,8 +240,8 @@ function DataSync() {
   if (loading) {
     return (
       <div className="data-sync">
-        <div className="loading">
-          <div className="spinner"></div>
+        <div className="loading d-flex flex-column align-center justify-center gap-4 py-12">
+          <div className="ntx-spinner"></div>
           <span>Loading database status...</span>
         </div>
       </div>
@@ -251,11 +251,11 @@ function DataSync() {
   if (error && !stats) {
     return (
       <div className="data-sync">
-        <div className="error-panel">
-          <h2>⚠️ Database Unavailable</h2>
-          <p>{error}</p>
-          <p className="hint">Make sure the server is running with database support enabled.</p>
-          <button onClick={loadData} className="retry-btn">Retry Connection</button>
+        <div className="error-panel text-center py-12">
+          <h2 className="text-error mb-4">⚠️ Database Unavailable</h2>
+          <p className="mb-2">{error}</p>
+          <p className="hint text-sm opacity-60 mb-5">Make sure the server is running with database support enabled.</p>
+          <button onClick={loadData} className="ntx-btn-primary">Retry Connection</button>
         </div>
       </div>
     );
@@ -263,10 +263,10 @@ function DataSync() {
 
   return (
     <div className="data-sync">
-      <header className="sync-header">
+      <header className="sync-header d-flex justify-between align-center mb-6">
         <h1>📊 Database Sync Management</h1>
-        <div className="header-actions">
-          <label className="auto-refresh">
+        <div className="header-actions d-flex align-center gap-4">
+          <label className="auto-refresh d-flex align-center gap-2 cursor-pointer text-sm">
             <input 
               type="checkbox" 
               checked={autoRefresh} 
@@ -274,45 +274,45 @@ function DataSync() {
             />
             Auto-refresh
           </label>
-          <button onClick={loadData} className="refresh-btn" disabled={loading}>
+          <button onClick={loadData} className="ntx-btn-secondary" disabled={loading}>
             🔄 Refresh
           </button>
         </div>
       </header>
 
       {/* Database Stats */}
-      <section className="stats-section">
-        <h2>📈 Database Statistics</h2>
-        <div className="stats-grid">
-          <div className="stat-card">
+      <section className="stats-section mb-6">
+        <h2 className="text-lg mb-4">📈 Database Statistics</h2>
+        <div className="stats-grid grid gap-4 mb-4">
+          <div className="stat-card text-center">
             <div className="stat-value">{formatNumber(stats?.lmsUsers)}</div>
-            <div className="stat-label">LMS Users</div>
+            <div className="stat-label text-sm opacity-60">LMS Users</div>
           </div>
-          <div className="stat-card">
+          <div className="stat-card text-center">
             <div className="stat-value">{formatNumber(stats?.lmsGroups)}</div>
-            <div className="stat-label">LMS Groups</div>
+            <div className="stat-label text-sm opacity-60">LMS Groups</div>
           </div>
-          <div className="stat-card">
+          <div className="stat-card text-center">
             <div className="stat-value">{formatNumber(stats?.lmsCourses)}</div>
-            <div className="stat-label">Courses</div>
+            <div className="stat-label text-sm opacity-60">Courses</div>
           </div>
-          <div className="stat-card">
+          <div className="stat-card text-center">
             <div className="stat-value">{formatNumber(stats?.partners)}</div>
-            <div className="stat-label">Partners</div>
+            <div className="stat-label text-sm opacity-60">Partners</div>
           </div>
-          <div className="stat-card">
+          <div className="stat-card text-center">
             <div className="stat-value">{formatNumber(stats?.contacts)}</div>
-            <div className="stat-label">Contacts</div>
+            <div className="stat-label text-sm opacity-60">Contacts</div>
           </div>
-          <div className="stat-card">
+          <div className="stat-card text-center">
             <div className="stat-value">{formatNumber(stats?.linkedContacts)}</div>
-            <div className="stat-label">Linked to LMS</div>
+            <div className="stat-label text-sm opacity-60">Linked to LMS</div>
           </div>
         </div>
         {stats?.lastSync && (
-          <div className="last-sync">
-            <span className="label">Last sync:</span>
-            <span className="value">{formatDate(stats.lastSync.completed_at)}</span>
+          <div className="last-sync d-flex align-center gap-3">
+            <span className="label opacity-60">Last sync:</span>
+            <span className="value font-medium">{formatDate(stats.lastSync.completed_at)}</span>
             <span className={`status-badge ${getStatusColor(stats.lastSync.status)}`}>
               {stats.lastSync.status}
             </span>
@@ -322,12 +322,12 @@ function DataSync() {
 
       {/* Current Sync Status - Show when syncing or recently completed */}
       {(syncing || syncStatus?.status === 'running') && (
-        <section className="sync-progress">
-          <h2>🔄 Sync In Progress</h2>
-          <div className="progress-info">
-            <div className="progress-details">
-              <span className="sync-type">Type: <strong>{syncStatus?.type || 'sync'}</strong></span>
-              <span className="sync-stage">Stage: <strong>{syncStatus?.progress?.stage || 'Initializing...'}</strong></span>
+        <section className="sync-progress mb-6">
+          <h2 className="mb-4">🔄 Sync In Progress</h2>
+          <div className="progress-info d-flex flex-column gap-3">
+            <div className="progress-details d-flex gap-5 text-sm">
+              <span className="sync-type opacity-90">Type: <strong className="capitalize">{syncStatus?.type || 'sync'}</strong></span>
+              <span className="sync-stage opacity-90">Stage: <strong className="capitalize">{syncStatus?.progress?.stage || 'Initializing...'}</strong></span>
             </div>
             <div className="progress-bar">
               <div 
@@ -339,13 +339,13 @@ function DataSync() {
                 }}
               ></div>
             </div>
-            <div className="progress-text">
+            <div className="progress-text text-sm text-right opacity-90">
               {syncStatus?.progress?.total > 0 
                 ? `${syncStatus.progress.current} / ${syncStatus.progress.total} records`
                 : 'Processing...'}
             </div>
             {syncStatus?.startedAt && (
-              <div className="sync-started">
+              <div className="sync-started text-xs text-right opacity-80">
                 Started: {formatDate(syncStatus.startedAt)}
               </div>
             )}
@@ -355,75 +355,75 @@ function DataSync() {
 
       {/* Recent Sync Result */}
       {syncStatus?.status === 'completed' && syncStatus?.result && !syncing && (
-        <section className="sync-result">
-          <h2>✅ Sync Completed</h2>
-          <div className="result-summary">
-            <div className="result-item">
-              <span className="result-value">{syncStatus.result.processed || 0}</span>
-              <span className="result-label">Processed</span>
+        <section className="sync-result mb-6">
+          <h2 className="text-lg text-success mb-4">✅ Sync Completed</h2>
+          <div className="result-summary d-flex flex-wrap gap-5 mb-4">
+            <div className="result-item text-center">
+              <span className="result-value d-block">{syncStatus.result.processed || 0}</span>
+              <span className="result-label d-block text-xs opacity-60">Processed</span>
             </div>
-            <div className="result-item success">
-              <span className="result-value">{syncStatus.result.created || 0}</span>
-              <span className="result-label">Created</span>
+            <div className="result-item success text-center">
+              <span className="result-value d-block">{syncStatus.result.created || 0}</span>
+              <span className="result-label d-block text-xs opacity-60">Created</span>
             </div>
-            <div className="result-item info">
-              <span className="result-value">{syncStatus.result.updated || 0}</span>
-              <span className="result-label">Updated</span>
+            <div className="result-item info text-center">
+              <span className="result-value d-block">{syncStatus.result.updated || 0}</span>
+              <span className="result-label d-block text-xs opacity-60">Updated</span>
             </div>
             {syncStatus.result.failed > 0 && (
-              <div className="result-item error">
-                <span className="result-value">{syncStatus.result.failed}</span>
-                <span className="result-label">Failed</span>
+              <div className="result-item error text-center">
+                <span className="result-value d-block">{syncStatus.result.failed}</span>
+                <span className="result-label d-block text-xs opacity-60">Failed</span>
               </div>
             )}
           </div>
-          <button className="dismiss-btn" onClick={() => setSyncStatus(null)}>
+          <button className="ntx-btn-secondary" onClick={() => setSyncStatus(null)}>
             Dismiss
           </button>
         </section>
       )}
 
       {/* Sync Controls */}
-      <section className="sync-controls">
-        <h2>🚀 Sync Actions</h2>
-        <div className="sync-buttons">
-          <div className="sync-group">
-            <h3>Quick Sync (Individual)</h3>
-            <div className="button-row">
+      <section className="sync-controls mb-6">
+        <h2 className="text-lg mb-4">🚀 Sync Actions</h2>
+        <div className="sync-buttons grid gap-5">
+          <div className="sync-group ntx-card">
+            <h3 className="text-base mb-4">Quick Sync (Individual)</h3>
+            <div className="button-row d-flex flex-wrap gap-3">
               <button 
                 onClick={() => startSync('users')} 
                 disabled={syncing}
-                className="sync-btn users"
+                className="sync-btn users flex-1"
               >
                 👥 Sync Users
               </button>
               <button 
                 onClick={() => startSync('groups')} 
                 disabled={syncing}
-                className="sync-btn groups"
+                className="sync-btn groups flex-1"
               >
                 🏢 Sync Groups
               </button>
               <button 
                 onClick={() => startSync('courses')} 
                 disabled={syncing}
-                className="sync-btn courses"
+                className="sync-btn courses flex-1"
               >
                 📚 Sync Courses
               </button>
             </div>
           </div>
           
-          <div className="sync-group full">
-            <h3>Full Sync</h3>
-            <p className="sync-description">
+          <div className="sync-group full ntx-card">
+            <h3 className="text-base mb-4">Full Sync</h3>
+            <p className="sync-description text-sm opacity-70 mb-4">
               Syncs all users, groups, group memberships, courses, course properties, and enrollments from the LMS.
               This may take several minutes.
             </p>
             <button 
               onClick={() => startSync('full')} 
               disabled={syncing}
-              className="sync-btn full"
+              className="sync-btn full w-full"
             >
               {syncing ? '⏳ Syncing...' : '🔄 Run Full Sync'}
             </button>

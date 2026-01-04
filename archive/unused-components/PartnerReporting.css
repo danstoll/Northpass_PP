@@ -220,11 +220,12 @@
   margin-left: auto;
 }
 
-/* Report Tables */
+/* Report Tables - Performance Optimized */
 .report-table {
   width: 100%;
   border-collapse: collapse;
   font-size: var(--font-size-sm);
+  contain: layout style paint;
 }
 
 .report-table th,
@@ -240,6 +241,10 @@
   position: sticky;
   top: 0;
   color: var(--nintex-gray-800);
+}
+
+.report-table tbody tr {
+  contain: layout style paint;
 }
 
 .report-table tbody tr:hover {
@@ -410,13 +415,14 @@
   background: rgba(255, 107, 107, 0.08);
 }
 
-/* Course Names Debug */
+/* Course Names Debug - Optimized */
 .course-names-debug {
   margin-top: var(--space-4);
   padding: var(--space-4);
   background: rgba(255, 255, 255, 0.5);
   border-radius: var(--radius-md);
   border: 1px solid rgba(0, 0, 0, 0.08);
+  contain: content;
 }
 
 .course-names-debug summary {
@@ -432,18 +438,22 @@
   max-height: 300px;
   overflow-y: auto;
   color: var(--nintex-gray-700);
+  will-change: scroll-position;
+  -webkit-overflow-scrolling: touch;
 }
 
 .course-names-debug .course-list li {
   padding: var(--space-1) 0;
   border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  contain: layout style;
 }
 
-/* Progress Cell */
+/* Progress Cell - Performance Optimized */
 .progress-cell {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  contain: layout style;
 }
 
 .progress-bar-mini {
@@ -453,6 +463,8 @@
   min-width: 0;
   max-width: 60px;
   transition: width 0.3s ease;
+  will-change: width;
+  transform: translateZ(0);
 }
 
 /* Certification Categories */
@@ -505,6 +517,8 @@
   height: 100%;
   border-radius: 4px;
   transition: width 0.3s ease;
+  will-change: width;
+  transform: translateZ(0);
 }
 
 .cert-count {
@@ -513,10 +527,13 @@
   font-weight: var(--font-weight-semibold);
 }
 
-/* Partners Table */
+/* Partners Table - Optimized Scrolling */
 .partners-table-container {
   max-height: 500px;
   overflow-y: auto;
+  will-change: scroll-position;
+  -webkit-overflow-scrolling: touch;
+  contain: strict;
 }
 
 .table-note {
@@ -581,11 +598,12 @@
   }
 }
 
-/* Sortable Table Headers */
+/* Sortable Table Headers - Performance Optimized */
 .sortable-header {
   cursor: pointer;
   user-select: none;
   transition: background 0.2s ease;
+  will-change: background;
 }
 
 .sortable-header:hover {
@@ -596,6 +614,10 @@
   margin-left: var(--space-1);
   color: var(--nintex-gray-600);
   font-size: var(--font-size-xs);
+}
+
+.sort-icon.active {
+  color: var(--nintex-orange);
 }
 
 .sortable-header:hover .sort-icon {
@@ -670,6 +692,8 @@
   background: linear-gradient(90deg, var(--nintex-orange), #ff9800);
   border-radius: 4px;
   transition: width 0.3s ease;
+  will-change: width;
+  transform: translateZ(0);
 }
 
 .progress-text {
@@ -687,6 +711,7 @@
   animation: spin 1s linear infinite;
   margin-right: var(--space-2);
   vertical-align: middle;
+  will-change: transform;
 }
 
 @keyframes spin {

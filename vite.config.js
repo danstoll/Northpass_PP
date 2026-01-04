@@ -29,8 +29,40 @@ const INVALID_COURSE_IDS = new Set([
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // MUI + Emotion bundled together to avoid circular dependency issues
+          'vendor-mui': [
+            '@mui/material', 
+            '@mui/icons-material',
+            '@emotion/react', 
+            '@emotion/styled'
+          ],
+        },
+      },
+    },
+  },
   server: {
     proxy: {
+      // Proxy for database API (MariaDB routes)
+      '/api/db': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+        configure: (proxy, _options) => {
+          proxy.on('error', (err, _req, _res) => {
+            console.log('DB API proxy error:', err);
+          });
+          proxy.on('proxyReq', (proxyReq, req, _res) => {
+            console.log('DB API Request:', req.method, req.url);
+          });
+          proxy.on('proxyRes', (proxyRes, req, _res) => {
+            console.log('DB API Response:', proxyRes.statusCode, req.url);
+          });
+        },
+      },
+      // Proxy for Northpass API
       '/api/northpass': {
         target: 'https://api.northpass.com',
         changeOrigin: true,

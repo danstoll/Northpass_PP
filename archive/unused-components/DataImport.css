@@ -10,7 +10,7 @@
 }
 
 .data-import-header h3 {
-  color: #ffffff;
+  color: var(--admin-text-primary);
   margin: 0 0 8px 0;
   font-size: 1.25rem;
 }
@@ -49,13 +49,13 @@
 
 .status-badge.active {
   background: rgba(76, 175, 80, 0.2);
-  color: #4caf50;
+  color: var(--admin-success);
 }
 
 .clear-btn {
   background: transparent;
   border: 1px solid rgba(244, 67, 54, 0.5);
-  color: #f44336;
+  color: var(--admin-error);
   padding: 6px 12px;
   border-radius: 6px;
   font-size: 0.8rem;
@@ -64,8 +64,8 @@
 }
 
 .clear-btn:hover {
-  background: rgba(244, 67, 54, 0.1);
-  border-color: #f44336;
+  background: var(--admin-error-bg);
+  border-color: var(--admin-error);
 }
 
 .status-details {
@@ -89,7 +89,7 @@
 
 .status-item .value {
   font-size: 0.95rem;
-  color: #ffffff;
+  color: var(--admin-text-primary);
   font-weight: 500;
 }
 
@@ -185,7 +185,7 @@
 }
 
 .drop-text strong {
-  color: #ffffff;
+  color: var(--admin-text-primary);
   font-size: 1.1rem;
 }
 
@@ -244,7 +244,7 @@
 
 .error-text {
   flex: 1;
-  color: #f44336;
+  color: var(--admin-error);
   font-size: 0.9rem;
 }
 
@@ -258,7 +258,7 @@
 }
 
 .dismiss-btn:hover {
-  color: #ffffff;
+  color: var(--admin-text-primary);
 }
 
 /* Format Info */
@@ -314,12 +314,12 @@
 }
 
 .status-icon {
-  color: #4caf50;
+  color: var(--admin-success);
   font-weight: bold;
 }
 
 .status-text {
-  color: #ffffff;
+  color: var(--admin-text-primary);
   font-weight: 500;
 }
 

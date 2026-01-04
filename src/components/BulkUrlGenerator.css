@@ -1,0 +1,57 @@
+/* BulkUrlGenerator.css */
+/* Uses CSS variables from nintex-variables.css */
+
+.bulk-url-generator {
+  min-height: 100%;
+}
+
+/* Ensure proper card styling */
+.bulk-url-generator .MuiCard-root {
+  background: var(--admin-bg-card);
+  border: 1px solid var(--admin-border-default);
+}
+
+/* Table styling */
+.bulk-url-generator .MuiTableHead-root .MuiTableCell-root {
+  background: var(--admin-bg-elevated);
+  font-weight: 600;
+  color: var(--admin-text-primary);
+  border-bottom: 2px solid var(--admin-border-default);
+}
+
+.bulk-url-generator .MuiTableBody-root .MuiTableCell-root {
+  color: var(--admin-text-secondary);
+  border-bottom: 1px solid var(--admin-border-light);
+}
+
+/* Hover effect on rows */
+.bulk-url-generator .MuiTableRow-root:hover {
+  background-color: var(--admin-bg-hover) !important;
+}
+
+/* Selected row */
+.bulk-url-generator .MuiTableRow-root.Mui-selected {
+  background-color: rgba(107, 76, 154, 0.08) !important;
+}
+
+/* Copy button animation */
+.bulk-url-generator .copy-success {
+  animation: copyPulse 0.3s ease-out;
+}
+
+@keyframes copyPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .bulk-url-generator .MuiTableCell-root {
+    padding: 8px 6px;
+  }
+  
+  .bulk-url-generator .MuiChip-root {
+    font-size: 0.7rem;
+  }
+}

@@ -1,116 +1,183 @@
 # Nintex Partner Portal - Northpass Integration
 
-A React-based certification tracking application for Nintex partners that interfaces with the Northpass LMS API. The application displays company-wide certification statistics with complete Nintex branding and partner tier qualification tracking.
+A comprehensive React-based certification tracking and partner management application that interfaces with the Northpass LMS API. Features a full MariaDB backend, automated LMS synchronization with incremental sync, and extensive admin tools.
 
-## Features
-
-### 👥 Partner Dashboard
-- **🎨 Nintex Branding**: Complete design system with corporate colors and styling
-- **📊 Real-time NPCU Tracking**: Live calculation excluding expired certifications  
-- **🏆 Certification Monitoring**: Status tracking with expiry date management
-- **📅 Expiry Management**: Business rule compliance - expired certs don't count towards totals
-- **📈 Partner Tier Qualification**: Automatic tier status calculation (Premier/Select/Registered/Certified)
-- **🔄 Collapsible Categories**: Product-based certification grouping (Nintex Workflow, Automation Cloud, etc.)
-
-### 🎓 Customer Dashboard
-- **👥 Staff Training Overview**: Individual employee training records and progress
-- **📚 Certification Tracking**: Course completion and expiry monitoring without NPCU complexity
-- **⚠️ Training Alerts**: Expired and expiring certification notifications
-- **📊 Training Statistics**: Staff participation rates and completion metrics
-- **🔍 Flexible Lookup**: Find companies by exact name or company ID
-
-### 🔒 Universal Features
-- **🔒 Secure URL Encoding**: Hide company and tier parameters from end users
-- **🔧 Admin Panel**: Bulk URL generation for both partners and customers
-- **✨ Professional UI**: Welcome screens with integrated URL generators
-- **🌐 Dual Format Support**: Works with both encoded and regular URL parameters
-
-## Tech Stack
-
-- **React 18** - UI framework
-- **Vite** - Build tool and development server
-- **Axios** - HTTP client for API requests
-- **CSS3** - Modern styling with gradients and animations
-- **Northpass API** - Learning management system integration
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js (version 16 or higher)
-- npm or yarn package manager
-- Northpass LMS account with API access
-
-### Installation
-
-1. Clone the repository:
-```bash
-git clone <repository-url>
-cd northpass-pp
-```
-
-2. Install dependencies:
-```bash
-npm install
-```
-
-3. Configure API credentials in `src/services/northpassApi.js`:
-```javascript
-const API_KEY = 'your-northpass-api-key-here';
-```
-
-4. Start the development server:
-```bash
-npm run dev
-```
-
-5. Open your browser to `http://localhost:5173`
-
-## Production Deployment
+## 🚀 Production
 
 - **Live URL**: `http://20.125.24.28:3000`
 - **Server**: Ubuntu 22.04.5 LTS with PM2 process management
-- **Process Name**: `northpass-portal`
-- **SSH Access**: `ssh NTXPTRAdmin@20.125.24.28`
+- **Database**: MariaDB 11.6.2 at `20.29.25.238:31337`
 
-### Quick Deployment
+## ✨ Features
 
-Run the PowerShell deployment script:
+### 👥 Partner Dashboard
+- **🎨 Nintex Branding**: MUI-based design system with corporate colors (#FF6B35 orange, #6B4C9A purple)
+- **📊 Real-time NPCU Tracking**: Live calculation excluding expired certifications  
+- **🏆 Certification Monitoring**: Status tracking with expiry date management
+- **📅 Expiry Management**: Expired certs don't count towards NPCU totals
+- **📈 Partner Tier Qualification**: Automatic tier status (Premier/Select/Registered/Certified)
+- **🔄 Collapsible Categories**: Product-based certification grouping
+
+### 🎓 Customer Dashboard
+- **👥 Staff Training Overview**: Individual employee training records
+- **📚 Certification Tracking**: Course completion and expiry monitoring
+- **⚠️ Training Alerts**: Expired and expiring certification notifications
+- **📊 Training Statistics**: Staff participation rates and completion metrics
+
+### 🔧 Admin Tools (`/admin`)
+| Tool | Path | Description |
+|------|------|-------------|
+| **Data Management** | `/admin/data` | Import partner/contact Excel files |
+| **LMS Sync Dashboard** | `/admin/sync` | Unified sync control with incremental sync |
+| **Database Reports** | `/admin/dbreports` | 10 on-demand analytics reports |
+| **Owner Report** | `/admin/owners` | Account owner certification tracking |
+| **User Management** | `/admin/users` | 5-tab user/group management interface |
+| **URL Generator** | `/admin` | Generate partner portal URLs |
+| **Bulk URLs** | `/admin/bulk-urls` | Batch generate portal URLs |
+
+### 💾 Database & Sync
+- **MariaDB Integration**: Full partner, contact, and LMS data storage
+- **🔄 Incremental Sync**: 96-99% reduction in API calls (see table below)
+- **⏰ Scheduled Tasks**: 4 automated task types with database-backed scheduler
+- **📊 Pagination**: 1000-record chunks for optimal performance
+
+#### Incremental Sync Performance
+
+| Sync Type | Full Sync | Incremental | Reduction |
+|-----------|-----------|-------------|-----------|
+| Users | ~32,844 | ~100-200 | **99%+** |
+| Groups | ~1,400 | ~20-50 | **96%+** |
+| Courses | ~450 | 0-10 | **98%+** |
+
+## 🛠️ Tech Stack
+
+- **Frontend**: React 18 + Vite + MUI (Material-UI) v5
+- **Backend**: Node.js/Express with API proxy
+- **Database**: MariaDB 11.6.2
+- **Deployment**: PM2 on Ubuntu 22.04
+- **API**: Northpass LMS with incremental sync support
+
+## 📦 Quick Start
+
+### Prerequisites
+- Node.js 16+
+- MariaDB 11.x (for database features)
+- SSH access to production server
+
+### Installation
+
+```bash
+# Clone repository
+git clone <repository-url>
+cd northpass-pp
+
+# Install dependencies
+npm install
+
+# Start development (two terminals required)
+# Terminal 1: Express backend
+node server-with-proxy.cjs
+
+# Terminal 2: Vite dev server
+npm run dev
+
+# Access at http://localhost:5173
+```
+
+### Deployment
+
 ```powershell
+# Full deployment to production
 .\deploy.ps1
 ```
 
-This script will:
-1. Build the application (`npm run build`)
-2. Upload dist folder to the server
-3. Upload server configuration files
-4. Install dependencies
-5. Restart the PM2 process
-6. Verify deployment with cache header checks
+The script builds, uploads, installs dependencies, and restarts PM2.
 
-### Manual Deployment Steps
+## 🔗 URL Parameters
 
-```powershell
-# 1. Build
-npm run build
+### Partner Dashboard (Default Route)
+```
+# Regular format
+http://20.125.24.28:3000/?group=CompanyName&tier=Premier
 
-# 2. Upload files
-scp -r dist/* NTXPTRAdmin@20.125.24.28:/home/NTXPTRAdmin/northpass-portal/dist/
-scp server-with-proxy.js NTXPTRAdmin@20.125.24.28:/home/NTXPTRAdmin/northpass-portal/
-scp server-package.json NTXPTRAdmin@20.125.24.28:/home/NTXPTRAdmin/northpass-portal/package.json
-
-# 3. Restart server
-ssh NTXPTRAdmin@20.125.24.28 "cd /home/NTXPTRAdmin/northpass-portal && npm install && pm2 restart northpass-portal"
+# Encoded format (recommended)
+http://20.125.24.28:3000/?data=eyJjb21wYW55IjoiQ29tcGFueU5hbWUiLCJ0aWVyIjoiUHJlbWllciJ9
 ```
 
-### Cache Configuration
+### Customer Dashboard
+```
+# Regular format
+http://20.125.24.28:3000/customer?company=CompanyName
 
-The server implements optimal caching:
-- **index.html**: `no-cache, no-store, must-revalidate` (always fresh for new deployments)
-- **JS/CSS bundles**: `public, max-age=31536000, immutable` (1 year, hashed filenames)
-- **Images/fonts**: `public, max-age=604800` (1 week)
+# Encoded format
+http://20.125.24.28:3000/customer?data=eyJjb21wYW55IjoiQ29tcGFueU5hbWUifQ
+```
 
-### Server Management
+### Business Logic
+- **Partner Tiers**: Premier (20 NPCU), Select (10 NPCU), Registered (5 NPCU)
+- **Expiry Rules**: Expired certifications DO NOT count towards NPCU totals
+- **Product Mapping**: Nintex Workflow = Nintex Automation Cloud
+
+## 📚 API Endpoints
+
+### Northpass Proxy (`/api/northpass`)
+- `GET /v2/groups` - Company groups
+- `GET /v2/people` - Users and transcripts
+- `GET /v2/courses` - Course catalog
+- `GET /v2/properties/courses/{id}` - NPCU values
+
+### Database API (`/api/db`)
+```bash
+# Sync operations (incremental by default)
+POST /api/db/sync/users         # Sync users (incremental)
+POST /api/db/sync/users?mode=full  # Force full sync
+POST /api/db/sync/groups        # Sync groups
+POST /api/db/sync/courses       # Sync courses
+
+# Reports
+GET /api/db/reports/overview
+GET /api/db/reports/user-certifications
+GET /api/db/reports/contacts-not-in-lms
+
+# Partner operations
+GET /api/db/partners
+POST /api/db/partners/import
+GET /api/db/contacts
+POST /api/db/contacts/import
+```
+
+## 🗂️ Project Structure
+
+```
+├── server-with-proxy.cjs    # Express server with API proxy
+├── server/
+│   ├── dbRoutes.cjs         # Database API routes
+│   └── db/
+│       ├── connection.cjs       # MariaDB connection pool
+│       ├── schema.cjs           # Table definitions
+│       ├── lmsSyncService.cjs   # LMS sync with incremental support
+│       ├── taskScheduler.cjs    # Scheduled task execution
+│       └── partnerService.cjs   # Partner/contact operations
+├── src/
+│   ├── components/
+│   │   ├── CompanyWidget.jsx    # Partner dashboard
+│   │   ├── CustomerDashboard.jsx # Customer view
+│   │   ├── AdminHub.jsx         # Admin login/hub
+│   │   ├── DataManagement.jsx   # Data import UI
+│   │   ├── SyncDashboard.jsx    # Sync control center
+│   │   ├── DatabaseReports.jsx  # Analytics reports
+│   │   └── UserManagement.jsx   # User/group tools
+│   ├── services/
+│   │   └── northpassApi.js      # API client
+│   ├── theme/
+│   │   └── nintexTheme.js       # MUI theme config
+│   └── styles/
+│       ├── nintex-variables.css # CSS variables
+│       └── nintex-utilities.css # Utility classes
+└── deploy.ps1               # Deployment script
+```
+
+## 🔧 Server Management
 
 ```bash
 # View logs
@@ -119,194 +186,31 @@ ssh NTXPTRAdmin@20.125.24.28 "pm2 logs northpass-portal"
 # Restart
 ssh NTXPTRAdmin@20.125.24.28 "pm2 restart northpass-portal"
 
-# Stop
-ssh NTXPTRAdmin@20.125.24.28 "pm2 stop northpass-portal"
-
 # Status
 ssh NTXPTRAdmin@20.125.24.28 "pm2 status"
 ```
 
-## API Configuration
+## 🐛 Troubleshooting
 
-The application integrates with Northpass API via server-side proxy to resolve CORS:
+| Issue | Solution |
+|-------|----------|
+| ECONNREFUSED on /api/db | Start Express: `node server-with-proxy.cjs` |
+| Database connection failed | Check MariaDB at 20.29.25.238:31337 |
+| Cache issues | Bump version in cacheService.js or Ctrl+Shift+R |
+| Sync slow | Use incremental sync (default) instead of full |
 
-- **Groups API**: `/v2/groups` - Find company groups by name
-- **People API**: `/v2/people` - User search and transcript data  
-- **Courses API**: `/v2/courses` - Course information and completions
-- **Properties API**: `/v2/properties/courses/{courseId}` - NPCU values
+## 📄 Documentation
 
-### Authentication & CORS
-- **API Key**: `wcU0QRpN9jnPvXEc5KXMiuVWk` (X-Api-Key header)
-- **Proxy Route**: `/api/northpass` → `https://api.northpass.com`
-- **CORS**: Resolved via `http-proxy-middleware` server-side proxy
+- **Full Details**: See [copilot-instructions.md](.github/copilot-instructions.md)
+- **Northpass API**: https://developers.northpass.com/
 
-## Usage
+## 📝 License
 
-### URL Parameters
+MIT License
 
-The application supports multiple dashboard types with both regular and encoded URL parameters:
-
-#### Partner Dashboard (Default Route)
-**Regular Format (Legacy Support):**
-- **Company**: `?group=CompanyName` or `?company=CompanyName` (exact match required)  
-- **Tier**: `?tier=Premier|Select|Registered|Certified`
-
-**Example URLs:**
-```
-http://20.125.24.28:3000/?group=Acme Corporation&tier=Premier
-http://20.125.24.28:3000/?company=Nintex Partner Portal Americas&tier=Certified
-```
-
-**Encoded Format (Recommended):**
-```
-http://20.125.24.28:3000/?data=eyJjb21wYW55IjoiQWNtZSBDb3Jwb3JhdGlvbiIsInRpZXIiOiJQcmVtaWVyIn0
-```
-
-#### Customer Dashboard (/customer route)
-**Regular Format:**
-- **Company**: `?company=CompanyName` (exact match required)
-- **Company ID**: `?companyId=company-id` (direct ID lookup)
-
-**Example URLs:**
-```
-http://20.125.24.28:3000/customer?company=Premier Tech
-http://20.125.24.28:3000/customer?companyId=pt-001
-```
-
-**Encoded Format (Recommended):**
-```
-http://20.125.24.28:3000/customer?data=eyJjb21wYW55IjoiUHJlbWllciBUZWNoIiwidHlwZSI6ImN1c3RvbWVyIn0
-```
-
-#### URL Generation Tools
-
-**Interactive Generator**: Visit the homepage without parameters to access the built-in URL generator.
-
-**Admin Panel**: Access `/admin` for bulk URL generation and CSV export.
-
-**Programmatic Generation**:
-```javascript
-import { generateEncodedUrl } from './src/utils/urlEncoder.js';
-
-const encodedUrl = generateEncodedUrl('http://20.125.24.28:3000', {
-  company: 'Acme Corporation',
-  tier: 'Premier'
-});
-```
-
-#### Benefits of Encoded URLs
-- 🔒 Company names hidden from URL bar
-- 🛡️ Partner tiers not visible to end users  
-- 📱 Shorter, cleaner URLs
-- 🔄 Backward compatible with regular format
-- 🌐 Safe handling of special characters
-
-### No Parameters
-- Shows professional welcome screen with usage instructions
-- Provides URL generator for creating encoded links
-- No API calls made - no resource consumption without explicit parameters
-
-### Business Logic
-- **Partner Tiers**: Premier (20 NPCU), Select (10 NPCU), Registered (5 NPCU), Certified (varies)
-- **Expiry Rules**: Expired certifications DO NOT count towards NPCU totals  
-- **Product Mapping**: Nintex Workflow = Nintex Automation Cloud (equivalent products)
-
-## Development
-
-### Project Structure
-
-```
-src/
-├── components/
-│   ├── CompanyWidget.jsx    # Main company certification dashboard
-│   ├── CompanyWidget.css    # Nintex branded styling
-│   ├── UserWidget.jsx       # Individual user certification widget
-│   ├── UserWidget.css       # User widget styles
-│   └── NintexButton.jsx     # Branded button component
-├── services/
-│   └── northpassApi.js      # API integration with rate limiting
-├── App.jsx                  # Main application with parameter handling
-└── App.css                  # Global Nintex design system
-```
-
-### Available Scripts
-
-- `npm run dev` - Start development server
-- `npm run build` - Build for production
-- `npm run preview` - Preview production build
-- `npm run lint` - Run ESLint
-
-### Customization
-
-The widget is designed to be easily customizable:
-
-1. **Styling**: Modify CSS files to match your brand colors and fonts
-2. **API Endpoints**: Update `northpassApi.js` to use different endpoints
-3. **Data Display**: Customize components to show additional fields
-4. **Responsive Design**: Adjust breakpoints in CSS for different screen sizes
-
-## Error Handling
-
-The widget includes comprehensive error handling:
-
-- API request failures with retry mechanisms
-- Loading states with spinners
-- User-friendly error messages
-- Graceful degradation when data is unavailable
-
-## Security Considerations
-
-- API keys should be stored securely (consider using environment variables)
-- Implement proper CORS settings for production deployment
-- Validate all API responses before displaying data
-- Consider implementing rate limiting for API requests
-
-## Browser Support
-
-- Chrome (latest)
-- Firefox (latest)
-- Safari (latest)
-- Edge (latest)
-
-## Contributing
+## 🤝 Contributing
 
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License.
-
-## Support
-
-For questions or issues:
-- Check the Northpass API documentation: https://developers.northpass.com/
-- Review the troubleshooting section below
-
-## Troubleshooting
-
-### Common Issues
-
-1. **API Authentication Errors**
-   - Verify API key is correct
-   - Check API key permissions in Northpass admin
-
-2. **CORS Errors**
-   - Configure CORS settings in your hosting environment
-   - Use a proxy server for development if needed
-
-3. **Data Not Loading**
-   - Check browser console for API errors
-   - Verify user has appropriate permissions in Northpass
-   - Test API endpoints directly with tools like Postman
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+4. Submit a pull request

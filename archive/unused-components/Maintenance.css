@@ -1,0 +1,14 @@
+﻿/* Maintenance Component - Minimal CSS (MUI handles most styling) */
+
+/* Ensure proper table text colors in light theme */
+.MuiTableCell-root {
+  color: var(--admin-text-primary) !important;
+}
+
+.MuiTableCell-head {
+  background: #f5f7fa !important;
+  font-weight: 600 !important;
+  color: var(--admin-text-primary) !important;
+}
+
+

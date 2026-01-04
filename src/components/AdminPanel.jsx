@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { batchGenerateUrls, downloadUrlCsv, validateCompanyData } from '../utils/adminUrlGenerator';
 import { generateCustomerUrl, validateCustomerParams } from '../utils/customerUrlEncoder';
+import { Box, ToggleButton, ToggleButtonGroup } from '@mui/material';
+import { Link as LinkIcon } from '@mui/icons-material';
+import { PageHeader, PageContent, SectionCard } from './ui/NintexUI';
 import './AdminPanel.css';
 
 const AdminPanel = () => {
@@ -137,28 +140,32 @@ Enterprise Corp, ent-001
 Tech Partners LLC, tp-123`;
 
   return (
-    <div className="admin-panel">
-      <div className="admin-header">
-        <h1>🔗 Bulk URL Generator</h1>
-        <p>Generate secure URLs for multiple companies</p>
-      </div>
+    <PageContent>
+      {/* Header */}
+      <PageHeader 
+        icon={<LinkIcon />}
+        title="Bulk URL Generator"
+        subtitle="Generate secure URLs for multiple companies"
+      />
 
-      <div className="tab-selector">
-        <button 
-          className={`tab-button ${activeTab === 'partner' ? 'active' : ''}`}
-          onClick={() => setActiveTab('partner')}
+      {/* Tab Selector */}
+      <Box sx={{ display: 'flex', justifyContent: 'flex-start', mb: 3 }}>
+        <ToggleButtonGroup
+          value={activeTab}
+          exclusive
+          onChange={(e, val) => val && setActiveTab(val)}
+          size="medium"
         >
-          🏆 Partner URLs
-        </button>
-        <button 
-          className={`tab-button ${activeTab === 'customer' ? 'active' : ''}`}
-          onClick={() => setActiveTab('customer')}
-        >
-          🎓 Customer URLs
-        </button>
-      </div>
+          <ToggleButton value="partner" sx={{ px: 3 }}>
+            🏆 Partner URLs
+          </ToggleButton>
+          <ToggleButton value="customer" sx={{ px: 3 }}>
+            🎓 Customer URLs
+          </ToggleButton>
+        </ToggleButtonGroup>
+      </Box>
 
-      <div className="admin-content">
+      <div className="admin-panel-content">
         <div className="input-section">
           <h3>{activeTab === 'partner' ? 'Partner Company Data' : 'Customer Company Data'}</h3>
           <p>
@@ -310,7 +317,7 @@ Enterprise Corp, ent-001`}
           )}
         </div>
       </div>
-    </div>
+    </PageContent>
   );
 };
 
