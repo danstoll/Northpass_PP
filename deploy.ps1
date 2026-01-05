@@ -62,7 +62,7 @@ function Write-Warn { param($msg) Write-Host "[WARN] $msg" -ForegroundColor Yell
 Write-Host ""
 Write-Host "=================================================================" -ForegroundColor Magenta
 Write-Host "   Nintex Partner Portal - Production Deployment" -ForegroundColor White
-Write-Host "   Target: http://$($Config.SSHHost):$($Config.Port)" -ForegroundColor Gray
+Write-Host "   Target: https://ptrlrndb.prod.ntxgallery.com" -ForegroundColor Gray
 Write-Host "=================================================================" -ForegroundColor Magenta
 
 # Step 1: Bump cache version (forces client browsers to clear cache)
@@ -231,7 +231,7 @@ Write-Host "=================================================================" -
 Write-Host "   Deployment Complete!" -ForegroundColor Green
 Write-Host "=================================================================" -ForegroundColor Magenta
 Write-Host ""
-Write-Host "   Production URL: " -NoNewline; Write-Host "http://$($Config.SSHHost):$($Config.Port)" -ForegroundColor Cyan
+Write-Host "   Production URL: " -NoNewline; Write-Host "https://ptrlrndb.prod.ntxgallery.com" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "   Management Commands:" -ForegroundColor Gray
 Write-Host "      ssh $($Config.SSHUser)@$($Config.SSHHost) `"pm2 logs $($Config.ProcessName)`"" -ForegroundColor DarkGray

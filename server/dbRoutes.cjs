@@ -9,6 +9,24 @@ const express = require('express');
 const API_BASE = 'https://api.northpass.com';
 const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
 
+// Import WebSocket emitters (may not be available during module load)
+let emitSyncProgress, emitSyncComplete, emitSyncError;
+function initWebSocketEmitters() {
+  try {
+    const server = require('../server-with-proxy.cjs');
+    emitSyncProgress = server.emitSyncProgress || (() => {});
+    emitSyncComplete = server.emitSyncComplete || (() => {});
+    emitSyncError = server.emitSyncError || (() => {});
+  } catch (e) {
+    // Running standalone or during init, create no-op functions
+    emitSyncProgress = () => {};
+    emitSyncComplete = () => {};
+    emitSyncError = () => {};
+  }
+}
+// Initialize immediately (will be no-ops initially, re-init later)
+initWebSocketEmitters();
+
 // Simple in-memory cache for expensive reports
 const reportCache = {
   overview: { data: null, timestamp: 0 },
@@ -43,6 +61,8 @@ const {
   syncCoursesIncremental,
   syncCourseProperties,
   syncGroupMembers,
+  syncEnrollments,
+  syncEnrollmentsIncremental,
   linkContactsToLmsUsers,
   getLastSyncStatus, 
   getSyncHistory 
@@ -107,6 +127,19 @@ const {
   getLmsUsersNotInCrm
 } = require('./db/reportingService.cjs');
 const {
+  getUserRegistrationTrends,
+  getEnrollmentTrends,
+  getCertificationTrends,
+  getCoursePopularityTrends,
+  getComplianceTrends,
+  getRegionalTrends,
+  getKpiSummary,
+  getWeeklySummary,
+  getYtdComparison,
+  getFullTrendReport,
+  getOwnerTrends
+} = require('./db/trendService.cjs');
+const {
   login,
   logout,
   validateSession,
@@ -156,9 +189,9 @@ async function createSyncLog(syncType) {
 }
 
 /**
- * Helper to update a sync log entry
+ * Helper to update a sync log entry and emit WebSocket event
  */
-async function updateSyncLog(logId, status, stats, error = null) {
+async function updateSyncLog(logId, status, stats, error = null, syncType = 'unknown') {
   await query(
     `UPDATE sync_logs SET 
       status = ?, 
@@ -181,6 +214,17 @@ async function updateSyncLog(logId, status, stats, error = null) {
       logId
     ]
   );
+  
+  // Emit WebSocket event for real-time updates
+  if (status === 'completed') {
+    emitSyncComplete(syncType, {
+      logId,
+      ...stats,
+      timestamp: new Date().toISOString()
+    });
+  } else if (status === 'failed') {
+    emitSyncError(syncType, error || 'Sync failed');
+  }
 }
 
 /**
@@ -316,11 +360,13 @@ router.post('/sync/users', async (req, res) => {
     const syncFn = isIncremental ? syncUsersIncremental : syncUsers;
     const result = await syncFn(logId, (stage, current, total) => {
       currentSync.progress = { stage, current, total };
+      // Emit WebSocket progress
+      emitSyncProgress('users', { stage, current, total, percent: Math.round((current / total) * 100) });
     });
-    await updateSyncLog(logId, 'completed', result);
+    await updateSyncLog(logId, 'completed', result, null, 'users');
     currentSync = null;
   } catch (error) {
-    await updateSyncLog(logId, 'failed', {}, error.message);
+    await updateSyncLog(logId, 'failed', {}, error.message, 'users');
     currentSync = null;
     console.error('User sync failed:', error.message);
   }
@@ -362,11 +408,12 @@ router.post('/sync/groups', async (req, res) => {
     const syncFn = isIncremental ? syncGroupsIncremental : syncGroups;
     const result = await syncFn(logId, (stage, current, total) => {
       currentSync.progress = { stage, current, total };
+      emitSyncProgress('groups', { stage, current, total, percent: Math.round((current / total) * 100) });
     });
-    await updateSyncLog(logId, 'completed', result);
+    await updateSyncLog(logId, 'completed', result, null, 'groups');
     currentSync = null;
   } catch (error) {
-    await updateSyncLog(logId, 'failed', {}, error.message);
+    await updateSyncLog(logId, 'failed', {}, error.message, 'groups');
     currentSync = null;
     console.error('Group sync failed:', error.message);
   }
@@ -408,11 +455,12 @@ router.post('/sync/courses', async (req, res) => {
     const syncFn = isIncremental ? syncCoursesIncremental : syncCourses;
     const result = await syncFn(logId, (stage, current, total) => {
       currentSync.progress = { stage, current, total };
+      emitSyncProgress('courses', { stage, current, total, percent: Math.round((current / total) * 100) });
     });
-    await updateSyncLog(logId, 'completed', result);
+    await updateSyncLog(logId, 'completed', result, null, 'courses');
     currentSync = null;
   } catch (error) {
-    await updateSyncLog(logId, 'failed', {}, error.message);
+    await updateSyncLog(logId, 'failed', {}, error.message, 'courses');
     currentSync = null;
     console.error('Course sync failed:', error.message);
   }
@@ -444,11 +492,12 @@ router.post('/sync/course-properties', async (req, res) => {
   try {
     const result = await syncCourseProperties(logId, (stage, current, total) => {
       currentSync.progress = { stage, current, total };
+      emitSyncProgress('course-properties', { stage, current, total, percent: Math.round((current / total) * 100) });
     });
-    await updateSyncLog(logId, 'completed', result);
+    await updateSyncLog(logId, 'completed', result, null, 'course-properties');
     currentSync = null;
   } catch (error) {
-    await updateSyncLog(logId, 'failed', {}, error.message);
+    await updateSyncLog(logId, 'failed', {}, error.message, 'course-properties');
     currentSync = null;
     console.error('Course properties sync failed:', error.message);
   }
@@ -480,11 +529,12 @@ router.post('/sync/group-members', async (req, res) => {
   try {
     const result = await syncGroupMembers(logId, (stage, current, total) => {
       currentSync.progress = { stage, current, total };
+      emitSyncProgress('group-members', { stage, current, total, percent: Math.round((current / total) * 100) });
     });
-    await updateSyncLog(logId, 'completed', result);
+    await updateSyncLog(logId, 'completed', result, null, 'group-members');
     currentSync = null;
   } catch (error) {
-    await updateSyncLog(logId, 'failed', {}, error.message);
+    await updateSyncLog(logId, 'failed', {}, error.message, 'group-members');
     currentSync = null;
     console.error('Group members sync failed:', error.message);
   }
@@ -581,7 +631,57 @@ router.post('/sync/incremental', async (req, res) => {
   }
 });
 
-// Run full enrollment sync (all users)
+// Run incremental enrollment sync (only users changed since last sync)
+router.post('/sync/enrollments', async (req, res) => {
+  clearStaleSyncLock(); // Auto-clear if stale
+  if (currentSync) {
+    return res.status(409).json({ 
+      error: 'Sync already in progress', 
+      currentSync,
+      hint: 'POST /api/db/sync/reset to force clear the lock'
+    });
+  }
+
+  // Check for mode (default: incremental)
+  const mode = req.body?.mode || req.query?.mode || 'incremental';
+  const isIncremental = mode === 'incremental';
+  const maxAgeDays = parseInt(req.body?.maxAgeDays || req.query?.maxAgeDays || '7');
+
+  currentSync = {
+    type: 'enrollments',
+    mode,
+    status: 'running',
+    startedAt: new Date().toISOString(),
+    progress: { stage: 'starting', current: 0, total: 0 }
+  };
+  const logId = await createSyncLog('enrollments');
+
+  res.json({ 
+    success: true,
+    message: `Enrollment sync started in background (${mode} mode)`,
+    mode,
+    maxAgeDays: isIncremental ? maxAgeDays : 'N/A',
+    logId,
+    status: 'running'
+  });
+
+  try {
+    const syncFn = isIncremental ? syncEnrollmentsIncremental : syncEnrollments;
+    const result = await syncFn(logId, (stage, current, total) => {
+      currentSync.progress = { stage, current, total };
+      emitSyncProgress('enrollments', { stage, current, total, percent: Math.round((current / total) * 100) });
+    }, isIncremental ? { maxAgeDays } : undefined);
+    
+    await updateSyncLog(logId, 'completed', result, null, 'enrollments');
+    currentSync = null;
+  } catch (error) {
+    await updateSyncLog(logId, 'failed', {}, error.message, 'enrollments');
+    currentSync = null;
+    console.error('Enrollment sync failed:', error.message);
+  }
+});
+
+// Run full enrollment sync (all users) - LEGACY endpoint
 router.post('/sync/full-enrollments', async (req, res) => {
   clearStaleSyncLock(); // Auto-clear if stale
   if (currentSync) {
@@ -2924,7 +3024,7 @@ router.get('/reports/partner-npcu', async (req, res) => {
   try {
     const forceRefresh = req.query.refresh === 'true';
     if (!forceRefresh && isCacheValid('partner-npcu')) {
-      return res.json({ ...reportCache['partner-npcu'].data, cached: true, cachedAt: new Date(reportCache['partner-npcu'].timestamp).toISOString() });
+      return res.json(reportCache['partner-npcu'].data);
     }
     const report = await query(`
       SELECT 
@@ -2945,7 +3045,7 @@ router.get('/reports/partner-npcu', async (req, res) => {
       ORDER BY total_npcu DESC
     `);
     setCache('partner-npcu', report);
-    res.json({ ...report, cached: false });
+    res.json(report);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -2955,15 +3055,24 @@ router.get('/reports/certification-gaps', async (req, res) => {
   try {
     const forceRefresh = req.query.refresh === 'true';
     if (!forceRefresh && isCacheValid('certification-gaps')) {
-      return res.json({ ...reportCache['certification-gaps'].data, cached: true, cachedAt: new Date(reportCache['certification-gaps'].timestamp).toISOString() });
+      return res.json(reportCache['certification-gaps'].data);
     }
     const { tier } = req.query;
-    const tierRequirements = {
-      'Premier': 20,
-      'Select': 10,
-      'Registered': 5,
-      'Certified': 5
-    };
+    
+    // Fetch tier requirements from database (partner_tiers table)
+    const tiers = await query('SELECT name, npcu_required FROM partner_tiers WHERE is_active = TRUE');
+    const tierRequirements = {};
+    tiers.forEach(t => {
+      tierRequirements[t.name] = t.npcu_required || 0;
+    });
+    // Fallback defaults if no tiers in database
+    if (Object.keys(tierRequirements).length === 0) {
+      tierRequirements['Premier'] = 20;
+      tierRequirements['Premier Plus'] = 20;
+      tierRequirements['Certified'] = 10;
+      tierRequirements['Registered'] = 5;
+      tierRequirements['Aggregator'] = 5;
+    }
 
     let sql = `
       SELECT 
@@ -2996,7 +3105,7 @@ router.get('/reports/certification-gaps', async (req, res) => {
       npcu_gap: Math.max(0, (tierRequirements[r.partner_tier] || 0) - r.current_npcu)
     }));
     setCache('certification-gaps', report);
-    res.json({ ...report, cached: false });
+    res.json(report);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3007,7 +3116,7 @@ router.get('/reports/partner-leaderboard', async (req, res) => {
   try {
     const forceRefresh = req.query.refresh === 'true';
     if (!forceRefresh && isCacheValid('partner-leaderboard')) {
-      return res.json({ ...reportCache['partner-leaderboard'].data, cached: true, cachedAt: new Date(reportCache['partner-leaderboard'].timestamp).toISOString() });
+      return res.json(reportCache['partner-leaderboard'].data);
     }
     const { tier, region, limit = 50 } = req.query;
     let sql = `
@@ -3044,7 +3153,7 @@ router.get('/reports/partner-leaderboard', async (req, res) => {
     params.push(parseInt(limit));
     const results = await query(sql, params);
     setCache('partner-leaderboard', results);
-    res.json({ ...results, cached: false });
+    res.json(results);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3055,7 +3164,7 @@ router.get('/reports/course-popularity', async (req, res) => {
   try {
     const forceRefresh = req.query.refresh === 'true';
     if (!forceRefresh && isCacheValid('course-popularity')) {
-      return res.json({ ...reportCache['course-popularity'].data, cached: true, cachedAt: new Date(reportCache['course-popularity'].timestamp).toISOString() });
+      return res.json(reportCache['course-popularity'].data);
     }
     const { limit = 20 } = req.query;
     const results = await query(`
@@ -3076,7 +3185,7 @@ router.get('/reports/course-popularity', async (req, res) => {
       LIMIT ?
     `, [parseInt(limit)]);
     setCache('course-popularity', results);
-    res.json({ ...results, cached: false });
+    res.json(results);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3088,7 +3197,7 @@ router.get('/reports/recent-activity', async (req, res) => {
     const forceRefresh = req.query.refresh === 'true';
     const cacheKey = `recent-activity-${req.query.days || 30}-${req.query.limit || 100}`;
     if (!forceRefresh && isCacheValid(cacheKey)) {
-      return res.json({ ...reportCache[cacheKey].data, cached: true, cachedAt: new Date(reportCache[cacheKey].timestamp).toISOString() });
+      return res.json(reportCache[cacheKey].data);
     }
     const { days = 30, limit = 100 } = req.query;
     const results = await query(`
@@ -3113,7 +3222,7 @@ router.get('/reports/recent-activity', async (req, res) => {
       LIMIT ?
     `, [parseInt(days), parseInt(limit)]);
     setCache(cacheKey, results);
-    res.json({ ...results, cached: false });
+    res.json(results);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3125,7 +3234,7 @@ router.get('/reports/expiring-certifications', async (req, res) => {
     const forceRefresh = req.query.refresh === 'true';
     const cacheKey = `expiring-certifications-${req.query.days || 90}`;
     if (!forceRefresh && isCacheValid(cacheKey)) {
-      return res.json({ ...reportCache[cacheKey].data, cached: true, cachedAt: new Date(reportCache[cacheKey].timestamp).toISOString() });
+      return res.json(reportCache[cacheKey].data);
     }
     const { days = 90 } = req.query;
     const results = await query(`
@@ -3153,7 +3262,7 @@ router.get('/reports/expiring-certifications', async (req, res) => {
       ORDER BY e.expires_at ASC
     `, [parseInt(days)]);
     setCache(cacheKey, results);
-    res.json({ ...results, cached: false });
+    res.json(results);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3165,7 +3274,7 @@ router.get('/reports/inactive-users', async (req, res) => {
     const forceRefresh = req.query.refresh === 'true';
     const cacheKey = `inactive-users-${req.query.days || 180}-${req.query.limit || 200}`;
     if (!forceRefresh && isCacheValid(cacheKey)) {
-      return res.json({ ...reportCache[cacheKey].data, cached: true, cachedAt: new Date(reportCache[cacheKey].timestamp).toISOString() });
+      return res.json(reportCache[cacheKey].data);
     }
     const { days = 180, limit = 200 } = req.query;
     const results = await query(`
@@ -3189,7 +3298,7 @@ router.get('/reports/inactive-users', async (req, res) => {
       LIMIT ?
     `, [parseInt(days), parseInt(limit)]);
     setCache(cacheKey, results);
-    res.json({ ...results, cached: false });
+    res.json(results);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3203,7 +3312,7 @@ router.get('/reports/overview', async (req, res) => {
     
     // Check cache first (unless force refresh requested)
     if (!forceRefresh && isCacheValid('overview')) {
-      return res.json({ ...reportCache.overview.data, cached: true, cachedAt: new Date(reportCache.overview.timestamp).toISOString() });
+      return res.json(reportCache.overview.data);
     }
     
     // Run all queries in parallel for better performance
@@ -3279,7 +3388,7 @@ router.get('/reports/overview', async (req, res) => {
     // Cache the result
     setCache('overview', result);
     
-    res.json({ ...result, cached: false });
+    res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3404,7 +3513,7 @@ router.get('/reports/partners-without-groups', async (req, res) => {
   try {
     const forceRefresh = req.query.refresh === 'true';
     if (!forceRefresh && isCacheValid('partners-without-groups')) {
-      return res.json({ ...reportCache['partners-without-groups'].data, cached: true, cachedAt: new Date(reportCache['partners-without-groups'].timestamp).toISOString() });
+      return res.json(reportCache['partners-without-groups'].data);
     }
     const results = await query(`
       SELECT 
@@ -3422,7 +3531,7 @@ router.get('/reports/partners-without-groups', async (req, res) => {
       ORDER BY p.partner_tier, p.account_name
     `);
     setCache('partners-without-groups', results);
-    res.json({ ...results, cached: false });
+    res.json(results);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3471,7 +3580,7 @@ router.get('/reports/owner-accounts', async (req, res) => {
     const forceRefresh = req.query.refresh === 'true';
     const cacheKey = `owner-accounts-${req.query.owner || ''}`;
     if (!forceRefresh && isCacheValid(cacheKey)) {
-      return res.json({ ...reportCache[cacheKey].data, cached: true, cachedAt: new Date(reportCache[cacheKey].timestamp).toISOString() });
+      return res.json(reportCache[cacheKey].data);
     }
     const { owner } = req.query;
     if (!owner) {
@@ -3511,7 +3620,7 @@ router.get('/reports/owner-accounts', async (req, res) => {
       ORDER BY p.account_name
     `, [owner]);
     setCache(cacheKey, results);
-    res.json({ ...results, cached: false });
+    res.json(results);
   } catch (error) {
     console.error('Owner accounts report error:', error);
     res.status(500).json({ error: error.message });
@@ -3548,6 +3657,164 @@ router.get('/reports/filters', async (req, res) => {
       owners: owners.map(o => o.value)
     });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// Trend Analytics Endpoints
+// All endpoints support stacked filters: region, owner, tier
+// Example: /api/db/trends/kpi-summary?region=Americas&tier=Premier&owner=John%20Doe
+// ============================================
+
+// Helper to extract filters from query params
+function extractFilters(query) {
+  const filters = {};
+  if (query.region) filters.region = query.region;
+  if (query.owner) filters.owner = query.owner;
+  if (query.tier) filters.tier = query.tier;
+  return filters;
+}
+
+// KPI Summary - current period with MoM/YoY comparisons
+router.get('/trends/kpi-summary', async (req, res) => {
+  try {
+    const filters = extractFilters(req.query);
+    const summary = await getKpiSummary(filters);
+    res.json(summary);
+  } catch (error) {
+    console.error('KPI Summary error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Year-to-Date comparison
+router.get('/trends/ytd', async (req, res) => {
+  try {
+    const filters = extractFilters(req.query);
+    const ytd = await getYtdComparison(filters);
+    res.json(ytd);
+  } catch (error) {
+    console.error('YTD comparison error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// User registration trends by month
+router.get('/trends/users', async (req, res) => {
+  try {
+    const { months = 24 } = req.query;
+    const filters = extractFilters(req.query);
+    const trends = await getUserRegistrationTrends(parseInt(months), filters);
+    res.json(trends);
+  } catch (error) {
+    console.error('User trends error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Enrollment trends by month
+router.get('/trends/enrollments', async (req, res) => {
+  try {
+    const { months = 24 } = req.query;
+    const filters = extractFilters(req.query);
+    const trends = await getEnrollmentTrends(parseInt(months), filters);
+    res.json(trends);
+  } catch (error) {
+    console.error('Enrollment trends error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Certification trends (NPCU courses) by month
+router.get('/trends/certifications', async (req, res) => {
+  try {
+    const { months = 24 } = req.query;
+    const filters = extractFilters(req.query);
+    const trends = await getCertificationTrends(parseInt(months), filters);
+    res.json(trends);
+  } catch (error) {
+    console.error('Certification trends error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Course popularity trends
+router.get('/trends/courses', async (req, res) => {
+  try {
+    const { months = 12, top = 10 } = req.query;
+    const filters = extractFilters(req.query);
+    const trends = await getCoursePopularityTrends(parseInt(months), parseInt(top), filters);
+    res.json(trends);
+  } catch (error) {
+    console.error('Course popularity error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Compliance by tier (current snapshot)
+router.get('/trends/compliance', async (req, res) => {
+  try {
+    const filters = extractFilters(req.query);
+    const compliance = await getComplianceTrends(12, filters);
+    res.json(compliance);
+  } catch (error) {
+    console.error('Compliance trends error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Regional trends
+router.get('/trends/regional', async (req, res) => {
+  try {
+    const { months = 24 } = req.query;
+    const filters = extractFilters(req.query);
+    const trends = await getRegionalTrends(parseInt(months), filters);
+    res.json(trends);
+  } catch (error) {
+    console.error('Regional trends error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Weekly summary
+router.get('/trends/weekly', async (req, res) => {
+  try {
+    const { weeks = 12 } = req.query;
+    const filters = extractFilters(req.query);
+    const summary = await getWeeklySummary(parseInt(weeks), filters);
+    res.json(summary);
+  } catch (error) {
+    console.error('Weekly summary error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Owner-specific trends
+router.get('/trends/owner', async (req, res) => {
+  try {
+    const { owner, months = 12 } = req.query;
+    if (!owner) {
+      return res.status(400).json({ error: 'Owner name required' });
+    }
+    const filters = extractFilters(req.query);
+    const trends = await getOwnerTrends(owner, parseInt(months), filters);
+    res.json(trends);
+  } catch (error) {
+    console.error('Owner trends error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Full trend report (for export/presentation)
+router.get('/trends/full-report', async (req, res) => {
+  try {
+    const { months = 12 } = req.query;
+    const filters = extractFilters(req.query);
+    const report = await getFullTrendReport(parseInt(months), filters);
+    res.json(report);
+  } catch (error) {
+    console.error('Full trend report error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -4376,14 +4643,21 @@ router.get('/dashboard/partner', async (req, res) => {
       };
     });
     
-    // Determine tier requirement
+    // Determine tier requirement from database
     const effectiveTier = tier || partner.partner_tier || 'Certified';
-    const tierRequirements = {
-      'Premier': 20,
-      'Select': 10,
-      'Registered': 5,
-      'Certified': 2
-    };
+    const tiers = await query('SELECT name, npcu_required FROM partner_tiers WHERE is_active = TRUE');
+    const tierRequirements = {};
+    tiers.forEach(t => {
+      tierRequirements[t.name] = t.npcu_required || 0;
+    });
+    // Fallback defaults if no tiers in database
+    if (Object.keys(tierRequirements).length === 0) {
+      tierRequirements['Premier'] = 20;
+      tierRequirements['Premier Plus'] = 20;
+      tierRequirements['Certified'] = 10;
+      tierRequirements['Registered'] = 5;
+      tierRequirements['Aggregator'] = 5;
+    }
     const requiredNpcu = tierRequirements[effectiveTier] || 2;
     
     // Group certifications by product category
@@ -4948,23 +5222,33 @@ router.delete('/admin/profiles/:id', authMiddleware, requirePermission('profiles
 // Get tier requirements (public - used by CompanyWidget)
 router.get('/settings/tier-requirements', async (req, res) => {
   try {
-    const rows = await query('SELECT tier_requirements FROM portal_settings WHERE id = 1');
-    if (rows.length === 0) {
-      // Return defaults if not configured
-      res.json({
-        'Registered': 5,
-        'Certified': 10,
-        'Select': 15,
-        'Premier': 20,
-        'Premier Plus': 20,
-        'Aggregator': 5
+    // Primary source: partner_tiers table
+    const tiers = await query('SELECT name, npcu_required FROM partner_tiers WHERE is_active = TRUE');
+    if (tiers.length > 0) {
+      const tierReqs = {};
+      tiers.forEach(t => {
+        tierReqs[t.name] = t.npcu_required || 0;
       });
-    } else {
+      return res.json(tierReqs);
+    }
+    
+    // Fallback to portal_settings (legacy)
+    const rows = await query('SELECT tier_requirements FROM portal_settings WHERE id = 1');
+    if (rows.length > 0 && rows[0].tier_requirements) {
       const tierReqs = typeof rows[0].tier_requirements === 'string' 
         ? JSON.parse(rows[0].tier_requirements) 
         : rows[0].tier_requirements;
-      res.json(tierReqs);
+      return res.json(tierReqs);
     }
+    
+    // Return defaults if nothing configured
+    res.json({
+      'Registered': 5,
+      'Certified': 10,
+      'Premier': 20,
+      'Premier Plus': 20,
+      'Aggregator': 5
+    });
   } catch (error) {
     console.error('Error getting tier requirements:', error);
     res.status(500).json({ error: error.message });
@@ -5227,6 +5511,942 @@ router.put('/tiers/reorder', authMiddleware, requirePermission('settings', 'edit
     res.json(tiers);
   } catch (error) {
     console.error('Error reordering tiers:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// USER ANALYTICS & ORPHAN DISCOVERY ROUTES
+// ============================================
+
+/**
+ * Get breakdown of LMS users by association status
+ * Partner users = in partner groups OR linked via contacts
+ * Unlinked users = not yet linked to a partner (potential orphans to discover)
+ */
+router.get('/users/breakdown', async (req, res) => {
+  try {
+    // Total LMS users
+    const [totalResult] = await query('SELECT COUNT(*) as count FROM lms_users');
+    const totalUsers = totalResult.count;
+    
+    // Linked partner users (confirmed associations)
+    const [linkedResult] = await query(`
+      SELECT COUNT(DISTINCT user_id) as count FROM (
+        SELECT ct.lms_user_id as user_id
+        FROM contacts ct
+        WHERE ct.partner_id IS NOT NULL AND ct.lms_user_id IS NOT NULL
+        UNION
+        SELECT gm.user_id
+        FROM lms_group_members gm
+        INNER JOIN lms_groups g ON g.id = gm.group_id
+        WHERE g.partner_id IS NOT NULL
+      ) linked_users
+    `);
+    const linkedPartnerUsers = linkedResult.count;
+    
+    // Unlinked users (potential orphans to discover)
+    const unlinkedUsers = totalUsers - linkedPartnerUsers;
+    
+    res.json({
+      totalUsers,
+      linkedPartnerUsers,
+      unlinkedUsers,
+      percentageLinked: ((linkedPartnerUsers / totalUsers) * 100).toFixed(1),
+      percentageUnlinked: ((unlinkedUsers / totalUsers) * 100).toFixed(1),
+      note: 'Analytics only track linkedPartnerUsers. Unlinked users are available for orphan discovery via domain matching.'
+    });
+  } catch (error) {
+    console.error('Error getting user breakdown:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Find orphaned partner users - LMS users whose email domain matches a partner
+ * but who are NOT yet linked to that partner
+ * These are users who registered directly in Northpass bypassing the CRM automation
+ */
+router.get('/users/orphans', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 500;
+    const offset = parseInt(req.query.offset) || 0;
+    const includeDismissed = req.query.includeDismissed === 'true';
+    
+    // Find users whose email domain matches a partner's domain but aren't linked
+    // Uses partner_domains table if available, otherwise extracts from contacts
+    const orphanedUsers = await query(`
+      SELECT 
+        u.id as user_id,
+        u.email,
+        u.first_name,
+        u.last_name,
+        u.status,
+        u.created_at_lms,
+        SUBSTRING_INDEX(u.email, '@', -1) as user_domain,
+        p.id as matched_partner_id,
+        p.account_name as matched_partner,
+        p.partner_tier,
+        p.account_region,
+        p.account_owner
+      FROM lms_users u
+      INNER JOIN (
+        -- Get partner domains from contacts table
+        SELECT DISTINCT 
+          c.partner_id,
+          SUBSTRING_INDEX(c.email, '@', -1) as domain
+        FROM contacts c
+        WHERE c.partner_id IS NOT NULL
+        AND c.email LIKE '%@%'
+        AND SUBSTRING_INDEX(c.email, '@', -1) NOT IN (
+          'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 
+          'aol.com', 'icloud.com', 'live.com', 'msn.com', 'me.com'
+        )
+      ) partner_domains ON SUBSTRING_INDEX(u.email, '@', -1) = partner_domains.domain
+      INNER JOIN partners p ON p.id = partner_domains.partner_id
+      WHERE NOT EXISTS (
+        -- Not already linked via contacts
+        SELECT 1 FROM contacts ct 
+        WHERE ct.lms_user_id = u.id AND ct.partner_id IS NOT NULL
+      )
+      AND NOT EXISTS (
+        -- Not already in a partner group
+        SELECT 1 FROM lms_group_members gm
+        INNER JOIN lms_groups g ON g.id = gm.group_id
+        WHERE gm.user_id = u.id AND g.partner_id IS NOT NULL
+      )
+      ${!includeDismissed ? `
+      AND NOT EXISTS (
+        -- Not dismissed for this partner
+        SELECT 1 FROM dismissed_orphans do
+        WHERE do.user_id = u.id AND do.partner_id = p.id
+      )
+      ` : ''}
+      ORDER BY p.account_name, u.created_at_lms DESC
+      LIMIT ? OFFSET ?
+    `, [limit, offset]);
+    
+    // Get total count
+    const [countResult] = await query(`
+      SELECT COUNT(*) as count
+      FROM lms_users u
+      INNER JOIN (
+        SELECT DISTINCT 
+          c.partner_id,
+          SUBSTRING_INDEX(c.email, '@', -1) as domain
+        FROM contacts c
+        WHERE c.partner_id IS NOT NULL
+        AND c.email LIKE '%@%'
+        AND SUBSTRING_INDEX(c.email, '@', -1) NOT IN (
+          'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 
+          'aol.com', 'icloud.com', 'live.com', 'msn.com', 'me.com'
+        )
+      ) partner_domains ON SUBSTRING_INDEX(u.email, '@', -1) = partner_domains.domain
+      INNER JOIN partners p ON p.id = partner_domains.partner_id
+      WHERE NOT EXISTS (
+        SELECT 1 FROM contacts ct 
+        WHERE ct.lms_user_id = u.id AND ct.partner_id IS NOT NULL
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM lms_group_members gm
+        INNER JOIN lms_groups g ON g.id = gm.group_id
+        WHERE gm.user_id = u.id AND g.partner_id IS NOT NULL
+      )
+      ${!includeDismissed ? `
+      AND NOT EXISTS (
+        SELECT 1 FROM dismissed_orphans do
+        WHERE do.user_id = u.id AND do.partner_id = p.id
+      )
+      ` : ''}
+    `);
+    
+    // Group by partner for summary
+    const byPartner = {};
+    orphanedUsers.forEach(u => {
+      if (!byPartner[u.matched_partner]) {
+        byPartner[u.matched_partner] = {
+          partnerId: u.matched_partner_id,
+          partnerName: u.matched_partner,
+          tier: u.partner_tier,
+          region: u.account_region,
+          owner: u.account_owner,
+          orphanCount: 0,
+          users: []
+        };
+      }
+      byPartner[u.matched_partner].orphanCount++;
+      byPartner[u.matched_partner].users.push({
+        userId: u.user_id,
+        email: u.email,
+        name: `${u.first_name} ${u.last_name}`.trim(),
+        status: u.status,
+        createdAt: u.created_at_lms
+      });
+    });
+    
+    res.json({
+      totalOrphans: countResult.count,
+      returnedCount: orphanedUsers.length,
+      limit,
+      offset,
+      byPartner: Object.values(byPartner).sort((a, b) => b.orphanCount - a.orphanCount),
+      message: countResult.count > 0 
+        ? `Found ${countResult.count} potential orphaned partner users (domain matches but not linked)`
+        : 'No orphaned partner users found'
+    });
+  } catch (error) {
+    console.error('Error finding orphaned users:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get orphan summary by partner - quick overview without user details
+ */
+router.get('/users/orphans/summary', async (req, res) => {
+  try {
+    const includeDismissed = req.query.includeDismissed === 'true';
+    
+    const summary = await query(`
+      SELECT 
+        p.id as partner_id,
+        p.account_name,
+        p.partner_tier,
+        p.account_region,
+        p.account_owner,
+        COUNT(DISTINCT u.id) as orphan_count
+      FROM lms_users u
+      INNER JOIN (
+        SELECT DISTINCT 
+          c.partner_id,
+          SUBSTRING_INDEX(c.email, '@', -1) as domain
+        FROM contacts c
+        WHERE c.partner_id IS NOT NULL
+        AND c.email LIKE '%@%'
+        AND SUBSTRING_INDEX(c.email, '@', -1) NOT IN (
+          'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 
+          'aol.com', 'icloud.com', 'live.com', 'msn.com', 'me.com'
+        )
+      ) partner_domains ON SUBSTRING_INDEX(u.email, '@', -1) = partner_domains.domain
+      INNER JOIN partners p ON p.id = partner_domains.partner_id
+      WHERE NOT EXISTS (
+        SELECT 1 FROM contacts ct 
+        WHERE ct.lms_user_id = u.id AND ct.partner_id IS NOT NULL
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM lms_group_members gm
+        INNER JOIN lms_groups g ON g.id = gm.group_id
+        WHERE gm.user_id = u.id AND g.partner_id IS NOT NULL
+      )
+      ${!includeDismissed ? `
+      AND NOT EXISTS (
+        SELECT 1 FROM dismissed_orphans do
+        WHERE do.user_id = u.id AND do.partner_id = p.id
+      )
+      ` : ''}
+      GROUP BY p.id, p.account_name, p.partner_tier, p.account_region, p.account_owner
+      ORDER BY orphan_count DESC
+    `);
+    
+    const totalOrphans = summary.reduce((sum, p) => sum + p.orphan_count, 0);
+    
+    res.json({
+      totalOrphans,
+      partnersWithOrphans: summary.length,
+      partners: summary
+    });
+  } catch (error) {
+    console.error('Error getting orphan summary:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get orphans for a specific partner
+ */
+router.get('/users/orphans/partner/:partnerId', async (req, res) => {
+  try {
+    const { partnerId } = req.params;
+    const includeDismissed = req.query.includeDismissed === 'true';
+    
+    // Get partner info
+    const [partner] = await query('SELECT * FROM partners WHERE id = ?', [partnerId]);
+    if (!partner) {
+      return res.status(404).json({ error: 'Partner not found' });
+    }
+    
+    // Get orphaned users for this partner
+    const orphans = await query(`
+      SELECT 
+        u.id as user_id,
+        u.email,
+        u.first_name,
+        u.last_name,
+        u.status,
+        u.created_at_lms,
+        u.last_active_at,
+        SUBSTRING_INDEX(u.email, '@', -1) as domain,
+        do.id as dismissed_id,
+        do.reason as dismissed_reason,
+        do.dismissed_at
+      FROM lms_users u
+      INNER JOIN (
+        SELECT DISTINCT SUBSTRING_INDEX(c.email, '@', -1) as domain
+        FROM contacts c
+        WHERE c.partner_id = ?
+        AND c.email LIKE '%@%'
+        AND SUBSTRING_INDEX(c.email, '@', -1) NOT IN (
+          'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 
+          'aol.com', 'icloud.com', 'live.com', 'msn.com', 'me.com'
+        )
+      ) partner_domains ON SUBSTRING_INDEX(u.email, '@', -1) = partner_domains.domain
+      LEFT JOIN dismissed_orphans do ON do.user_id = u.id AND do.partner_id = ?
+      WHERE NOT EXISTS (
+        SELECT 1 FROM contacts ct 
+        WHERE ct.lms_user_id = u.id AND ct.partner_id IS NOT NULL
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM lms_group_members gm
+        INNER JOIN lms_groups g ON g.id = gm.group_id
+        WHERE gm.user_id = u.id AND g.partner_id IS NOT NULL
+      )
+      ${!includeDismissed ? 'AND do.id IS NULL' : ''}
+      ORDER BY do.id IS NOT NULL, u.created_at_lms DESC
+    `, [partnerId, partnerId]);
+    
+    // Get dismissed count for this partner
+    const [dismissedCount] = await query(`
+      SELECT COUNT(*) as count FROM dismissed_orphans WHERE partner_id = ?
+    `, [partnerId]);
+    
+    res.json({
+      partner: {
+        id: partner.id,
+        name: partner.account_name,
+        tier: partner.partner_tier,
+        region: partner.account_region,
+        owner: partner.account_owner
+      },
+      orphanCount: orphans.filter(o => !o.dismissed_id).length,
+      dismissedCount: dismissedCount.count,
+      showingDismissed: includeDismissed,
+      orphans: orphans.map(o => ({
+        ...o,
+        isDismissed: !!o.dismissed_id
+      }))
+    });
+  } catch (error) {
+    console.error('Error getting partner orphans:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Dismiss an orphan user - marks them as not belonging to the matched partner
+ */
+router.post('/users/orphans/dismiss', async (req, res) => {
+  try {
+    const { userId, partnerId, reason } = req.body;
+    
+    if (!userId || !partnerId) {
+      return res.status(400).json({ error: 'userId and partnerId are required' });
+    }
+    
+    // Insert into dismissed_orphans (ON DUPLICATE KEY UPDATE for idempotency)
+    await query(`
+      INSERT INTO dismissed_orphans (user_id, partner_id, reason, dismissed_by)
+      VALUES (?, ?, ?, 'admin')
+      ON DUPLICATE KEY UPDATE reason = VALUES(reason), dismissed_at = CURRENT_TIMESTAMP
+    `, [userId, partnerId, reason || 'Not a match']);
+    
+    res.json({
+      success: true,
+      message: 'User dismissed from orphan list'
+    });
+  } catch (error) {
+    console.error('Error dismissing orphan:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Bulk dismiss orphans for a partner
+ */
+router.post('/users/orphans/dismiss-bulk', async (req, res) => {
+  try {
+    const { userIds, partnerId, reason } = req.body;
+    
+    if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({ error: 'userIds array is required' });
+    }
+    if (!partnerId) {
+      return res.status(400).json({ error: 'partnerId is required' });
+    }
+    
+    let dismissed = 0;
+    for (const userId of userIds) {
+      try {
+        await query(`
+          INSERT INTO dismissed_orphans (user_id, partner_id, reason, dismissed_by)
+          VALUES (?, ?, ?, 'admin')
+          ON DUPLICATE KEY UPDATE reason = VALUES(reason), dismissed_at = CURRENT_TIMESTAMP
+        `, [userId, partnerId, reason || 'Bulk dismiss']);
+        dismissed++;
+      } catch (err) {
+        console.error(`Error dismissing user ${userId}:`, err.message);
+      }
+    }
+    
+    res.json({
+      success: true,
+      dismissed,
+      message: `Dismissed ${dismissed} users from orphan list`
+    });
+  } catch (error) {
+    console.error('Error bulk dismissing orphans:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Restore a dismissed orphan - removes them from dismissed list
+ */
+router.post('/users/orphans/restore', async (req, res) => {
+  try {
+    const { userId, partnerId } = req.body;
+    
+    if (!userId || !partnerId) {
+      return res.status(400).json({ error: 'userId and partnerId are required' });
+    }
+    
+    const result = await query(`
+      DELETE FROM dismissed_orphans WHERE user_id = ? AND partner_id = ?
+    `, [userId, partnerId]);
+    
+    res.json({
+      success: true,
+      restored: result.affectedRows > 0,
+      message: result.affectedRows > 0 
+        ? 'User restored to orphan list'
+        : 'User was not in dismissed list'
+    });
+  } catch (error) {
+    console.error('Error restoring orphan:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get dismissed orphans for a partner
+ */
+router.get('/users/orphans/dismissed/:partnerId', async (req, res) => {
+  try {
+    const { partnerId } = req.params;
+    
+    const dismissed = await query(`
+      SELECT 
+        do.id,
+        do.user_id,
+        do.reason,
+        do.dismissed_at,
+        u.email,
+        u.first_name,
+        u.last_name,
+        SUBSTRING_INDEX(u.email, '@', -1) as domain
+      FROM dismissed_orphans do
+      INNER JOIN lms_users u ON u.id = do.user_id
+      WHERE do.partner_id = ?
+      ORDER BY do.dismissed_at DESC
+    `, [partnerId]);
+    
+    res.json({
+      partnerId,
+      count: dismissed.length,
+      dismissed
+    });
+  } catch (error) {
+    console.error('Error getting dismissed orphans:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// PAM (Partner Account Manager) MANAGEMENT ROUTES
+// ============================================
+
+/**
+ * Get all partner managers (PAMs)
+ */
+router.get('/pams', async (req, res) => {
+  try {
+    const includeInactive = req.query.includeInactive === 'true';
+    
+    const pams = await query(`
+      SELECT 
+        pm.*,
+        au.email as login_email,
+        au.first_name as login_first_name,
+        au.last_name as login_last_name,
+        au.is_active as login_active,
+        au.last_login_at,
+        (SELECT COUNT(*) FROM partners p WHERE p.account_owner = pm.owner_name) as partner_count
+      FROM partner_managers pm
+      LEFT JOIN admin_users au ON au.id = pm.admin_user_id
+      ${!includeInactive ? 'WHERE pm.is_active_pam = TRUE' : ''}
+      ORDER BY pm.is_active_pam DESC, pm.owner_name
+    `);
+    
+    // Get summary stats
+    const [stats] = await query(`
+      SELECT 
+        COUNT(*) as total_owners,
+        SUM(is_active_pam) as active_pams,
+        SUM(CASE WHEN admin_user_id IS NOT NULL THEN 1 ELSE 0 END) as with_accounts,
+        SUM(CASE WHEN email_reports_enabled THEN 1 ELSE 0 END) as email_enabled
+      FROM partner_managers
+    `);
+    
+    res.json({
+      pams,
+      stats: {
+        totalOwners: stats.total_owners || 0,
+        activePams: stats.active_pams || 0,
+        withAccounts: stats.with_accounts || 0,
+        emailEnabled: stats.email_enabled || 0
+      }
+    });
+  } catch (error) {
+    console.error('Error getting PAMs:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get a single PAM by ID
+ */
+router.get('/pams/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const [pam] = await query(`
+      SELECT 
+        pm.*,
+        au.email as login_email,
+        au.first_name as login_first_name,
+        au.last_name as login_last_name,
+        au.is_active as login_active
+      FROM partner_managers pm
+      LEFT JOIN admin_users au ON au.id = pm.admin_user_id
+      WHERE pm.id = ?
+    `, [id]);
+    
+    if (!pam) {
+      return res.status(404).json({ error: 'PAM not found' });
+    }
+    
+    // Get their assigned partners
+    const partners = await query(`
+      SELECT id, account_name, partner_tier, account_region
+      FROM partners
+      WHERE account_owner = ?
+      ORDER BY account_name
+    `, [pam.owner_name]);
+    
+    res.json({ pam, partners });
+  } catch (error) {
+    console.error('Error getting PAM:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Update PAM status and settings
+ */
+router.put('/pams/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { is_active_pam, email, notes, email_reports_enabled, report_frequency, region } = req.body;
+    
+    await query(`
+      UPDATE partner_managers SET
+        is_active_pam = COALESCE(?, is_active_pam),
+        email = COALESCE(?, email),
+        notes = COALESCE(?, notes),
+        email_reports_enabled = COALESCE(?, email_reports_enabled),
+        report_frequency = COALESCE(?, report_frequency),
+        region = COALESCE(?, region)
+      WHERE id = ?
+    `, [is_active_pam, email, notes, email_reports_enabled, report_frequency, region, id]);
+    
+    res.json({ success: true, message: 'PAM updated' });
+  } catch (error) {
+    console.error('Error updating PAM:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Create login account for a PAM
+ */
+router.post('/pams/:id/create-account', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { email, password, firstName, lastName } = req.body;
+    
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+    
+    // Get PAM record
+    const [pam] = await query('SELECT * FROM partner_managers WHERE id = ?', [id]);
+    if (!pam) {
+      return res.status(404).json({ error: 'PAM not found' });
+    }
+    
+    // Check if email already exists
+    const [existing] = await query('SELECT id FROM admin_users WHERE email = ?', [email.toLowerCase()]);
+    if (existing) {
+      return res.status(400).json({ error: 'Email already in use' });
+    }
+    
+    // Get Channel Manager profile
+    const [profile] = await query('SELECT id FROM admin_profiles WHERE name = ?', ['Channel Manager']);
+    if (!profile) {
+      return res.status(500).json({ error: 'Channel Manager profile not found' });
+    }
+    
+    // Hash password
+    const crypto = require('crypto');
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+    const passwordHash = `${salt}:${hash}`;
+    
+    // Create admin user
+    const result = await query(`
+      INSERT INTO admin_users (email, password_hash, first_name, last_name, profile_id, is_active)
+      VALUES (?, ?, ?, ?, ?, TRUE)
+    `, [email.toLowerCase(), passwordHash, firstName || pam.owner_name.split(' ')[0], lastName || '', profile.id]);
+    
+    // Link to PAM record
+    await query('UPDATE partner_managers SET admin_user_id = ?, email = ? WHERE id = ?', 
+      [result.insertId, email.toLowerCase(), id]);
+    
+    res.json({
+      success: true,
+      message: 'Account created successfully',
+      userId: result.insertId
+    });
+  } catch (error) {
+    console.error('Error creating PAM account:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Sync account owners from partners table
+ */
+router.post('/pams/sync-owners', async (req, res) => {
+  try {
+    // Get all unique account owners from partners
+    const owners = await query(`
+      SELECT DISTINCT account_owner, account_region
+      FROM partners
+      WHERE account_owner IS NOT NULL AND account_owner != ''
+    `);
+    
+    let added = 0;
+    let updated = 0;
+    
+    for (const owner of owners) {
+      try {
+        const result = await query(`
+          INSERT INTO partner_managers (owner_name, region, is_active_pam)
+          VALUES (?, ?, FALSE)
+          ON DUPLICATE KEY UPDATE region = COALESCE(VALUES(region), region)
+        `, [owner.account_owner, owner.account_region]);
+        
+        if (result.insertId) added++;
+        else if (result.affectedRows > 0) updated++;
+      } catch (err) {
+        // Skip duplicates
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Synced ${owners.length} owners: ${added} added, ${updated} updated`
+    });
+  } catch (error) {
+    console.error('Error syncing owners:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get email settings
+ */
+router.get('/email-settings', async (req, res) => {
+  try {
+    const [settings] = await query('SELECT * FROM email_settings WHERE id = 1');
+    
+    // Don't expose password
+    if (settings?.smtp_pass) {
+      settings.smtp_pass = '••••••••';
+    }
+    
+    res.json(settings || {
+      id: 1,
+      smtp_host: '',
+      smtp_port: 587,
+      smtp_user: '',
+      from_email: '',
+      from_name: 'Nintex Partner Portal',
+      enabled: false
+    });
+  } catch (error) {
+    console.error('Error getting email settings:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Update email settings
+ */
+router.put('/email-settings', async (req, res) => {
+  try {
+    const { smtp_host, smtp_port, smtp_user, smtp_pass, from_email, from_name, enabled } = req.body;
+    
+    // Only update password if provided (not the masked value)
+    const passUpdate = smtp_pass && smtp_pass !== '••••••••' ? ', smtp_pass = ?' : '';
+    const params = [smtp_host, smtp_port, smtp_user, from_email, from_name, enabled];
+    if (passUpdate) params.push(smtp_pass);
+    
+    await query(`
+      INSERT INTO email_settings (id, smtp_host, smtp_port, smtp_user, from_email, from_name, enabled${passUpdate ? ', smtp_pass' : ''})
+      VALUES (1, ?, ?, ?, ?, ?, ?${passUpdate ? ', ?' : ''})
+      ON DUPLICATE KEY UPDATE 
+        smtp_host = VALUES(smtp_host),
+        smtp_port = VALUES(smtp_port),
+        smtp_user = VALUES(smtp_user),
+        from_email = VALUES(from_email),
+        from_name = VALUES(from_name),
+        enabled = VALUES(enabled)
+        ${passUpdate ? ', smtp_pass = VALUES(smtp_pass)' : ''}
+    `, params);
+    
+    res.json({ success: true, message: 'Email settings updated' });
+  } catch (error) {
+    console.error('Error updating email settings:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Test email configuration
+ */
+router.post('/email-settings/test', async (req, res) => {
+  try {
+    const { testEmail } = req.body;
+    
+    if (!testEmail) {
+      return res.status(400).json({ error: 'Test email address required' });
+    }
+    
+    // Get settings
+    const [settings] = await query('SELECT * FROM email_settings WHERE id = 1');
+    
+    if (!settings || !settings.smtp_host) {
+      return res.status(400).json({ error: 'Email not configured' });
+    }
+    
+    // Try to send test email
+    const nodemailer = require('nodemailer');
+    
+    const transporter = nodemailer.createTransport({
+      host: settings.smtp_host,
+      port: settings.smtp_port,
+      secure: settings.smtp_port === 465,
+      auth: {
+        user: settings.smtp_user,
+        pass: settings.smtp_pass
+      }
+    });
+    
+    await transporter.sendMail({
+      from: `"${settings.from_name}" <${settings.from_email}>`,
+      to: testEmail,
+      subject: 'Test Email from Nintex Partner Portal',
+      text: 'This is a test email to verify your email configuration is working correctly.',
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 20px;">
+          <h2 style="color: #6B4C9A;">Nintex Partner Portal</h2>
+          <p>This is a test email to verify your email configuration is working correctly.</p>
+          <p style="color: #666; font-size: 12px;">Sent at: ${new Date().toISOString()}</p>
+        </div>
+      `
+    });
+    
+    // Log success
+    await query(`
+      INSERT INTO email_log (recipient_email, subject, email_type, status, sent_at)
+      VALUES (?, 'Test Email', 'test', 'sent', NOW())
+    `, [testEmail]);
+    
+    res.json({ success: true, message: 'Test email sent successfully' });
+  } catch (error) {
+    console.error('Error sending test email:', error);
+    
+    // Log failure
+    await query(`
+      INSERT INTO email_log (recipient_email, subject, email_type, status, error_message)
+      VALUES (?, 'Test Email', 'test', 'failed', ?)
+    `, [req.body.testEmail || 'unknown', error.message]);
+    
+    res.status(500).json({ error: `Failed to send email: ${error.message}` });
+  }
+});
+
+/**
+ * Get email log
+ */
+router.get('/email-log', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    
+    const logs = await query(`
+      SELECT * FROM email_log
+      ORDER BY created_at DESC
+      LIMIT ?
+    `, [limit]);
+    
+    res.json(logs);
+  } catch (error) {
+    console.error('Error getting email log:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Send weekly report to a specific PAM
+ */
+router.post('/pams/:id/send-report', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Get PAM
+    const [pam] = await query('SELECT * FROM partner_managers WHERE id = ?', [id]);
+    if (!pam || !pam.email) {
+      return res.status(400).json({ error: 'PAM not found or no email configured' });
+    }
+    
+    // Get their partners
+    const partners = await query(`
+      SELECT 
+        p.*,
+        (SELECT COUNT(*) FROM contacts c WHERE c.partner_id = p.id) as contact_count,
+        (SELECT COUNT(DISTINCT e.user_id) 
+         FROM lms_enrollments e 
+         JOIN contacts c ON c.lms_user_id = e.user_id 
+         WHERE c.partner_id = p.id AND e.status = 'completed') as certified_users,
+        (SELECT SUM(COALESCE(cp.npcu_value, 0))
+         FROM lms_enrollments e
+         JOIN contacts c ON c.lms_user_id = e.user_id
+         JOIN course_properties cp ON cp.course_id = e.course_id
+         WHERE c.partner_id = p.id 
+         AND e.status = 'completed'
+         AND (e.expires_at IS NULL OR e.expires_at > NOW())) as total_npcu
+      FROM partners p
+      WHERE p.account_owner = ?
+      ORDER BY p.account_name
+    `, [pam.owner_name]);
+    
+    // Get email settings
+    const [settings] = await query('SELECT * FROM email_settings WHERE id = 1');
+    if (!settings || !settings.enabled) {
+      return res.status(400).json({ error: 'Email not configured or disabled' });
+    }
+    
+    // Build report
+    const nodemailer = require('nodemailer');
+    const transporter = nodemailer.createTransport({
+      host: settings.smtp_host,
+      port: settings.smtp_port,
+      secure: settings.smtp_port === 465,
+      auth: { user: settings.smtp_user, pass: settings.smtp_pass }
+    });
+    
+    const reportDate = new Date().toLocaleDateString('en-US', { 
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' 
+    });
+    
+    // Build HTML report
+    let partnerRows = partners.map(p => `
+      <tr>
+        <td style="padding: 8px; border-bottom: 1px solid #eee;">${p.account_name}</td>
+        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.partner_tier || '-'}</td>
+        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.contact_count || 0}</td>
+        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.certified_users || 0}</td>
+        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.total_npcu || 0}</td>
+      </tr>
+    `).join('');
+    
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto;">
+        <div style="background: linear-gradient(135deg, #6B4C9A, #FF6B35); padding: 20px; color: white;">
+          <h1 style="margin: 0;">Weekly Partner Report</h1>
+          <p style="margin: 5px 0 0 0; opacity: 0.9;">${reportDate}</p>
+        </div>
+        
+        <div style="padding: 20px;">
+          <p>Hi ${pam.owner_name.split(' ')[0]},</p>
+          <p>Here's your weekly summary of partner activity:</p>
+          
+          <h3 style="color: #6B4C9A; border-bottom: 2px solid #6B4C9A; padding-bottom: 5px;">
+            Your Partners (${partners.length})
+          </h3>
+          
+          <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+            <thead>
+              <tr style="background: #f5f5f5;">
+                <th style="padding: 10px; text-align: left;">Partner</th>
+                <th style="padding: 10px; text-align: center;">Tier</th>
+                <th style="padding: 10px; text-align: center;">Contacts</th>
+                <th style="padding: 10px; text-align: center;">Certified</th>
+                <th style="padding: 10px; text-align: center;">NPCU</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${partnerRows || '<tr><td colspan="5" style="padding: 20px; text-align: center;">No partners assigned</td></tr>'}
+            </tbody>
+          </table>
+          
+          <p style="color: #666; font-size: 12px; margin-top: 30px;">
+            This report was generated automatically by the Nintex Partner Portal.
+            <br>To manage your preferences, contact your administrator.
+          </p>
+        </div>
+      </div>
+    `;
+    
+    await transporter.sendMail({
+      from: `"${settings.from_name}" <${settings.from_email}>`,
+      to: pam.email,
+      subject: `Weekly Partner Report - ${reportDate}`,
+      html
+    });
+    
+    // Update last sent
+    await query('UPDATE partner_managers SET last_report_sent = NOW() WHERE id = ?', [id]);
+    
+    // Log
+    await query(`
+      INSERT INTO email_log (recipient_email, recipient_name, subject, email_type, status, sent_at)
+      VALUES (?, ?, ?, 'weekly_report', 'sent', NOW())
+    `, [pam.email, pam.owner_name, `Weekly Partner Report - ${reportDate}`]);
+    
+    res.json({ success: true, message: 'Report sent successfully' });
+  } catch (error) {
+    console.error('Error sending report:', error);
     res.status(500).json({ error: error.message });
   }
 });

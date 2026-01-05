@@ -6,7 +6,7 @@
 const { query, transaction, getPool } = require('./connection.cjs');
 const crypto = require('crypto');
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 8;
 
 /**
  * Create all database tables
@@ -272,6 +272,81 @@ async function createTables() {
     VALUES (1, '{"Registered": 5, "Certified": 10, "Select": 15, "Premier": 20, "Premier Plus": 20, "Aggregator": 5}')
   `);
 
+  // Dismissed Orphans (users dismissed from orphan discovery)
+  await query(`
+    CREATE TABLE IF NOT EXISTS dismissed_orphans (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id VARCHAR(50) NOT NULL,
+      partner_id INT NOT NULL,
+      reason VARCHAR(255),
+      dismissed_by VARCHAR(255),
+      dismissed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY unique_user_partner (user_id, partner_id),
+      INDEX idx_user (user_id),
+      INDEX idx_partner (partner_id),
+      FOREIGN KEY (user_id) REFERENCES lms_users(id) ON DELETE CASCADE,
+      FOREIGN KEY (partner_id) REFERENCES partners(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  // Partner Account Managers (PAMs) - links admin users to partners/regions
+  await query(`
+    CREATE TABLE IF NOT EXISTS partner_managers (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      admin_user_id INT,
+      owner_name VARCHAR(255) NOT NULL,
+      email VARCHAR(255),
+      is_active_pam BOOLEAN DEFAULT TRUE,
+      region VARCHAR(100),
+      notes TEXT,
+      email_reports_enabled BOOLEAN DEFAULT TRUE,
+      report_frequency ENUM('daily', 'weekly', 'monthly') DEFAULT 'weekly',
+      last_report_sent TIMESTAMP NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY unique_owner (owner_name),
+      INDEX idx_admin_user (admin_user_id),
+      INDEX idx_active (is_active_pam),
+      INDEX idx_email (email),
+      FOREIGN KEY (admin_user_id) REFERENCES admin_users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  // Email configuration settings
+  await query(`
+    CREATE TABLE IF NOT EXISTS email_settings (
+      id INT PRIMARY KEY DEFAULT 1,
+      smtp_host VARCHAR(255),
+      smtp_port INT DEFAULT 587,
+      smtp_user VARCHAR(255),
+      smtp_pass VARCHAR(255),
+      from_email VARCHAR(255),
+      from_name VARCHAR(255) DEFAULT 'Nintex Partner Portal',
+      enabled BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  // Email log (track sent emails)
+  await query(`
+    CREATE TABLE IF NOT EXISTS email_log (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      recipient_email VARCHAR(255) NOT NULL,
+      recipient_name VARCHAR(255),
+      subject VARCHAR(500),
+      email_type VARCHAR(50),
+      status ENUM('sent', 'failed', 'pending') DEFAULT 'pending',
+      error_message TEXT,
+      sent_at TIMESTAMP NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_recipient (recipient_email),
+      INDEX idx_type (email_type),
+      INDEX idx_status (status),
+      INDEX idx_sent (sent_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
   console.log('✅ All tables created successfully');
 }
 
@@ -376,12 +451,13 @@ async function runMigrations() {
         },
         {
           name: 'Channel Leadership',
-          description: 'View reports and dashboards across all regions',
+          description: 'Full access to all reports, analytics, and dashboards across all regions',
           permissions: JSON.stringify({
             users: { view: true, create: false, edit: false, delete: false },
             profiles: { view: true, create: false, edit: false, delete: false },
             data_management: { view: true, import: false, sync: false },
             reports: { view: true, export: true },
+            analytics: { view: true, export: true },
             groups: { view: true, edit: false, match: false },
             user_management: { view: true, add_to_lms: false },
             maintenance: { view: false, execute: false },
@@ -440,6 +516,170 @@ async function runMigrations() {
       } catch (err) {
         console.log('  - Admin user error:', err.message);
       }
+    }
+    
+    // Migration v4 -> v5: Add dismissed_orphans table
+    if (currentVersion < 5) {
+      console.log('  Migrating to v5 (dismissed orphans table)...');
+      
+      await query(`
+        CREATE TABLE IF NOT EXISTS dismissed_orphans (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          user_id VARCHAR(50) NOT NULL,
+          partner_id INT NOT NULL,
+          reason VARCHAR(255),
+          dismissed_by VARCHAR(255),
+          dismissed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE KEY unique_user_partner (user_id, partner_id),
+          INDEX idx_user (user_id),
+          INDEX idx_partner (partner_id),
+          FOREIGN KEY (user_id) REFERENCES lms_users(id) ON DELETE CASCADE,
+          FOREIGN KEY (partner_id) REFERENCES partners(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      console.log('  ✓ Created dismissed_orphans table');
+    }
+    
+    // Migration v5 -> v6: Add PAM management and email tables
+    if (currentVersion < 6) {
+      console.log('  Migrating to v6 (PAM management & email)...');
+      
+      // Partner Account Managers table
+      await query(`
+        CREATE TABLE IF NOT EXISTS partner_managers (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          admin_user_id INT,
+          owner_name VARCHAR(255) NOT NULL,
+          email VARCHAR(255),
+          is_active_pam BOOLEAN DEFAULT TRUE,
+          region VARCHAR(100),
+          notes TEXT,
+          email_reports_enabled BOOLEAN DEFAULT TRUE,
+          report_frequency ENUM('daily', 'weekly', 'monthly') DEFAULT 'weekly',
+          last_report_sent TIMESTAMP NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          UNIQUE KEY unique_owner (owner_name),
+          INDEX idx_admin_user (admin_user_id),
+          INDEX idx_active (is_active_pam),
+          INDEX idx_email (email)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      console.log('  ✓ Created partner_managers table');
+      
+      // Email settings table
+      await query(`
+        CREATE TABLE IF NOT EXISTS email_settings (
+          id INT PRIMARY KEY DEFAULT 1,
+          smtp_host VARCHAR(255),
+          smtp_port INT DEFAULT 587,
+          smtp_user VARCHAR(255),
+          smtp_pass VARCHAR(255),
+          from_email VARCHAR(255),
+          from_name VARCHAR(255) DEFAULT 'Nintex Partner Portal',
+          enabled BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      console.log('  ✓ Created email_settings table');
+      
+      // Email log table
+      await query(`
+        CREATE TABLE IF NOT EXISTS email_log (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          recipient_email VARCHAR(255) NOT NULL,
+          recipient_name VARCHAR(255),
+          subject VARCHAR(500),
+          email_type VARCHAR(50),
+          status ENUM('sent', 'failed', 'pending') DEFAULT 'pending',
+          error_message TEXT,
+          sent_at TIMESTAMP NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_recipient (recipient_email),
+          INDEX idx_type (email_type),
+          INDEX idx_status (status),
+          INDEX idx_sent (sent_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      console.log('  ✓ Created email_log table');
+      
+      // Import existing account owners as potential PAMs
+      try {
+        await query(`
+          INSERT IGNORE INTO partner_managers (owner_name, region, is_active_pam)
+          SELECT DISTINCT account_owner, account_region, FALSE
+          FROM partners
+          WHERE account_owner IS NOT NULL AND account_owner != ''
+        `);
+        console.log('  ✓ Imported existing account owners as potential PAMs');
+      } catch (err) {
+        console.log('  - Owner import note:', err.message);
+      }
+    }
+    
+    // Version 7: Add enrollment_synced_at to lms_users for incremental enrollment sync
+    if (currentVersion < 7) {
+      console.log('📦 Running v7 migration: Add enrollment_synced_at column...');
+      
+      // Add enrollment_synced_at column to track when each user's enrollments were last synced
+      try {
+        await query(`
+          ALTER TABLE lms_users 
+          ADD COLUMN enrollment_synced_at DATETIME NULL DEFAULT NULL
+          AFTER synced_at
+        `);
+        console.log('  ✓ Added enrollment_synced_at column to lms_users');
+      } catch (err) {
+        if (!err.message.includes('Duplicate column')) {
+          throw err;
+        }
+        console.log('  - enrollment_synced_at column already exists');
+      }
+      
+      // Add index for efficient queries
+      try {
+        await query(`
+          ALTER TABLE lms_users 
+          ADD INDEX idx_enrollment_sync (enrollment_synced_at)
+        `);
+        console.log('  ✓ Added index on enrollment_synced_at');
+      } catch (err) {
+        if (!err.message.includes('Duplicate key name')) {
+          console.log('  - Index note:', err.message);
+        }
+      }
+    }
+    
+    // Version 8: Add individual sync tasks for unified dashboard
+    if (currentVersion < 8) {
+      console.log('📦 Running v8 migration: Add individual sync tasks...');
+      
+      const individualTasks = [
+        { type: 'sync_users', name: 'Sync Users', interval: 120, icon: '👥', description: 'Sync LMS users from Northpass (incremental)', config: { mode: 'incremental' } },
+        { type: 'sync_groups', name: 'Sync Groups', interval: 120, icon: '🏢', description: 'Sync LMS groups and memberships (incremental)', config: { mode: 'incremental' } },
+        { type: 'sync_courses', name: 'Sync Courses', interval: 240, icon: '📚', description: 'Sync course catalog from Northpass (incremental)', config: { mode: 'incremental' } },
+        { type: 'sync_npcu', name: 'Sync NPCU', interval: 360, icon: '🎓', description: 'Sync course properties (NPCU values)', config: {} },
+        { type: 'sync_enrollments', name: 'Sync Enrollments', interval: 240, icon: '📊', description: 'Sync user enrollments and completions (incremental)', config: { mode: 'incremental', maxAgeDays: 7 } }
+      ];
+      
+      for (const task of individualTasks) {
+        try {
+          await query(`
+            INSERT INTO scheduled_tasks (task_type, task_name, enabled, interval_minutes, config)
+            VALUES (?, ?, FALSE, ?, ?)
+            ON DUPLICATE KEY UPDATE 
+              task_name = VALUES(task_name),
+              interval_minutes = VALUES(interval_minutes),
+              config = VALUES(config)
+          `, [task.type, task.name, task.interval, JSON.stringify(task.config)]);
+          console.log(`  ✓ Added ${task.name} task`);
+        } catch (err) {
+          console.log(`  - ${task.name}: ${err.message}`);
+        }
+      }
+      
+      console.log('  ✓ Individual sync tasks created');
     }
     
     await query('UPDATE schema_info SET version = ? WHERE id = 1', [SCHEMA_VERSION]);

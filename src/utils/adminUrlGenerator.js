@@ -113,6 +113,6 @@ if (validation.errors.length > 0) {
   console.error('Validation errors:', validation.errors);
 }
 
-const urlData = batchGenerateUrls(validation.valid, 'http://20.125.24.28:3000');
+const urlData = batchGenerateUrls(validation.valid, 'https://ptrlrndb.prod.ntxgallery.com');
 downloadUrlCsv(urlData, 'partner-portal-urls.csv');
 */

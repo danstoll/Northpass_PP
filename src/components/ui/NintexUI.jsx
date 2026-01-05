@@ -54,13 +54,19 @@ export const PageHeader = ({
 }) => {
   return (
     <Box sx={{ mb: 3 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
+      <Box sx={{ 
+        display: 'flex', 
+        alignItems: 'flex-start', 
+        gap: 2, 
+        mb: 1,
+        flexWrap: 'wrap',
+      }}>
         {onBack && (
           <IconButton onClick={onBack} sx={{ color: 'var(--admin-text-secondary)' }}>
             <ArrowBack />
           </IconButton>
         )}
-        <Box sx={{ flex: 1 }}>
+        <Box sx={{ flex: '1 1 auto', minWidth: 200 }}>
           <Typography 
             variant="h1" 
             sx={{ 
@@ -81,7 +87,16 @@ export const PageHeader = ({
             </Typography>
           )}
         </Box>
-        {actions && <Box sx={{ display: 'flex', gap: 1 }}>{actions}</Box>}
+        {actions && (
+          <Box sx={{ 
+            display: 'flex', 
+            gap: 1, 
+            flexWrap: 'wrap',
+            flexShrink: 0,
+          }}>
+            {actions}
+          </Box>
+        )}
       </Box>
     </Box>
   );

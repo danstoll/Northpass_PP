@@ -1,0 +1,53 @@
+/* PAM Management Styles */
+.pam-management {
+  padding: var(--admin-spacing-lg);
+}
+
+/* Stats Cards */
+.pam-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--admin-spacing-md);
+  margin-bottom: var(--admin-spacing-lg);
+}
+
+/* Table Styles */
+.pam-table .MuiTableCell-head {
+  background: var(--admin-bg-elevated);
+  font-weight: 600;
+}
+
+.pam-table .MuiTableRow-root:hover {
+  background: var(--admin-bg-hover);
+}
+
+/* Email Settings Form */
+.email-settings-form {
+  max-width: 600px;
+}
+
+.email-settings-form .MuiTextField-root {
+  margin-bottom: var(--admin-spacing-md);
+}
+
+/* Email Log */
+.email-log-table .status-sent {
+  color: var(--admin-success-text);
+  background: var(--admin-success-bg);
+}
+
+.email-log-table .status-failed {
+  color: var(--admin-error-text);
+  background: var(--admin-error-bg);
+}
+
+/* Dialog Styles */
+.pam-dialog .MuiDialogContent-root {
+  padding-top: var(--admin-spacing-md);
+}
+
+/* Partner List in Details Dialog */
+.partner-list-table {
+  max-height: 400px;
+  overflow-y: auto;
+}

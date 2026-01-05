@@ -33,6 +33,7 @@ import {
   GroupWork as GroupWorkIcon,
   Build as BuildIcon,
   Public as PublicIcon,
+  PersonOff as PersonOffIcon,
 } from '@mui/icons-material';
 import {
   PageHeader,
@@ -618,6 +619,20 @@ const UserManagement = () => {
   const [syncFixing, setSyncFixing] = useState(false);
   const [syncProgress, setSyncProgress] = useState(null);
   const [syncResults, setSyncResults] = useState(null);
+
+  // Tab 5: Orphan Discovery state
+  const [orphanLoading, setOrphanLoading] = useState(false);
+  const [orphanError, setOrphanError] = useState(null);
+  const [orphanSummary, setOrphanSummary] = useState(null);
+  const [orphanBreakdown, setOrphanBreakdown] = useState(null);
+  const [selectedOrphanPartner, setSelectedOrphanPartner] = useState(null);
+  const [orphanPartnerDetails, setOrphanPartnerDetails] = useState(null);
+  const [orphanSearchTerm, setOrphanSearchTerm] = useState('');
+  const [orphanTierFilter, setOrphanTierFilter] = useState('all');
+  const [orphanRegionFilter, setOrphanRegionFilter] = useState('all');
+  const [linkingOrphan, setLinkingOrphan] = useState(null);
+  const [linkOrphanResults, setLinkOrphanResults] = useState(null);
+  const [showDismissed, setShowDismissed] = useState(false);
 
   // Load CRM contacts on mount
   useEffect(() => {
@@ -1538,6 +1553,271 @@ const UserManagement = () => {
     }
   };
 
+  // ============================================
+  // Tab 5: Orphan Discovery Functions
+  // ============================================
+
+  // Load orphan summary - partners with users who registered directly in Northpass
+  const loadOrphanSummary = useCallback(async () => {
+    setOrphanLoading(true);
+    setOrphanError(null);
+    
+    try {
+      // Get breakdown first
+      const breakdownResponse = await fetch('/api/db/users/breakdown');
+      if (!breakdownResponse.ok) throw new Error('Failed to load user breakdown');
+      const breakdown = await breakdownResponse.json();
+      setOrphanBreakdown(breakdown);
+      
+      // Get orphan summary by partner
+      const summaryResponse = await fetch('/api/db/users/orphans/summary');
+      if (!summaryResponse.ok) throw new Error('Failed to load orphan summary');
+      const summary = await summaryResponse.json();
+      setOrphanSummary(summary);
+      
+      console.log(`👻 Orphan scan: ${summary.totalOrphans} orphaned users across ${summary.partnersWithOrphans} partners`);
+    } catch (err) {
+      setOrphanError(err.message);
+    } finally {
+      setOrphanLoading(false);
+    }
+  }, []);
+
+  // Load orphan details for a specific partner
+  const loadOrphanPartnerDetails = async (partnerId, includeDismissed = false) => {
+    if (selectedOrphanPartner === partnerId && !includeDismissed) {
+      setSelectedOrphanPartner(null);
+      setOrphanPartnerDetails(null);
+      return;
+    }
+    
+    setSelectedOrphanPartner(partnerId);
+    
+    try {
+      const url = `/api/db/users/orphans/partner/${partnerId}${showDismissed || includeDismissed ? '?includeDismissed=true' : ''}`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Failed to load partner orphans');
+      const details = await response.json();
+      setOrphanPartnerDetails(details);
+    } catch (err) {
+      console.error('Error loading partner orphans:', err);
+      setOrphanPartnerDetails({ error: err.message });
+    }
+  };
+
+  // Link an orphan user to the partner by adding them to the partner's group
+  const linkOrphanToPartner = async (userId, partnerId, partnerName) => {
+    setLinkingOrphan(userId);
+    
+    try {
+      // Find the partner's group
+      const groupsResponse = await fetch('/api/db/lms/groups');
+      if (!groupsResponse.ok) throw new Error('Failed to load groups');
+      const allGroups = await groupsResponse.json();
+      
+      // Look for ptr_<partnername> group
+      const partnerGroup = allGroups.find(g => 
+        g.partner_id === partnerId || 
+        g.name?.toLowerCase() === `ptr_${partnerName.toLowerCase()}`
+      );
+      
+      if (!partnerGroup) {
+        alert(`❌ No partner group found for "${partnerName}". Create the group first.`);
+        setLinkingOrphan(null);
+        return;
+      }
+      
+      // Add user to the partner group via Northpass API
+      const addResult = await northpassApi.addUserToGroup(partnerGroup.id, userId);
+      
+      if (addResult) {
+        setLinkOrphanResults({ success: true, message: `Added user to ${partnerGroup.name}` });
+        // Refresh the details
+        await loadOrphanPartnerDetails(partnerId);
+        // Refresh summary after a short delay
+        setTimeout(() => loadOrphanSummary(), 1000);
+      } else {
+        setLinkOrphanResults({ success: false, message: 'Failed to add user to group' });
+      }
+    } catch (err) {
+      console.error('Error linking orphan:', err);
+      setLinkOrphanResults({ success: false, message: err.message });
+    } finally {
+      setLinkingOrphan(null);
+    }
+  };
+
+  // Bulk link all orphans for a partner
+  const bulkLinkOrphans = async (partnerId, partnerName, orphans) => {
+    setLinkingOrphan('bulk');
+    
+    try {
+      // Find the partner's group
+      const groupsResponse = await fetch('/api/db/lms/groups');
+      if (!groupsResponse.ok) throw new Error('Failed to load groups');
+      const allGroups = await groupsResponse.json();
+      
+      const partnerGroup = allGroups.find(g => 
+        g.partner_id === partnerId || 
+        g.name?.toLowerCase() === `ptr_${partnerName.toLowerCase()}`
+      );
+      
+      if (!partnerGroup) {
+        alert(`❌ No partner group found for "${partnerName}". Create the group first.`);
+        setLinkingOrphan(null);
+        return;
+      }
+      
+      // Add all users
+      const results = { success: 0, failed: 0, errors: [] };
+      for (const orphan of orphans) {
+        try {
+          await northpassApi.addUserToGroup(partnerGroup.id, orphan.user_id);
+          results.success++;
+        } catch (err) {
+          results.failed++;
+          results.errors.push({ email: orphan.email, error: err.message });
+        }
+      }
+      
+      setLinkOrphanResults({
+        success: results.failed === 0,
+        message: `Added ${results.success} users to ${partnerGroup.name}${results.failed > 0 ? ` (${results.failed} failed)` : ''}`
+      });
+      
+      // Refresh
+      await loadOrphanPartnerDetails(partnerId);
+      setTimeout(() => loadOrphanSummary(), 1000);
+    } catch (err) {
+      setLinkOrphanResults({ success: false, message: err.message });
+    } finally {
+      setLinkingOrphan(null);
+    }
+  };
+
+  // Dismiss an orphan user (mark as not belonging to matched partner)
+  const dismissOrphan = async (userId, partnerId, reason = 'Not a match') => {
+    setLinkingOrphan(userId);
+    
+    try {
+      const response = await fetch('/api/db/users/orphans/dismiss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, partnerId, reason })
+      });
+      
+      if (!response.ok) throw new Error('Failed to dismiss orphan');
+      
+      setLinkOrphanResults({ success: true, message: 'User dismissed from orphan list' });
+      
+      // Refresh the details
+      await loadOrphanPartnerDetails(partnerId);
+      setTimeout(() => loadOrphanSummary(), 500);
+    } catch (err) {
+      console.error('Error dismissing orphan:', err);
+      setLinkOrphanResults({ success: false, message: err.message });
+    } finally {
+      setLinkingOrphan(null);
+    }
+  };
+
+  // Bulk dismiss all orphans for a partner
+  const bulkDismissOrphans = async (partnerId, orphans) => {
+    if (!confirm(`Dismiss all ${orphans.length} users from this partner's orphan list? This marks them as not belonging to this partner.`)) {
+      return;
+    }
+    
+    setLinkingOrphan('bulk-dismiss');
+    
+    try {
+      const userIds = orphans.filter(o => !o.isDismissed).map(o => o.user_id);
+      
+      const response = await fetch('/api/db/users/orphans/dismiss-bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userIds, partnerId, reason: 'Bulk dismissed' })
+      });
+      
+      if (!response.ok) throw new Error('Failed to dismiss orphans');
+      const result = await response.json();
+      
+      setLinkOrphanResults({ 
+        success: true, 
+        message: `Dismissed ${result.dismissed} users from orphan list` 
+      });
+      
+      await loadOrphanPartnerDetails(partnerId);
+      setTimeout(() => loadOrphanSummary(), 500);
+    } catch (err) {
+      setLinkOrphanResults({ success: false, message: err.message });
+    } finally {
+      setLinkingOrphan(null);
+    }
+  };
+
+  // Restore a dismissed orphan
+  const restoreOrphan = async (userId, partnerId) => {
+    setLinkingOrphan(userId);
+    
+    try {
+      const response = await fetch('/api/db/users/orphans/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, partnerId })
+      });
+      
+      if (!response.ok) throw new Error('Failed to restore orphan');
+      
+      setLinkOrphanResults({ success: true, message: 'User restored to orphan list' });
+      await loadOrphanPartnerDetails(partnerId);
+      setTimeout(() => loadOrphanSummary(), 500);
+    } catch (err) {
+      console.error('Error restoring orphan:', err);
+      setLinkOrphanResults({ success: false, message: err.message });
+    } finally {
+      setLinkingOrphan(null);
+    }
+  };
+
+  // Filter orphan partners
+  const filteredOrphanPartners = useMemo(() => {
+    if (!orphanSummary?.partners) return [];
+    let filtered = orphanSummary.partners;
+    
+    if (orphanSearchTerm) {
+      const term = orphanSearchTerm.toLowerCase();
+      filtered = filtered.filter(p => 
+        p.account_name?.toLowerCase().includes(term) ||
+        p.account_owner?.toLowerCase().includes(term)
+      );
+    }
+    
+    if (orphanTierFilter !== 'all') {
+      filtered = filtered.filter(p => p.partner_tier === orphanTierFilter);
+    }
+    
+    if (orphanRegionFilter !== 'all') {
+      filtered = filtered.filter(p => p.account_region === orphanRegionFilter);
+    }
+    
+    return filtered;
+  }, [orphanSummary, orphanSearchTerm, orphanTierFilter, orphanRegionFilter]);
+
+  // Get unique tiers/regions from orphan data
+  const orphanFilterOptions = useMemo(() => {
+    if (!orphanSummary?.partners) return { tiers: ['all'], regions: ['all'] };
+    const tiers = new Set();
+    const regions = new Set();
+    orphanSummary.partners.forEach(p => {
+      if (p.partner_tier) tiers.add(p.partner_tier);
+      if (p.account_region) regions.add(p.account_region);
+    });
+    return {
+      tiers: ['all', ...Array.from(tiers).sort()],
+      regions: ['all', ...Array.from(regions).sort()]
+    };
+  }, [orphanSummary]);
+
   // Render loading state
   if (loading) {
     return (
@@ -1605,6 +1885,11 @@ const UserManagement = () => {
             icon={<PublicIcon />} 
             iconPosition="start" 
             label="All Partners Sync" 
+          />
+          <Tab 
+            icon={<PersonOffIcon />} 
+            iconPosition="start" 
+            label={`Orphan Discovery${orphanSummary?.totalOrphans > 0 ? ` (${orphanSummary.totalOrphans})` : ''}`}
           />
         </Tabs>
       </Box>
@@ -2784,6 +3069,346 @@ const UserManagement = () => {
           {/* Loading State */}
           {syncLoading && (
             <LoadingState message="Scanning partner groups... Checking group members against All Partners..." />
+          )}
+        </>
+      )}
+
+      {/* Tab 5: Orphan Discovery */}
+      {activeTab === 5 && (
+        <>
+          <Alert severity="info" sx={{ mb: 3 }}>
+            <Typography variant="body2">
+              <strong>Orphan Discovery</strong> finds LMS users who registered directly in Northpass (bypassing CRM automation).
+              These users' email domains match a partner, but they're not yet linked to that partner.
+            </Typography>
+          </Alert>
+
+          <Box sx={{ mb: 3, display: 'flex', justifyContent: 'flex-end' }}>
+            <ActionButton 
+              onClick={loadOrphanSummary} 
+              loading={orphanLoading}
+            >
+              {orphanLoading ? '🔄 Scanning...' : '👻 Scan for Orphaned Users'}
+            </ActionButton>
+          </Box>
+
+          {orphanError && (
+            <Alert severity="error" onClose={() => setOrphanError(null)} sx={{ mb: 3 }}>
+              {orphanError}
+            </Alert>
+          )}
+
+          {linkOrphanResults && (
+            <Alert 
+              severity={linkOrphanResults.success ? 'success' : 'error'} 
+              onClose={() => setLinkOrphanResults(null)} 
+              sx={{ mb: 3 }}
+            >
+              {linkOrphanResults.message}
+            </Alert>
+          )}
+
+          {/* User Breakdown Stats */}
+          {orphanBreakdown && (
+            <StatsRow columns={5}>
+              <StatCard icon="👥" value={orphanBreakdown.totalUsers.toLocaleString()} label="Total LMS Users" />
+              <StatCard icon="✅" value={orphanBreakdown.linkedPartnerUsers.toLocaleString()} label="Linked Partner Users" variant="success" />
+              <StatCard icon="📊" value={`${orphanBreakdown.percentageLinked}%`} label="Linked Rate" variant="success" />
+              <StatCard icon="❓" value={orphanBreakdown.unlinkedUsers.toLocaleString()} label="Unlinked Users" variant="default" />
+              <StatCard icon="👻" value={orphanSummary?.totalOrphans?.toLocaleString() || '0'} label="Orphans (Domain Match)" variant="warning" />
+            </StatsRow>
+          )}
+
+          {orphanSummary && (
+            <>
+              {/* Summary */}
+              <SectionCard>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
+                  <Box>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                      👻 Found {orphanSummary.totalOrphans.toLocaleString()} orphaned partner users across {orphanSummary.partnersWithOrphans} partners
+                    </Typography>
+                    <Typography variant="body2" sx={{ opacity: 0.6 }}>
+                      These users registered directly in Northpass. Their email domain matches a partner but they're not in partner groups.
+                    </Typography>
+                  </Box>
+                </Box>
+              </SectionCard>
+
+              {/* Filters */}
+              <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2, mb: 3, mt: 3 }}>
+                <Box sx={{ flex: 1, minWidth: 250 }}>
+                  <SearchInput
+                    value={orphanSearchTerm}
+                    onChange={(e) => setOrphanSearchTerm(e.target.value)}
+                    placeholder="Search partners or owners..."
+                    onClear={() => setOrphanSearchTerm('')}
+                  />
+                </Box>
+                
+                <FilterSelect
+                  label="Tier"
+                  value={orphanTierFilter === 'all' ? '' : orphanTierFilter}
+                  onChange={(val) => setOrphanTierFilter(val || 'all')}
+                  options={orphanFilterOptions.tiers.filter(t => t !== 'all').map(t => ({ value: t, label: t }))}
+                  minWidth={140}
+                />
+                
+                <FilterSelect
+                  label="Region"
+                  value={orphanRegionFilter === 'all' ? '' : orphanRegionFilter}
+                  onChange={(val) => setOrphanRegionFilter(val || 'all')}
+                  options={orphanFilterOptions.regions.filter(r => r !== 'all').map(r => ({ value: r, label: r }))}
+                  minWidth={140}
+                />
+              </Box>
+
+              <Typography variant="body2" sx={{ mb: 2, opacity: 0.7 }}>
+                Showing {filteredOrphanPartners.length} of {orphanSummary.partnersWithOrphans} partners with orphans
+              </Typography>
+
+              {/* Partners List */}
+              {filteredOrphanPartners.length > 0 ? (
+                <SectionCard title="Partners with Orphaned Users" icon="👻">
+                  {filteredOrphanPartners.slice(0, 50).map(partner => (
+                    <Box 
+                      key={partner.partner_id}
+                      sx={{ 
+                        mb: 2,
+                        p: 2,
+                        borderRadius: 2,
+                        bgcolor: 'var(--admin-bg-elevated)',
+                        border: '1px solid var(--admin-border-light)',
+                      }}
+                    >
+                      <Box 
+                        sx={{ 
+                          display: 'flex', 
+                          justifyContent: 'space-between', 
+                          alignItems: 'center',
+                          cursor: 'pointer',
+                        }}
+                        onClick={() => loadOrphanPartnerDetails(partner.partner_id)}
+                      >
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>{partner.account_name}</Typography>
+                          <TierBadge tier={partner.partner_tier || 'Unknown'} size="small" />
+                        </Box>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                          <Chip 
+                            label={`${partner.orphan_count} orphans`}
+                            size="small"
+                            color="warning"
+                          />
+                          <Typography variant="caption" sx={{ opacity: 0.6 }}>
+                            {partner.account_region} • {partner.account_owner}
+                          </Typography>
+                          <Typography sx={{ opacity: 0.5 }}>
+                            {selectedOrphanPartner === partner.partner_id ? '▼' : '▶'}
+                          </Typography>
+                        </Box>
+                      </Box>
+                      
+                      <Collapse in={selectedOrphanPartner === partner.partner_id}>
+                        {orphanPartnerDetails?.error ? (
+                          <Alert severity="error" sx={{ mt: 2 }}>{orphanPartnerDetails.error}</Alert>
+                        ) : orphanPartnerDetails?.partner?.id === partner.partner_id ? (
+                          <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid var(--admin-border-light)' }}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 1 }}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                                <Typography variant="subtitle2">
+                                  Orphaned Users ({orphanPartnerDetails.orphanCount})
+                                </Typography>
+                                {orphanPartnerDetails.dismissedCount > 0 && (
+                                  <Chip
+                                    label={`${orphanPartnerDetails.dismissedCount} dismissed`}
+                                    size="small"
+                                    variant={showDismissed ? "filled" : "outlined"}
+                                    color="default"
+                                    onClick={() => {
+                                      setShowDismissed(!showDismissed);
+                                      loadOrphanPartnerDetails(partner.partner_id, !showDismissed);
+                                    }}
+                                    sx={{ cursor: 'pointer' }}
+                                  />
+                                )}
+                              </Box>
+                              <Box sx={{ display: 'flex', gap: 1 }}>
+                                {orphanPartnerDetails.orphanCount > 0 && (
+                                  <>
+                                    <ActionButton
+                                      size="small"
+                                      variant="outlined"
+                                      color="default"
+                                      onClick={() => bulkDismissOrphans(
+                                        partner.partner_id,
+                                        orphanPartnerDetails.orphans
+                                      )}
+                                      loading={linkingOrphan === 'bulk-dismiss'}
+                                      disabled={linkingOrphan !== null}
+                                      sx={{ fontSize: '0.75rem' }}
+                                    >
+                                      Dismiss All
+                                    </ActionButton>
+                                    <ActionButton
+                                      size="small"
+                                      variant="contained"
+                                      color="primary"
+                                      onClick={() => bulkLinkOrphans(
+                                        partner.partner_id, 
+                                        partner.account_name,
+                                        orphanPartnerDetails.orphans.filter(o => !o.isDismissed)
+                                      )}
+                                      loading={linkingOrphan === 'bulk'}
+                                      disabled={linkingOrphan !== null}
+                                    >
+                                      <GroupAddIcon sx={{ fontSize: 16, mr: 0.5 }} />
+                                      Add All to Partner Group
+                                    </ActionButton>
+                                  </>
+                                )}
+                              </Box>
+                            </Box>
+                            
+                            <Box sx={{ maxHeight: 300, overflowY: 'auto' }}>
+                              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                <thead>
+                                  <tr style={{ borderBottom: '2px solid var(--admin-border-default)' }}>
+                                    <th style={{ padding: '8px', textAlign: 'left' }}>Email</th>
+                                    <th style={{ padding: '8px', textAlign: 'left' }}>Name</th>
+                                    <th style={{ padding: '8px', textAlign: 'left' }}>Domain</th>
+                                    <th style={{ padding: '8px', textAlign: 'left' }}>Registered</th>
+                                    <th style={{ padding: '8px', textAlign: 'center' }}>Action</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {orphanPartnerDetails.orphans?.map(orphan => (
+                                    <tr 
+                                      key={orphan.user_id} 
+                                      style={{ 
+                                        borderBottom: '1px solid var(--admin-border-light)',
+                                        opacity: orphan.isDismissed ? 0.5 : 1,
+                                        backgroundColor: orphan.isDismissed ? 'var(--admin-bg-elevated)' : 'transparent'
+                                      }}
+                                    >
+                                      <td style={{ padding: '8px' }}>
+                                        {orphan.email}
+                                        {orphan.isDismissed && (
+                                          <Chip label="Dismissed" size="small" sx={{ ml: 1, fontSize: '0.65rem', height: 18 }} />
+                                        )}
+                                      </td>
+                                      <td style={{ padding: '8px' }}>
+                                        {[orphan.first_name, orphan.last_name].filter(Boolean).join(' ') || '-'}
+                                      </td>
+                                      <td style={{ padding: '8px' }}>@{orphan.domain}</td>
+                                      <td style={{ padding: '8px' }}>
+                                        {orphan.created_at_lms ? new Date(orphan.created_at_lms).toLocaleDateString() : '-'}
+                                      </td>
+                                      <td style={{ padding: '8px', textAlign: 'center' }}>
+                                        <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center' }}>
+                                          {orphan.isDismissed ? (
+                                            <ActionButton
+                                              size="small"
+                                              variant="outlined"
+                                              color="info"
+                                              onClick={() => restoreOrphan(orphan.user_id, partner.partner_id)}
+                                              loading={linkingOrphan === orphan.user_id}
+                                              disabled={linkingOrphan !== null}
+                                              sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
+                                            >
+                                              Restore
+                                            </ActionButton>
+                                          ) : (
+                                            <>
+                                              <ActionButton
+                                                size="small"
+                                                variant="outlined"
+                                                color="primary"
+                                                onClick={() => linkOrphanToPartner(
+                                                  orphan.user_id, 
+                                                  partner.partner_id,
+                                                  partner.account_name
+                                                )}
+                                                loading={linkingOrphan === orphan.user_id}
+                                                disabled={linkingOrphan !== null}
+                                                sx={{ fontSize: '0.7rem', py: 0.25, px: 1 }}
+                                              >
+                                                Link
+                                              </ActionButton>
+                                              <ActionButton
+                                                size="small"
+                                                variant="text"
+                                                color="default"
+                                                onClick={() => dismissOrphan(orphan.user_id, partner.partner_id)}
+                                                loading={linkingOrphan === orphan.user_id}
+                                                disabled={linkingOrphan !== null}
+                                                sx={{ fontSize: '0.7rem', py: 0.25, px: 1, minWidth: 'auto' }}
+                                                title="Dismiss - this user doesn't belong to this partner"
+                                              >
+                                                ✕
+                                              </ActionButton>
+                                            </>
+                                          )}
+                                        </Box>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </Box>
+                          </Box>
+                        ) : (
+                          <Box sx={{ mt: 2, display: 'flex', justifyContent: 'center' }}>
+                            <div className="ntx-spinner"></div>
+                          </Box>
+                        )}
+                      </Collapse>
+                    </Box>
+                  ))}
+                  
+                  {filteredOrphanPartners.length > 50 && (
+                    <Typography variant="body2" sx={{ textAlign: 'center', opacity: 0.6, mt: 2 }}>
+                      Showing first 50 partners. Use filters to narrow down.
+                    </Typography>
+                  )}
+                </SectionCard>
+              ) : (
+                <EmptyState
+                  icon="✅"
+                  title="No orphaned users found!"
+                  message="All LMS users with partner email domains are properly linked to their partners."
+                />
+              )}
+            </>
+          )}
+
+          {/* Initial State */}
+          {!orphanLoading && !orphanSummary && !orphanBreakdown && (
+            <SectionCard title="Orphan Discovery" icon="👻">
+              <Box sx={{ textAlign: 'center', py: 4, maxWidth: 600, mx: 'auto' }}>
+                <Typography variant="body1" sx={{ mb: 2, opacity: 0.8 }}>
+                  This tool discovers <strong>"orphaned" partner users</strong> - people who registered directly in Northpass LMS
+                  without going through CRM automation.
+                </Typography>
+                <Alert severity="info" sx={{ mb: 3 }}>
+                  <Typography variant="body2">
+                    <strong>How it works:</strong><br />
+                    • Scans all LMS users' email domains<br />
+                    • Matches domains against known partner contacts<br />
+                    • Identifies users who should be linked to a partner but aren't<br />
+                    • Allows you to add them to their partner's group
+                  </Typography>
+                </Alert>
+                <Typography variant="body2" sx={{ opacity: 0.7 }}>
+                  Click "Scan for Orphaned Users" to find users who need to be linked.
+                </Typography>
+              </Box>
+            </SectionCard>
+          )}
+
+          {/* Loading State */}
+          {orphanLoading && (
+            <LoadingState message="Scanning LMS users... Matching email domains against partner contacts..." />
           )}
         </>
       )}

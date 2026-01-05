@@ -1,7 +1,7 @@
 # Nintex Partner Portal - Northpass Integration Instructions
 
 ## Production Deployment
-- **Production URL**: `http://20.125.24.28:3000`
+- **Production URL**: `https://ptrlrndb.prod.ntxgallery.com`
 - **Server**: Ubuntu 22.04.5 LTS with PM2 process management
 - **Process Name**: `northpass-portal`
 - **SSH Access**: `ssh NTXPTRAdmin@20.125.24.28`
@@ -32,7 +32,7 @@ ssh NTXPTRAdmin@20.125.24.28 "pm2 restart northpass-portal"
 ssh NTXPTRAdmin@20.125.24.28 "pm2 logs northpass-portal"
 
 # Check cache headers
-Invoke-WebRequest -Uri "http://20.125.24.28:3000/assets/index-*.js" -Method Head | Select-Object -ExpandProperty Headers
+Invoke-WebRequest -Uri "https://ptrlrndb.prod.ntxgallery.com/assets/index-*.js" -Method Head | Select-Object -ExpandProperty Headers
 ```
 
 ## Application Configuration
@@ -41,8 +41,8 @@ Invoke-WebRequest -Uri "http://20.125.24.28:3000/assets/index-*.js" -Method Head
 - **Company Parameter**: `?group=CompanyName` or `?company=CompanyName` (exact match required)
 - **Tier Parameter**: `?tier=Premier|Select|Registered|Certified`
 - **Example URLs**:
-  - `http://20.125.24.28:3000/?group=Acme Corporation&tier=Premier`
-  - `http://20.125.24.28:3000/?company=Nintex Partner Portal Americas&tier=Certified`
+  - `https://ptrlrndb.prod.ntxgallery.com/?group=Acme Corporation&tier=Premier`
+  - `https://ptrlrndb.prod.ntxgallery.com/?company=Nintex Partner Portal Americas&tier=Certified`
 - **No Parameters**: Shows welcome screen with usage instructions
 
 ### API Configuration
@@ -197,22 +197,24 @@ MUI is split into separate chunks for optimal loading:
 
 ### Admin Pages (6 tools - streamlined January 2025)
 1. **Data Management** (`/admin/data`) - Import partner/contact Excel files to MariaDB
-2. **LMS Sync** (`/admin/sync-dashboard` or `/admin/sync`) - **Consolidated sync dashboard** with:
-   - **Quick Sync**: Users, Groups, Courses, NPCU reference data
-   - **Enrollment Sync**: Incremental or Full enrollment synchronization
-   - **Scheduled Tasks**: 4 database-backed tasks (LMS Sync, Group Analysis, Group Members, Cleanup)
+2. **LMS Sync** (`/admin/sync-dashboard` or `/admin/sync`) - **Unified sync dashboard** with:
+   - **Task Cards**: All 9 sync tasks shown in unified card grid (Users, Groups, Courses, NPCU, Enrollments, LMS Bundle, Group Analysis, Member Sync, Cleanup)
+   - **Manual Run**: Each task has a ▶ Run Now button for on-demand execution
+   - **Scheduling**: Each task has enable/disable toggle and editable interval
+   - **Categories**: Tasks organized by Data Sync, Analysis, Maintenance
    - **History Tab**: View sync logs and task execution history
 3. **Reports** (`/admin/dbreports`) - 10 on-demand reports across 3 categories:
    - **Partner Analytics**: Overview Dashboard, Partner Leaderboard, Certification Gaps, Partners Without Groups
    - **User Reports**: User Certifications, Contacts Not in LMS, Inactive Users
    - **Course & Activity**: Popular Courses, Recent Activity, Expiring Certifications
 4. **Owner Report** (`/admin/owners`) - Account owner certification tracking
-5. **User Management** (`/admin/users`) - Comprehensive user and group management with 5 tabs:
+5. **User Management** (`/admin/users`) - Comprehensive user and group management with 6 tabs:
    - **Missing CRM Users**: Find CRM contacts not in LMS and add them
    - **Domain Analysis**: Match LMS users to partners by email domain
    - **Partners Without Groups**: Find partners without LMS groups
    - **Contact Group Audit**: Audit contacts for proper LMS group memberships (merged from Maintenance)
    - **All Partners Sync**: Ensure partner users are in "All Partners" group (merged from Maintenance)
+   - **Orphan Discovery**: Find LMS users who registered directly (bypassing CRM) and link them to partners
 6. **URL Generator** (`/admin`) - Generate partner portal URLs
 7. **Bulk URLs** (`/admin/bulk-urls`) - Batch generate portal URLs
 
@@ -224,13 +226,21 @@ MUI is split into separate chunks for optimal loading:
 - Maintenance - Merged into User Management (January 2025)
 
 ### Database Sync Architecture
-**Two Scheduling Systems (both managed from LMS Sync Dashboard):**
-1. **sync_schedule table**: Legacy enrollment auto-sync (interval_hours, sync_mode, enabled)
-2. **scheduled_tasks table**: Full task scheduler with 4 task types:
-   - `lms_sync` - LMS Data Sync (every 2 hours)
-   - `group_analysis` - Group Analysis (every 6 hours)
-   - `group_members_sync` - Group Members Sync (every hour)
-   - `cleanup` - Database Cleanup (daily)
+**Schema Version**: 8 (January 2025)
+
+**scheduled_tasks table**: Full task scheduler with 9 task types:
+- **Data Sync Tasks**:
+  - `sync_users` - Sync LMS users (2h interval)
+  - `sync_groups` - Sync LMS groups (2h interval)
+  - `sync_courses` - Sync course catalog (4h interval)
+  - `sync_npcu` - Sync NPCU values (6h interval)
+  - `sync_enrollments` - Sync user enrollments (4h interval, partner users only)
+  - `lms_sync` - LMS Bundle: All syncs combined (legacy composite task)
+- **Analysis Tasks**:
+  - `group_analysis` - Find potential users by domain (6h interval)
+  - `group_members_sync` - Confirm pending group members (6h interval)
+- **Maintenance Tasks**:
+  - `cleanup` - Remove old logs and data (daily)
 
 **Sync Features:**
 - **Task Scheduler** (`server/db/taskScheduler.cjs`): Database-backed with mutex locks, retry logic, execution history
@@ -252,14 +262,14 @@ All major syncs now use **incremental mode by default**, dramatically reducing A
 **Sync Modes:**
 ```powershell
 # Incremental sync (default) - only changed records since last sync
-Invoke-RestMethod -Uri "http://20.125.24.28:3000/api/db/sync/users" -Method Post
-Invoke-RestMethod -Uri "http://20.125.24.28:3000/api/db/sync/groups" -Method Post
-Invoke-RestMethod -Uri "http://20.125.24.28:3000/api/db/sync/courses" -Method Post
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/db/sync/users" -Method Post
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/db/sync/groups" -Method Post
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/db/sync/courses" -Method Post
 
 # Full sync - force fetch ALL records (use sparingly)
-Invoke-RestMethod -Uri "http://20.125.24.28:3000/api/db/sync/users?mode=full" -Method Post
-Invoke-RestMethod -Uri "http://20.125.24.28:3000/api/db/sync/groups?mode=full" -Method Post
-Invoke-RestMethod -Uri "http://20.125.24.28:3000/api/db/sync/courses?mode=full" -Method Post
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/db/sync/users?mode=full" -Method Post
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/db/sync/groups?mode=full" -Method Post
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/db/sync/courses?mode=full" -Method Post
 ```
 
 **Task Scheduler Sync Types:**
@@ -411,13 +421,43 @@ border: 1px solid #ddd;
 
 ## Recent Fixes (December 2025)
 
-### LMS Sync Dashboard Consolidation (January 2025)
-- ✅ All sync functions consolidated onto LMS Sync Dashboard (`/admin/sync`)
-- ✅ Quick Sync (users, groups, courses, NPCU) moved from DataManagement
-- ✅ Scheduled Tasks panel shows all 4 database-backed tasks with enable/disable toggles
-- ✅ Tabbed interface: Overview, Scheduled Tasks, History
-- ✅ Task execution with manual run buttons
-- ✅ DataManagement sync tab now redirects to LMS Sync Dashboard
+### Analytics - Partner Users Only (January 2025)
+- ✅ Analytics now only track **partner users** (users in partner groups OR linked via contacts)
+- ✅ Non-partner users (customers, internal users) excluded from all trend/KPI metrics
+- ✅ All LMS users KEPT in database for orphan discovery (domain matching)
+- ✅ Partner user definition: Users in groups with `partner_id` set OR users in contacts table with `partner_id`
+- ✅ Analytics user count: ~4,491 partner users (vs 22,385 total LMS users)
+
+### Enrollment Sync - Partner Users Only (January 2025)
+- ✅ Enrollment sync now ONLY syncs for **partner users**
+- ✅ Non-partner users (customers, internal) are skipped during enrollment sync
+- ✅ This dramatically reduces API calls (~4,491 users vs 22,385)
+- ✅ `server/db/lmsSyncService.cjs` - `syncEnrollments()` updated with partner filter
+- ✅ Partner user query uses same JOIN logic as analytics (contacts + group members)
+
+### Orphan Discovery Endpoints (January 2025)
+- ✅ `GET /api/db/users/breakdown` - Stats on linked vs unlinked users
+- ✅ `GET /api/db/users/orphans` - Find users whose email domain matches a partner but aren't linked
+- ✅ `GET /api/db/users/orphans/summary` - Quick count by partner
+- ✅ `GET /api/db/users/orphans/partner/:id` - Get orphans for a specific partner
+- ✅ Purpose: Find users who registered directly in Northpass, bypassing CRM automation
+
+### Analytics Stacked Filters (January 2025)
+- ✅ All analytics/trends support stacked filters (region, owner, tier) with AND logic
+- ✅ `buildFilterClauses()` helper in trendService.cjs for consistent SQL generation
+- ✅ Filter UI added to AnalyticsDashboard with dropdowns and active filter chips
+- ✅ Export includes filter information
+
+### Unified Sync Dashboard (January 2025)
+- ✅ Complete SyncDashboard redesign with unified task cards
+- ✅ All 9 sync tasks displayed in consistent card grid UI
+- ✅ Tasks organized by category: Data Sync (6), Analysis (2), Maintenance (1)
+- ✅ Each task card shows: icon, name, description, record count, interval, last run, status
+- ✅ **Run Now** button on every task for manual execution
+- ✅ **Schedule toggle** to enable/disable automatic runs
+- ✅ **Editable intervals** (click to edit minutes between runs)
+- ✅ Schema v8 migration added 5 individual sync tasks to scheduled_tasks table
+- ✅ LMS Bundle task shows all syncs combined for backwards compatibility
 
 ### Top Navigation & Theme Toggle (December 28, 2025)
 - ✅ Added `TopNavbar` component with JustDo-style dashboard design
@@ -425,7 +465,7 @@ border: 1px solid #ddd;
 - ✅ Search box, quick stats display, notifications, and user profile menu
 - ✅ Mobile-responsive hamburger menu integration
 - ✅ Sidebar now positioned below top navbar (64px offset)
-- ✅ Current cache version: **84**
+- ✅ Current cache version: **207**
 
 ### CSS Variable Theming System
 - ✅ All 14 CSS files converted to use CSS variables

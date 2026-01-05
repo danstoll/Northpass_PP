@@ -4,7 +4,7 @@ A comprehensive React-based certification tracking and partner management applic
 
 ## 🚀 Production
 
-- **Live URL**: `http://20.125.24.28:3000`
+- **Live URL**: `https://ptrlrndb.prod.ntxgallery.com`
 - **Server**: Ubuntu 22.04.5 LTS with PM2 process management
 - **Database**: MariaDB 11.6.2 at `20.29.25.238:31337`
 
@@ -98,19 +98,19 @@ The script builds, uploads, installs dependencies, and restarts PM2.
 ### Partner Dashboard (Default Route)
 ```
 # Regular format
-http://20.125.24.28:3000/?group=CompanyName&tier=Premier
+https://ptrlrndb.prod.ntxgallery.com/?group=CompanyName&tier=Premier
 
 # Encoded format (recommended)
-http://20.125.24.28:3000/?data=eyJjb21wYW55IjoiQ29tcGFueU5hbWUiLCJ0aWVyIjoiUHJlbWllciJ9
+https://ptrlrndb.prod.ntxgallery.com/?data=eyJjb21wYW55IjoiQ29tcGFueU5hbWUiLCJ0aWVyIjoiUHJlbWllciJ9
 ```
 
 ### Customer Dashboard
 ```
 # Regular format
-http://20.125.24.28:3000/customer?company=CompanyName
+https://ptrlrndb.prod.ntxgallery.com/customer?company=CompanyName
 
 # Encoded format
-http://20.125.24.28:3000/customer?data=eyJjb21wYW55IjoiQ29tcGFueU5hbWUifQ
+https://ptrlrndb.prod.ntxgallery.com/customer?data=eyJjb21wYW55IjoiQ29tcGFueU5hbWUifQ
 ```
 
 ### Business Logic

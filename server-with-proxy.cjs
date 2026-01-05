@@ -1,12 +1,46 @@
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const https = require('https');
+const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const { Server } = require('socket.io');
 
 // Import database modules
 let dbRoutes = null;
 let dbInitialized = false;
+
+// Socket.io instance (exported for use in sync services)
+let io = null;
+
+// Get the Socket.io instance
+function getIO() {
+  return io;
+}
+
+// Emit sync progress to all connected clients
+function emitSyncProgress(syncType, data) {
+  if (io) {
+    io.emit('sync:progress', { syncType, ...data });
+  }
+}
+
+// Emit sync completion
+function emitSyncComplete(syncType, stats) {
+  if (io) {
+    io.emit('sync:complete', { syncType, stats, timestamp: new Date().toISOString() });
+  }
+}
+
+// Emit sync error
+function emitSyncError(syncType, error) {
+  if (io) {
+    io.emit('sync:error', { syncType, error: error.message || error, timestamp: new Date().toISOString() });
+  }
+}
+
+// Export socket functions for use in other modules
+module.exports = { getIO, emitSyncProgress, emitSyncComplete, emitSyncError };
 
 // Try to initialize database (don't fail server if DB is unavailable)
 async function initDb() {
@@ -172,6 +206,16 @@ app.use('/api/db', (req, res, next) => {
   }
 });
 
+// Impartner PRM API proxy (standalone integration)
+let impartnerRoutes = null;
+try {
+  impartnerRoutes = require('./server/impartnerRoutes.cjs');
+  app.use('/api/impartner', impartnerRoutes);
+  console.log('✅ Impartner PRM API proxy loaded: /api/impartner/*');
+} catch (err) {
+  console.warn('⚠️ Impartner routes not loaded:', err.message);
+}
+
 // Serve static assets FIRST with proper caching (before security headers)
 // Hashed JS/CSS files are cache-safe for 1 year
 app.use('/assets', express.static(path.join(__dirname, 'dist', 'assets'), {
@@ -279,11 +323,47 @@ process.on('SIGINT', () => {
   process.exit(0);
 });
 
-app.listen(PORT, '0.0.0.0', async () => {
-  console.log(`🚀 Northpass Partner Portal with Proxy running on http://0.0.0.0:${PORT}`);
-  console.log(`🌐 External access: http://20.125.24.28:${PORT}`);
+// Create HTTP server and attach Socket.io
+const server = http.createServer(app);
+io = new Server(server, {
+  cors: {
+    origin: [
+      'http://localhost:5173', 
+      'http://localhost:3000',
+      'http://20.125.24.28:3000',
+      'https://ptrlrndb.prod.ntxgallery.com'
+    ],
+    methods: ['GET', 'POST'],
+    credentials: true
+  }
+});
+
+// Socket.io connection handling
+io.on('connection', (socket) => {
+  console.log(`🔌 Client connected: ${socket.id}`);
+  
+  // Send current sync status on connect
+  socket.emit('connected', { 
+    message: 'Connected to sync server',
+    timestamp: new Date().toISOString()
+  });
+  
+  // Handle client requesting sync status
+  socket.on('sync:subscribe', (syncTypes) => {
+    console.log(`📡 Client ${socket.id} subscribed to: ${syncTypes.join(', ')}`);
+  });
+  
+  socket.on('disconnect', () => {
+    console.log(`🔌 Client disconnected: ${socket.id}`);
+  });
+});
+
+server.listen(PORT, '0.0.0.0', async () => {
+  console.log(`🚀 Northpass Partner Portal running on http://0.0.0.0:${PORT}`);
+  console.log(`🌐 Production URL: https://ptrlrndb.prod.ntxgallery.com`);
   console.log(`📁 Serving from: ${__dirname}`);
   console.log(`🔗 API Proxy: /api/northpass -> https://api.northpass.com`);
+  console.log(`🔌 WebSocket: Real-time sync updates enabled`);
   
   // Initialize database after server starts
   await initDb();

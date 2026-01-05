@@ -36,6 +36,8 @@ import {
   Settings,
   SwapHoriz,
   ExitToApp,
+  Timeline,
+  SupervisorAccount,
 } from '@mui/icons-material';
 import { useAuth } from '../context/AuthContext';
 
@@ -49,13 +51,14 @@ const ALL_NAV_ITEMS = [
   { id: 'data', label: 'Data Management', path: '/admin/data', icon: <Storage />, permission: { category: 'data_management', action: 'view' } },
   { id: 'sync-dashboard', label: 'LMS Sync', path: '/admin/sync-dashboard', icon: <Sync />, permission: { category: 'data_management', action: 'sync' } },
   // Reports
+  { id: 'analytics', label: 'Analytics', path: '/admin/analytics', icon: <Timeline />, permission: { category: 'reports', action: 'view' } },
   { id: 'dbreports', label: 'Reports', path: '/admin/dbreports', icon: <Assessment />, permission: { category: 'reports', action: 'view' } },
   { id: 'owners', label: 'Owner Report', path: '/admin/owners', icon: <Dashboard />, permission: { category: 'reports', action: 'view' } },
   // Users
   { id: 'users', label: 'User Management', path: '/admin/users', icon: <PersonAdd />, permission: { category: 'user_management', action: 'view' } },
+  { id: 'pam', label: 'PAM Management', path: '/admin/pam', icon: <SupervisorAccount />, permission: { category: 'user_management', action: 'view' } },
   // Tools - URL Generator available to all authenticated users
   { id: 'urls', label: 'URL Generator', path: '/admin', icon: <Link />, permission: null },
-  { id: 'bulk-urls', label: 'Bulk URLs', path: '/admin/bulk-urls', icon: <FormatListBulleted />, permission: { category: 'reports', action: 'view' } },
   { id: 'settings', label: 'Settings', path: '/admin/settings', icon: <Settings />, permission: { category: 'settings', action: 'view' } },
   // Admin Users
   { id: 'admin-users', label: 'Admin Users', path: '/admin/admin-users', icon: <People />, permission: { category: 'users', action: 'view' } },

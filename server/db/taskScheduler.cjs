@@ -221,12 +221,46 @@ async function runTask(task) {
 
 /**
  * Execute a task by type
+ * Supports both individual sync types and composite tasks
  */
 async function executeTask(taskType, config) {
+  const lmsSyncService = require('./lmsSyncService.cjs');
+  
   switch (taskType) {
+    // Composite tasks (legacy support)
     case 'lms_sync':
       return await runLmsSync(config);
     
+    // Individual sync types (new unified approach)
+    case 'sync_users':
+      return await runSingleSync(taskType, 'users', lmsSyncService.syncUsersIncremental, config);
+    
+    case 'sync_users_full':
+      return await runSingleSync(taskType, 'users', lmsSyncService.syncUsers, config);
+    
+    case 'sync_groups':
+      return await runSingleSync(taskType, 'groups', lmsSyncService.syncGroupsIncremental, config);
+    
+    case 'sync_groups_full':
+      return await runSingleSync(taskType, 'groups', lmsSyncService.syncGroups, config);
+    
+    case 'sync_courses':
+      return await runSingleSync(taskType, 'courses', lmsSyncService.syncCoursesIncremental, config);
+    
+    case 'sync_courses_full':
+      return await runSingleSync(taskType, 'courses', lmsSyncService.syncCourses, config);
+    
+    case 'sync_npcu':
+    case 'sync_course_properties':
+      return await runSingleSync(taskType, 'npcu', lmsSyncService.syncCourseProperties, config);
+    
+    case 'sync_enrollments':
+      return await runSingleSync(taskType, 'enrollments', lmsSyncService.syncEnrollmentsIncremental, config, { maxAgeDays: config.maxAgeDays || 7 });
+    
+    case 'sync_enrollments_full':
+      return await runSingleSync(taskType, 'enrollments', lmsSyncService.syncEnrollments, config);
+    
+    // Analysis and maintenance tasks
     case 'group_analysis':
       return await runGroupAnalysis(config);
     
@@ -239,6 +273,31 @@ async function executeTask(taskType, config) {
     default:
       throw new Error(`Unknown task type: ${taskType}`);
   }
+}
+
+/**
+ * Run a single sync operation with progress tracking
+ */
+async function runSingleSync(taskType, syncName, syncFn, config, extraOptions = {}) {
+  const results = { recordsProcessed: 0, syncType: syncName };
+  
+  updateTaskProgress(taskType, `Starting ${syncName} sync`, 0, 100);
+  
+  try {
+    const syncResult = await syncFn(null, (type, current, total) => {
+      updateTaskProgress(taskType, `Syncing ${syncName}`, current, total, `${current.toLocaleString()} of ${total.toLocaleString()}`);
+    }, extraOptions);
+    
+    results.recordsProcessed = syncResult?.processed || syncResult?.total || syncResult?.synced || 0;
+    results.details = syncResult;
+    
+    updateTaskProgress(taskType, 'Complete', 100, 100);
+  } catch (err) {
+    results.error = err.message;
+    throw err;
+  }
+  
+  return results;
 }
 
 /**
@@ -307,8 +366,15 @@ async function runLmsSync(config) {
           });
           break;
         case 'enrollments':
+          // Use incremental enrollment sync by default (only users changed since last sync)
+          syncResult = await lmsSyncService.syncEnrollmentsIncremental(null, (type, current, total) => {
+            updateTaskProgress('lms_sync', `Syncing enrollments (incremental)`, current, total, `${current.toLocaleString()} of ${total.toLocaleString()}`);
+          }, { maxAgeDays: config.enrollment_max_age_days || 7 });
+          break;
+        case 'enrollments_full':
+          // Full enrollment sync - fetch ALL partner users (use sparingly, takes 60+ min)
           syncResult = await lmsSyncService.syncEnrollments(null, (type, current, total) => {
-            updateTaskProgress('lms_sync', `Syncing enrollments`, current, total, `${current.toLocaleString()} of ${total.toLocaleString()}`);
+            updateTaskProgress('lms_sync', `Syncing enrollments (full)`, current, total, `${current.toLocaleString()} of ${total.toLocaleString()}`);
           });
           break;
       }

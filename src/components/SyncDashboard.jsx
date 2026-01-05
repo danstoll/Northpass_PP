@@ -2,65 +2,84 @@ import { useState, useEffect, useCallback } from 'react';
 import './SyncDashboard.css';
 
 /**
- * SyncDashboard Component
- * Consolidated LMS Sync Dashboard for all Northpass synchronization
- * Features:
- * - Quick Sync: Users, Groups, Courses (reference data)
- * - Enrollment Sync: Incremental and Full
- * - Scheduled Tasks: Database-backed task scheduler
- * - Sync History: Detailed batch sync log
+ * Unified SyncDashboard Component
+ * All sync jobs share the same visualization, can be manually run and scheduled
  */
 
 // Helper function to safely parse JSON response
-// Returns { ok, data, error } where ok indicates if parsing succeeded
 const safeJsonParse = async (response) => {
   const text = await response.text();
   try {
     const data = JSON.parse(text);
     return { ok: true, data };
   } catch {
-    // Response was not valid JSON (likely HTML error page)
     console.error('Invalid JSON response:', text.substring(0, 100));
     return { ok: false, error: 'Server returned invalid response', data: null };
   }
 };
 
+// Task category definitions
+const TASK_CATEGORIES = {
+  sync: { name: 'Data Sync', icon: '🔄', description: 'Sync data from Northpass LMS' },
+  analysis: { name: 'Analysis', icon: '🔍', description: 'Analyze and match data' },
+  maintenance: { name: 'Maintenance', icon: '🔧', description: 'System maintenance tasks' }
+};
+
+// Task type metadata
+const TASK_METADATA = {
+  sync_users: { icon: '👥', name: 'Users', category: 'sync', description: 'LMS users from Northpass', apiEndpoint: '/api/db/sync/users' },
+  sync_groups: { icon: '🏢', name: 'Groups', category: 'sync', description: 'LMS groups and memberships', apiEndpoint: '/api/db/sync/groups' },
+  sync_courses: { icon: '📚', name: 'Courses', category: 'sync', description: 'Course catalog', apiEndpoint: '/api/db/sync/courses' },
+  sync_npcu: { icon: '🎓', name: 'NPCU', category: 'sync', description: 'Course certification values', apiEndpoint: '/api/db/sync/course-properties' },
+  sync_enrollments: { icon: '📊', name: 'Enrollments', category: 'sync', description: 'User completions & progress', apiEndpoint: '/api/db/sync/enrollments' },
+  lms_sync: { icon: '📦', name: 'LMS Bundle', category: 'sync', description: 'All syncs combined (Users, Groups, Courses, NPCU, Enrollments)', apiEndpoint: null },
+  group_analysis: { icon: '🔍', name: 'Group Analysis', category: 'analysis', description: 'Find potential users by domain', apiEndpoint: null },
+  group_members_sync: { icon: '👥', name: 'Member Sync', category: 'analysis', description: 'Confirm pending group members', apiEndpoint: null },
+  cleanup: { icon: '🧹', name: 'Cleanup', category: 'maintenance', description: 'Remove old logs and data', apiEndpoint: null }
+};
+
 function SyncDashboard() {
-  // Sync state
-  const [syncStats, setSyncStats] = useState(null);
+  // State
+  const [tasks, setTasks] = useState([]);
   const [syncHistory, setSyncHistory] = useState([]);
-  const [currentSync, setCurrentSync] = useState(null);
+  const [syncStats, setSyncStats] = useState(null);
+  const [schedulerStatus, setSchedulerStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [successMessage, setSuccessMessage] = useState(null);
   
-  // Quick sync state
-  const [quickSyncing, setQuickSyncing] = useState(null); // 'users' | 'groups' | 'courses' | null
-  const [quickSyncResult, setQuickSyncResult] = useState(null);
-  
-  // Scheduled Tasks state
-  const [scheduledTasks, setScheduledTasks] = useState([]);
-  const [schedulerStatus, setSchedulerStatus] = useState(null);
-  const [taskHistory, setTaskHistory] = useState({});
-  const [editingInterval, setEditingInterval] = useState(null); // task_type being edited
-  const [newInterval, setNewInterval] = useState('');
-  
+  // Running tasks state
+  const [runningTasks, setRunningTasks] = useState(new Set());
   
   // UI state
-  const [expandedLog, setExpandedLog] = useState(null);
+  const [activeTab, setActiveTab] = useState('tasks'); // 'tasks' | 'history'
+  const [expandedTask, setExpandedTask] = useState(null);
+  const [editingInterval, setEditingInterval] = useState(null);
+  const [newInterval, setNewInterval] = useState('');
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [activeTab, setActiveTab] = useState('overview'); // 'overview' | 'scheduled' | 'history'
+  const [expandedLog, setExpandedLog] = useState(null);
 
-  // Object mapping (static display of what we sync)
-  const objectMapping = [
-    { id: 'users', name: 'LMS Users', icon: '👥', direction: 'inbound', enabled: true, description: 'Partner users from Northpass LMS' },
-    { id: 'groups', name: 'LMS Groups', icon: '🏢', direction: 'inbound', enabled: true, description: 'Partner groups and memberships' },
-    { id: 'courses', name: 'Courses', icon: '📚', direction: 'inbound', enabled: true, description: 'Course catalog with NPCU values' },
-    { id: 'enrollments', name: 'Enrollments', icon: '📊', direction: 'inbound', enabled: true, description: 'User progress and completions' },
-    { id: 'contacts', name: 'CRM Contacts', icon: '📇', direction: 'outbound', enabled: true, description: 'Link CRM contacts to LMS users' }
-  ];
+  // Fetch all tasks
+  const fetchTasks = useCallback(async () => {
+    try {
+      const response = await fetch('/api/db/tasks');
+      if (response.ok) {
+        const data = await response.json();
+        setTasks(data.tasks || []);
+        setSchedulerStatus(data.status || null);
+        
+        // Update running tasks set
+        const running = new Set(
+          (data.status?.activeTasks || []).map(t => t.type)
+        );
+        setRunningTasks(running);
+      }
+    } catch (err) {
+      console.error('Failed to fetch tasks:', err);
+    }
+  }, []);
 
-  // Fetch sync statistics
+  // Fetch sync stats
   const fetchSyncStats = useCallback(async () => {
     try {
       const response = await fetch('/api/db/sync/stats');
@@ -73,10 +92,10 @@ function SyncDashboard() {
     }
   }, []);
 
-  // Fetch sync history (unified from both sources)
+  // Fetch sync history
   const fetchSyncHistory = useCallback(async () => {
     try {
-      const response = await fetch('/api/db/sync/unified-history?limit=30');
+      const response = await fetch('/api/db/sync/unified-history?limit=50');
       if (response.ok) {
         const data = await response.json();
         setSyncHistory(data);
@@ -86,80 +105,33 @@ function SyncDashboard() {
     }
   }, []);
 
-  // Fetch current sync status
-  const fetchCurrentSync = useCallback(async () => {
-    try {
-      const response = await fetch('/api/db/sync/status');
-      if (response.ok) {
-        const data = await response.json();
-        setCurrentSync(data.currentSync);
-      }
-    } catch (err) {
-      console.error('Failed to fetch sync status:', err);
-    }
-  }, []);
-
-
-  // Fetch scheduled tasks from taskScheduler
-  const fetchScheduledTasks = useCallback(async () => {
-    try {
-      const response = await fetch('/api/db/tasks');
-      if (response.ok) {
-        const data = await response.json();
-        setScheduledTasks(data.tasks || []);
-        setSchedulerStatus(data.status || null);
-      }
-    } catch (err) {
-      console.error('Failed to fetch scheduled tasks:', err);
-    }
-  }, []);
-
-  // Fetch task history for a specific task
-  const fetchTaskHistory = async (taskType) => {
-    try {
-      const response = await fetch(`/api/db/tasks/${taskType}/history?limit=5`);
-      if (response.ok) {
-        const data = await response.json();
-        setTaskHistory(prev => ({ ...prev, [taskType]: data }));
-      }
-    } catch (err) {
-      console.error(`Failed to fetch history for ${taskType}:`, err);
-    }
-  };
-
   // Load all data
   const loadData = useCallback(async () => {
     setLoading(true);
-    await Promise.all([
-      fetchSyncStats(),
-      fetchSyncHistory(),
-      fetchCurrentSync(),
-      fetchScheduledTasks()
-    ]);
+    await Promise.all([fetchTasks(), fetchSyncStats(), fetchSyncHistory()]);
     setLoading(false);
-  }, [fetchSyncStats, fetchSyncHistory, fetchCurrentSync, fetchScheduledTasks]);
+  }, [fetchTasks, fetchSyncStats, fetchSyncHistory]);
 
-  // Initial load and auto-refresh
+  // Initial load
   useEffect(() => {
     loadData();
   }, [loadData]);
-  
-  // Separate effect for auto-refresh polling
+
+  // Auto-refresh polling
   useEffect(() => {
     if (!autoRefresh) return;
     
-    const refreshRate = currentSync?.status === 'running' || quickSyncing ? 2000 : 10000;
+    const refreshRate = runningTasks.size > 0 ? 3000 : 15000;
     const interval = setInterval(() => {
+      fetchTasks();
       fetchSyncStats();
-      fetchSyncHistory();
-      fetchCurrentSync();
-      if (activeTab === 'scheduled') {
-        fetchScheduledTasks();
+      if (activeTab === 'history') {
+        fetchSyncHistory();
       }
     }, refreshRate);
     
     return () => clearInterval(interval);
-  }, [autoRefresh, currentSync?.status, quickSyncing, activeTab, fetchSyncStats, fetchSyncHistory, fetchCurrentSync, fetchScheduledTasks]);
+  }, [autoRefresh, runningTasks.size, activeTab, fetchTasks, fetchSyncStats, fetchSyncHistory]);
 
   // Clear messages after timeout
   useEffect(() => {
@@ -169,20 +141,25 @@ function SyncDashboard() {
     }
   }, [successMessage]);
 
-
-  // Quick Sync for reference data (users, groups, courses)
-  const startQuickSync = async (type) => {
-    if (quickSyncing || currentSync?.status === 'running') {
-      setError('A sync is already in progress');
-      return;
-    }
+  // Run a task manually (via direct API for sync tasks, or via scheduler for others)
+  const runTask = async (taskType) => {
+    const meta = TASK_METADATA[taskType];
+    if (!meta) return;
     
-    setQuickSyncing(type);
-    setQuickSyncResult(null);
     setError(null);
+    setRunningTasks(prev => new Set([...prev, taskType]));
     
     try {
-      const response = await fetch(`/api/db/sync/${type}`, { method: 'POST' });
+      let response;
+      
+      // For sync tasks, use their direct API endpoint
+      if (meta.apiEndpoint) {
+        response = await fetch(meta.apiEndpoint, { method: 'POST' });
+      } else {
+        // For other tasks, use the scheduler trigger
+        response = await fetch(`/api/db/tasks/${taskType}/run`, { method: 'POST' });
+      }
+      
       const { ok: parseOk, data, error: parseError } = await safeJsonParse(response);
       
       if (!parseOk) {
@@ -190,97 +167,29 @@ function SyncDashboard() {
       }
       
       if (response.ok) {
-        // Sync started successfully - now poll for completion
-        setSuccessMessage(`${type.charAt(0).toUpperCase() + type.slice(1)} sync started...`);
-        
-        // Poll for sync completion
-        const pollInterval = setInterval(async () => {
-          try {
-            const statusRes = await fetch('/api/db/sync/status');
-            const statusData = await statusRes.json();
-            
-            if (!statusData.currentSync || statusData.currentSync.type !== type) {
-              // Sync completed
-              clearInterval(pollInterval);
-              setQuickSyncing(null);
-              setSuccessMessage(`${type.charAt(0).toUpperCase() + type.slice(1)} sync completed!`);
-              setQuickSyncResult({
-                success: true,
-                type,
-                message: 'Sync completed'
-              });
-              // Reload stats and history after sync
-              await fetchSyncStats();
-              await fetchSyncHistory();
-            }
-          } catch {
-            // Ignore poll errors
-          }
-        }, 2000);
-        
-        // Safety timeout after 5 minutes
-        setTimeout(() => {
-          clearInterval(pollInterval);
-          if (quickSyncing === type) {
-            setQuickSyncing(null);
-            setSuccessMessage(`${type.charAt(0).toUpperCase() + type.slice(1)} sync is still running in background`);
-          }
-        }, 300000);
-        
-        return; // Don't set quickSyncing to null yet
+        setSuccessMessage(`${meta.name} started successfully`);
+        // Refresh data
+        setTimeout(fetchTasks, 1000);
+        setTimeout(fetchSyncHistory, 2000);
       } else {
-        setQuickSyncResult({
-          success: false,
-          type,
-          error: data.error || 'Sync failed'
+        setError(data.error || `Failed to start ${meta.name}`);
+        setRunningTasks(prev => {
+          const next = new Set(prev);
+          next.delete(taskType);
+          return next;
         });
-        setError(data.error || `${type} sync failed`);
-        setQuickSyncing(null);
       }
     } catch (err) {
-      setQuickSyncResult({
-        success: false,
-        type,
-        error: err.message
+      setError(err.message || `Failed to start ${meta.name}`);
+      setRunningTasks(prev => {
+        const next = new Set(prev);
+        next.delete(taskType);
+        return next;
       });
-      setError(err.message);
-      setQuickSyncing(null);
     }
   };
 
-  // Start enrollment sync
-  const startEnrollmentSync = async (type) => {
-    if (currentSync?.status === 'running' || quickSyncing) {
-      setError('A sync is already in progress');
-      return;
-    }
-    
-    setError(null);
-    
-    try {
-      const endpoint = type === 'incremental' 
-        ? '/api/db/sync/incremental' 
-        : '/api/db/sync/full-enrollments';
-      
-      const response = await fetch(endpoint, { method: 'POST' });
-      const { ok: parseOk, data, error: parseError } = await safeJsonParse(response);
-      
-      if (!parseOk) {
-        throw new Error(parseError);
-      }
-      
-      if (response.ok) {
-        setCurrentSync(data.sync);
-        setTimeout(fetchCurrentSync, 1000);
-      } else {
-        setError(data.error || 'Failed to start sync');
-      }
-    } catch (err) {
-      setError(err.message || 'Failed to start sync');
-    }
-  };
-
-  // Toggle scheduled task enabled/disabled
+  // Toggle task enabled/disabled
   const toggleTask = async (taskType, enabled) => {
     try {
       const response = await fetch(`/api/db/tasks/${taskType}/toggle`, {
@@ -291,25 +200,21 @@ function SyncDashboard() {
       
       if (response.ok) {
         setSuccessMessage(`Task ${enabled ? 'enabled' : 'disabled'}`);
-        fetchScheduledTasks();
+        fetchTasks();
       } else {
-        const { ok: parseOk, data } = await safeJsonParse(response);
-        if (parseOk) {
-          setError(data.error || 'Failed to toggle task');
-        } else {
-          setError('Failed to toggle task');
-        }
+        const { data } = await safeJsonParse(response);
+        setError(data?.error || 'Failed to toggle task');
       }
     } catch {
       setError('Failed to toggle task');
     }
   };
 
-  // Save task interval
+  // Save interval
   const saveInterval = async (taskType) => {
     const minutes = parseInt(newInterval, 10);
-    if (isNaN(minutes) || minutes < 1 || minutes > 1440) {
-      setError('Interval must be between 1 and 1440 minutes');
+    if (isNaN(minutes) || minutes < 1 || minutes > 10080) {
+      setError('Interval must be between 1 and 10080 minutes (1 week)');
       return;
     }
     
@@ -321,65 +226,23 @@ function SyncDashboard() {
       });
       
       if (response.ok) {
-        setSuccessMessage(`Interval updated to ${minutes} minutes`);
+        setSuccessMessage(`Interval updated to ${formatInterval(minutes)}`);
         setEditingInterval(null);
-        fetchScheduledTasks();
+        fetchTasks();
       } else {
-        const { ok: parseOk, data } = await safeJsonParse(response);
-        if (parseOk) {
-          setError(data.error || 'Failed to update interval');
-        } else {
-          setError('Failed to update interval');
-        }
+        const { data } = await safeJsonParse(response);
+        setError(data?.error || 'Failed to update interval');
       }
     } catch {
       setError('Failed to update interval');
     }
   };
 
-  // Manually trigger a scheduled task
-  const triggerTask = async (taskType) => {
-    try {
-      setError(null);
-      const response = await fetch(`/api/db/tasks/${taskType}/run`, { method: 'POST' });
-      const { ok: parseOk, data, error: parseError } = await safeJsonParse(response);
-      
-      if (!parseOk) {
-        throw new Error(parseError);
-      }
-      
-      if (response.ok) {
-        setSuccessMessage(`Task "${taskType}" started`);
-        fetchScheduledTasks();
-      } else {
-        setError(data.error || 'Failed to trigger task');
-      }
-    } catch (err) {
-      setError(err.message || 'Failed to trigger task');
-    }
-  };
-
-  // Cancel/Reset sync
-  const resetSync = async () => {
-    try {
-      const response = await fetch('/api/db/sync/reset', { method: 'POST' });
-      const { ok: parseOk, data, error: parseError } = await safeJsonParse(response);
-      
-      if (!parseOk) {
-        throw new Error(parseError);
-      }
-      
-      if (response.ok) {
-        setCurrentSync(null);
-        setError(null);
-        setSuccessMessage('Sync lock cleared');
-        fetchSyncHistory();
-      } else {
-        setError(data.error || 'Failed to reset sync');
-      }
-    } catch (err) {
-      setError(err.message || 'Failed to reset sync');
-    }
+  // Format interval for display
+  const formatInterval = (minutes) => {
+    if (minutes < 60) return `${minutes}m`;
+    if (minutes < 1440) return `${Math.round(minutes / 60)}h`;
+    return `${Math.round(minutes / 1440)}d`;
   };
 
   // Format date
@@ -400,86 +263,80 @@ function SyncDashboard() {
     if (seconds < 60) return `${seconds}s`;
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
-    return `${mins}m ${secs}s`;
+    if (mins < 60) return `${mins}m ${secs}s`;
+    const hours = Math.floor(mins / 60);
+    return `${hours}h ${mins % 60}m`;
   };
 
   // Get status badge class
-  const getStatusBadge = (status) => {
+  const getStatusClass = (status) => {
     switch (status) {
-      case 'completed': case 'success': return 'badge-success';
-      case 'running': return 'badge-info';
-      case 'failed': return 'badge-error';
-      default: return 'badge-default';
+      case 'completed': case 'success': return 'success';
+      case 'running': return 'running';
+      case 'failed': return 'error';
+      default: return 'default';
     }
   };
 
-  // Get task icon
-  const getTaskIcon = (taskType) => {
+  // Get task count by category
+  const getTaskCount = (taskType) => {
+    if (!syncStats?.counts) return null;
     switch (taskType) {
-      case 'lms_sync': return '🔄';
-      case 'group_analysis': return '🔍';
-      case 'group_members_sync': return '👥';
-      case 'cleanup': return '🧹';
-      default: return '📋';
+      case 'sync_users': return syncStats.counts.users;
+      case 'sync_groups': return syncStats.counts.groups;
+      case 'sync_courses': return syncStats.counts.courses;
+      case 'sync_enrollments': return syncStats.counts.enrollments;
+      default: return null;
     }
   };
 
-  // Get task display name
-  const getTaskDisplayName = (taskType) => {
-    switch (taskType) {
-      case 'lms_sync': return 'LMS Data Sync';
-      case 'group_analysis': return 'Group Analysis';
-      case 'group_members_sync': return 'Group Members Sync';
-      case 'cleanup': return 'Database Cleanup';
-      default: return taskType;
-    }
-  };
-
-  // Format runtime duration from startedAt timestamp
-  const formatRuntime = (startedAt) => {
-    if (!startedAt) return '-';
-    const start = new Date(startedAt);
-    const now = new Date();
-    const seconds = Math.floor((now - start) / 1000);
+  // Group tasks by category
+  const groupedTasks = tasks.reduce((acc, task) => {
+    const meta = TASK_METADATA[task.task_type];
+    if (!meta || meta.hidden) return acc;
     
-    if (seconds < 60) return `${seconds}s`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
-  };
+    const category = meta.category || 'other';
+    if (!acc[category]) acc[category] = [];
+    acc[category].push({ ...task, meta });
+    return acc;
+  }, {});
 
   // Format sync summary for readability
   const formatSyncSummary = (details) => {
     if (!details) return null;
     
-    // Try to parse if it's a string
     let data = details;
     if (typeof details === 'string') {
       try {
         data = JSON.parse(details);
       } catch {
-        // If it's not valid JSON, just return the string
         return <span className="summary-text">{details}</span>;
       }
     }
     
-    // Handle null or non-object
     if (!data || typeof data !== 'object') {
       return <span className="summary-text">{String(data)}</span>;
     }
     
-    // Extract key metrics
     const metrics = [];
-    if (data.totalGroups !== undefined) metrics.push({ label: 'Total Groups', value: data.totalGroups });
-    if (data.groupsWithPotential !== undefined) metrics.push({ label: 'Groups with Potential', value: data.groupsWithPotential });
-    if (data.totalPotentialUsers !== undefined) metrics.push({ label: 'Potential Users', value: data.totalPotentialUsers });
-    if (data.groupsPendingSync !== undefined) metrics.push({ label: 'Pending Sync', value: data.groupsPendingSync, highlight: data.groupsPendingSync > 0 });
+    if (data.total !== undefined) metrics.push({ label: 'Total', value: data.total });
+    if (data.processed !== undefined) metrics.push({ label: 'Processed', value: data.processed });
+    if (data.created !== undefined) metrics.push({ label: 'Created', value: data.created, highlight: data.created > 0 });
+    if (data.updated !== undefined) metrics.push({ label: 'Updated', value: data.updated, highlight: data.updated > 0 });
+    if (data.synced !== undefined) metrics.push({ label: 'Synced', value: data.synced });
     if (data.errors !== undefined) metrics.push({ label: 'Errors', value: data.errors, error: data.errors > 0 });
-    if (data.usersProcessed !== undefined) metrics.push({ label: 'Users Processed', value: data.usersProcessed });
-    if (data.groupsProcessed !== undefined) metrics.push({ label: 'Groups Processed', value: data.groupsProcessed });
-    if (data.membersAdded !== undefined) metrics.push({ label: 'Members Added', value: data.membersAdded });
-    if (data.membersRemoved !== undefined) metrics.push({ label: 'Members Removed', value: data.membersRemoved });
+    if (data.skipped !== undefined) metrics.push({ label: 'Skipped', value: data.skipped });
+    if (data.recordsProcessed !== undefined) metrics.push({ label: 'Processed', value: data.recordsProcessed });
     
-    // If we found structured metrics, display them nicely
+    // Handle nested details
+    if (data.details && typeof data.details === 'object') {
+      Object.entries(data.details).forEach(([key, val]) => {
+        if (val && typeof val === 'object' && val.processed !== undefined) {
+          metrics.push({ label: key, value: val.processed });
+        }
+      });
+    }
+    
     if (metrics.length > 0) {
       return (
         <div className="summary-metrics">
@@ -489,31 +346,10 @@ function SyncDashboard() {
               <span className="metric-label">{m.label}</span>
             </div>
           ))}
-          {/* Show group details if available */}
-          {data.details && Array.isArray(data.details) && data.details.length > 0 && (
-            <details className="summary-groups">
-              <summary>{data.details.length} groups with pending sync</summary>
-              <div className="groups-list">
-                {data.details.slice(0, 20).map((g, i) => (
-                  <div key={i} className="group-item">
-                    <span className="group-name">{g.groupName}</span>
-                    <span className={`group-tier tier-${(g.partnerTier || 'unknown').toLowerCase()}`}>{g.partnerTier || 'Unknown'}</span>
-                    <span className="group-stats">
-                      {g.memberCount} members, {g.pendingSync} pending
-                    </span>
-                  </div>
-                ))}
-                {data.details.length > 20 && (
-                  <div className="more-groups">...and {data.details.length - 20} more groups</div>
-                )}
-              </div>
-            </details>
-          )}
         </div>
       );
     }
     
-    // Fallback: show formatted JSON
     return <pre className="summary-json">{JSON.stringify(data, null, 2)}</pre>;
   };
 
@@ -533,10 +369,14 @@ function SyncDashboard() {
       {/* Header */}
       <header className="dashboard-header">
         <div className="header-left">
-          <h1>🔄 LMS Sync Dashboard</h1>
-          <span className="subtitle">Northpass Integration - All Sync Operations</span>
+          <h1>🔄 Sync Dashboard</h1>
+          <span className="subtitle">Unified sync management - run manually or schedule</span>
         </div>
         <div className="header-right">
+          <div className={`scheduler-indicator ${schedulerStatus?.running ? 'active' : ''}`}>
+            <span className="indicator-dot"></span>
+            <span>{schedulerStatus?.running ? 'Scheduler Active' : 'Scheduler Idle'}</span>
+          </div>
           <label className="auto-refresh-toggle">
             <input 
               type="checkbox" 
@@ -551,50 +391,44 @@ function SyncDashboard() {
         </div>
       </header>
 
-      {/* Active Tasks Banner - Real-time progress */}
+      {/* Active Tasks Banner */}
       {schedulerStatus?.activeTasks?.length > 0 && (
         <div className="active-tasks-banner">
           <div className="banner-header">
             <span className="banner-icon">⚡</span>
-            <span className="banner-title">Tasks Running ({schedulerStatus.activeTasks.length})</span>
+            <span className="banner-title">Running ({schedulerStatus.activeTasks.length})</span>
           </div>
           <div className="active-tasks-list">
-            {schedulerStatus.activeTasks.map((task, idx) => (
-              <div key={idx} className="active-task-item">
-                <span className="task-type-icon">{getTaskIcon(task.type)}</span>
-                <div className="task-info">
-                  <div className="task-name">{getTaskDisplayName(task.type)}</div>
-                  {task.progress ? (
-                    <div className="task-progress">
-                      <div className="progress-stage">{task.progress.stage}</div>
-                      {task.progress.total > 0 && (
-                        <>
-                          <div className="progress-bar-container">
-                            <div 
-                              className="progress-bar-fill" 
-                              style={{ width: `${Math.round((task.progress.current / task.progress.total) * 100)}%` }}
-                            ></div>
-                          </div>
-                          <span className="progress-numbers">
-                            {task.progress.current.toLocaleString()}/{task.progress.total.toLocaleString()}
-                          </span>
-                        </>
-                      )}
-                      {task.progress.details && (
-                        <span className="progress-details">{task.progress.details}</span>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="task-progress">
-                      <div className="progress-stage">Starting...</div>
-                    </div>
-                  )}
+            {schedulerStatus.activeTasks.map((task, idx) => {
+              const meta = TASK_METADATA[task.type] || { icon: '📋', name: task.type };
+              return (
+                <div key={idx} className="active-task-item">
+                  <span className="task-icon">{meta.icon}</span>
+                  <div className="task-info">
+                    <div className="task-name">{meta.name}</div>
+                    {task.progress && (
+                      <div className="task-progress">
+                        <span className="progress-stage">{task.progress.stage}</span>
+                        {task.progress.total > 0 && (
+                          <>
+                            <div className="progress-bar-container">
+                              <div 
+                                className="progress-bar-fill" 
+                                style={{ width: `${Math.round((task.progress.current / task.progress.total) * 100)}%` }}
+                              />
+                            </div>
+                            <span className="progress-numbers">
+                              {task.progress.current.toLocaleString()}/{task.progress.total.toLocaleString()}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="task-runtime">{formatDuration(task.runningSeconds)}</div>
                 </div>
-                <div className="task-duration">
-                  {formatRuntime(task.startedAt)}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -602,552 +436,254 @@ function SyncDashboard() {
       {/* Tab Navigation */}
       <div className="tab-nav">
         <button 
-          className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`}
-          onClick={() => setActiveTab('overview')}
+          className={`tab-btn ${activeTab === 'tasks' ? 'active' : ''}`}
+          onClick={() => setActiveTab('tasks')}
         >
-          📊 Overview
-        </button>
-        <button 
-          className={`tab-btn ${activeTab === 'scheduled' ? 'active' : ''}`}
-          onClick={() => { setActiveTab('scheduled'); fetchScheduledTasks(); }}
-        >
-          ⏰ Scheduled Tasks
+          📋 All Tasks
         </button>
         <button 
           className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
-          onClick={() => setActiveTab('history')}
+          onClick={() => { setActiveTab('history'); fetchSyncHistory(); }}
         >
-          📜 Sync History
+          📜 History
         </button>
       </div>
 
       {/* Messages */}
       {error && (
-        <div className="error-banner">
+        <div className="message-banner error">
           <span>⚠️ {error}</span>
           <button onClick={() => setError(null)}>✕</button>
         </div>
       )}
       {successMessage && (
-        <div className="success-banner">
+        <div className="message-banner success">
           <span>✓ {successMessage}</span>
           <button onClick={() => setSuccessMessage(null)}>✕</button>
         </div>
       )}
 
-      {/* Overview Tab */}
-      {activeTab === 'overview' && (
-        <>
-          {/* Quick Sync Row */}
-          <div className="dashboard-row quick-sync-row">
-            <div className="panel quick-sync-panel">
-              <div className="panel-header">
-                <h2>⚡ Quick Sync - Reference Data</h2>
-                <small>Sync users, groups, and courses from Northpass</small>
-              </div>
-              
-              <div className="quick-sync-buttons">
-                <button 
-                  className={`quick-sync-btn ${quickSyncing === 'users' ? 'syncing' : ''}`}
-                  onClick={() => startQuickSync('users')}
-                  disabled={quickSyncing || currentSync?.status === 'running'}
-                >
-                  <span className="btn-icon">👥</span>
-                  <span className="btn-content">
-                    <strong>Sync Users</strong>
-                    <small>{syncStats?.counts?.users?.toLocaleString() || 0} in database</small>
-                  </span>
-                  {quickSyncing === 'users' && <span className="ntx-spinner small"></span>}
-                </button>
-                
-                <button 
-                  className={`quick-sync-btn ${quickSyncing === 'groups' ? 'syncing' : ''}`}
-                  onClick={() => startQuickSync('groups')}
-                  disabled={quickSyncing || currentSync?.status === 'running'}
-                >
-                  <span className="btn-icon">🏢</span>
-                  <span className="btn-content">
-                    <strong>Sync Groups</strong>
-                    <small>{syncStats?.counts?.groups?.toLocaleString() || 0} in database</small>
-                  </span>
-                  {quickSyncing === 'groups' && <span className="ntx-spinner small"></span>}
-                </button>
-                
-                <button 
-                  className={`quick-sync-btn ${quickSyncing === 'courses' ? 'syncing' : ''}`}
-                  onClick={() => startQuickSync('courses')}
-                  disabled={quickSyncing || currentSync?.status === 'running'}
-                >
-                  <span className="btn-icon">📚</span>
-                  <span className="btn-content">
-                    <strong>Sync Courses</strong>
-                    <small>{syncStats?.counts?.courses?.toLocaleString() || 0} in database</small>
-                  </span>
-                  {quickSyncing === 'courses' && <span className="ntx-spinner small"></span>}
-                </button>
-
-                <button 
-                  className={`quick-sync-btn ${quickSyncing === 'course-properties' ? 'syncing' : ''}`}
-                  onClick={() => startQuickSync('course-properties')}
-                  disabled={quickSyncing || currentSync?.status === 'running'}
-                >
-                  <span className="btn-icon">🎓</span>
-                  <span className="btn-content">
-                    <strong>Sync NPCU</strong>
-                    <small>Course properties</small>
-                  </span>
-                  {quickSyncing === 'course-properties' && <span className="ntx-spinner small"></span>}
-                </button>
-              </div>
-
-              {quickSyncResult && (
-                <div className={`quick-sync-result ${quickSyncResult.success ? 'success' : 'error'}`}>
-                  {quickSyncResult.success ? (
-                    <>✓ {quickSyncResult.type} sync: {quickSyncResult.total || quickSyncResult.synced || 0} records</>
-                  ) : (
-                    <>✕ {quickSyncResult.error}</>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Status Row: Sync Status + Enrollment Actions */}
-          <div className="dashboard-row status-row">
-            {/* Sync Status Panel */}
-            <div className="panel sync-status-panel">
-              <div className="panel-header">
-                <h2>Enrollment Sync Status</h2>
-                <div className={`status-indicator ${currentSync?.status === 'running' ? 'active' : 'idle'}`}>
-                  {currentSync?.status === 'running' ? '● Syncing' : '○ Idle'}
-                </div>
-              </div>
-              
-              <div className="status-content">
-                {currentSync?.status === 'running' && (
-                  <div className="current-sync">
-                    <div className="sync-header">
-                      <div className="sync-type">{currentSync.type}</div>
-                      <button className="btn-cancel" onClick={resetSync} title="Stop and clear sync">
-                        ✕ Cancel
-                      </button>
-                    </div>
-                    <div className="sync-progress">
-                      <div className="progress-bar">
-                        <div 
-                          className="progress-fill"
-                          style={{ 
-                            width: currentSync.progress?.total > 0
-                              ? `${(currentSync.progress.current / currentSync.progress.total) * 100}%`
-                              : '100%'
-                          }}
-                        />
-                      </div>
-                      <span className="progress-text">
-                        {currentSync.progress?.stage || 'Processing'} 
-                        {currentSync.progress?.total > 0 && ` (${currentSync.progress.current}/${currentSync.progress.total})`}
-                      </span>
-                    </div>
-                    <div className="sync-started">Started: {formatDate(currentSync.startedAt)}</div>
-                  </div>
-                )}
-
-                {currentSync && currentSync.status !== 'running' && (
-                  <div className="current-sync stuck">
-                    <div className="sync-header">
-                      <div className="sync-type">{currentSync.type} - {currentSync.status}</div>
-                      <button className="btn-clear" onClick={resetSync} title="Clear stuck sync">
-                        🗑️ Clear
-                      </button>
-                    </div>
-                    {currentSync.error && <div className="sync-error">Error: {currentSync.error}</div>}
-                  </div>
-                )}
-                
-                <div className="last-sync-info">
-                  <div className="info-row">
-                    <span className="label">Last Sync:</span>
-                    <span className="value">{formatDate(syncStats?.lastSync?.completed_at)}</span>
-                  </div>
-                  <div className="info-row">
-                    <span className="label">Last Status:</span>
-                    <span className={`value badge ${getStatusBadge(syncStats?.lastSync?.status)}`}>
-                      {syncStats?.lastSync?.status || 'Never'}
-                    </span>
-                  </div>
-                  <div className="info-row">
-                    <span className="label">Records Synced:</span>
-                    <span className="value">{syncStats?.lastSync?.records_processed?.toLocaleString() || 0}</span>
-                  </div>
-                </div>
-
-                {syncStats?.estimatedSavingsPercent > 0 && (
-                  <div className="savings-indicator">
-                    <span className="savings-icon">⚡</span>
-                    <span className="savings-text">
-                      Incremental sync can skip ~{syncStats.potentialSavings} inactive users
-                      ({syncStats.estimatedSavingsPercent}% savings)
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Enrollment Actions Panel */}
-            <div className="panel quick-actions-panel">
-              <div className="panel-header">
-                <h2>📊 Enrollment Sync</h2>
-              </div>
-              
-              <div className="actions-content">
-                <button 
-                  className="action-btn primary"
-                  onClick={() => startEnrollmentSync('incremental')}
-                  disabled={currentSync?.status === 'running' || quickSyncing}
-                >
-                  <span className="action-icon">⚡</span>
-                  <span className="action-text">
-                    <strong>Incremental Sync</strong>
-                    <small>Only active users (faster)</small>
-                  </span>
-                </button>
-                
-                <button 
-                  className="action-btn secondary"
-                  onClick={() => startEnrollmentSync('full')}
-                  disabled={currentSync?.status === 'running' || quickSyncing}
-                >
-                  <span className="action-icon">🔄</span>
-                  <span className="action-text">
-                    <strong>Full Sync</strong>
-                    <small>All users (comprehensive)</small>
-                  </span>
-                </button>
-              </div>
-
-              <div className="activity-stats">
-                <h3>User Activity</h3>
-                <div className="stats-grid">
-                  <div className="stat-item">
-                    <span className="stat-value">{syncStats?.userActivity?.total?.toLocaleString() || 0}</span>
-                    <span className="stat-label">Total Users</span>
-                  </div>
-                  <div className="stat-item highlight">
-                    <span className="stat-value">{syncStats?.userActivity?.active_24h?.toLocaleString() || 0}</span>
-                    <span className="stat-label">Active 24h</span>
-                  </div>
-                  <div className="stat-item">
-                    <span className="stat-value">{syncStats?.userActivity?.active_7d?.toLocaleString() || 0}</span>
-                    <span className="stat-label">Active 7d</span>
-                  </div>
-                  <div className="stat-item">
-                    <span className="stat-value">{syncStats?.userActivity?.active_30d?.toLocaleString() || 0}</span>
-                    <span className="stat-label">Active 30d</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Object Mapping Row */}
-          <div className="dashboard-row config-row">
-            <div className="panel object-mapping-panel full-width">
-              <div className="panel-header">
-                <h2>📋 Object Mapping</h2>
-              </div>
-              
-              <div className="mapping-content">
-                <table className="mapping-table">
-                  <thead>
-                    <tr>
-                      <th>Object</th>
-                      <th>Direction</th>
-                      <th>Status</th>
-                      <th>Count</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {objectMapping.map(obj => (
-                      <tr key={obj.id}>
-                        <td className="object-name">
-                          <span className="object-icon">{obj.icon}</span>
-                          <span className="object-label">
-                            <strong>{obj.name}</strong>
-                            <small>{obj.description}</small>
-                          </span>
-                        </td>
-                        <td className="object-direction">
-                          <span className={`direction-badge ${obj.direction}`}>
-                            {obj.direction === 'inbound' ? '📥 Inbound' : '📤 Outbound'}
-                          </span>
-                        </td>
-                        <td className="object-status">
-                          <span className={`status-badge ${obj.enabled ? 'enabled' : 'disabled'}`}>
-                            {obj.enabled ? '✓ Active' : '○ Disabled'}
-                          </span>
-                        </td>
-                        <td className="object-count">
-                          {syncStats?.counts?.[obj.id]?.toLocaleString() || '-'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* Scheduled Tasks Tab */}
-      {activeTab === 'scheduled' && (
-        <div className="dashboard-row scheduled-tasks-row">
-          <div className="panel scheduled-tasks-panel full-width">
-            <div className="panel-header">
-              <h2>⏰ Scheduled Tasks</h2>
-              <div className="scheduler-status">
-                {schedulerStatus?.running ? (
-                  <span className="status-badge enabled">● Scheduler Running</span>
-                ) : scheduledTasks.some(t => t.enabled) ? (
-                  <span className="status-badge warning" title="Tasks are enabled but scheduler may not be active">⚡ Tasks Enabled</span>
-                ) : (
-                  <span className="status-badge disabled">○ No Active Tasks</span>
-                )}
-              </div>
-            </div>
+      {/* Tasks Tab */}
+      {activeTab === 'tasks' && (
+        <div className="tasks-container">
+          {Object.entries(TASK_CATEGORIES).map(([categoryKey, category]) => {
+            const categoryTasks = groupedTasks[categoryKey] || [];
+            if (categoryTasks.length === 0) return null;
             
-            <div className="tasks-content">
-              {scheduledTasks.length === 0 ? (
-                <div className="no-tasks">No scheduled tasks configured</div>
-              ) : (
+            return (
+              <div key={categoryKey} className="task-category">
+                <div className="category-header">
+                  <span className="category-icon">{category.icon}</span>
+                  <h2>{category.name}</h2>
+                  <span className="category-description">{category.description}</span>
+                </div>
+                
                 <div className="tasks-grid">
-                  {scheduledTasks.map(task => (
-                    <div key={task.id} className={`task-card ${task.enabled ? 'enabled' : 'disabled'}`}>
-                      <div className="task-header">
-                        <span className="task-icon">{getTaskIcon(task.task_type)}</span>
-                        <h3>{task.task_name}</h3>
-                        <label className="toggle-switch small">
-                          <input 
-                            type="checkbox" 
-                            checked={task.enabled}
-                            onChange={(e) => toggleTask(task.task_type, e.target.checked)}
-                          />
-                          <span className="toggle-slider"></span>
-                        </label>
-                      </div>
-                      
-                      <div className="task-details">
-                        <div className="task-detail">
-                          <span className="label">Interval:</span>
-                          {editingInterval === task.task_type ? (
-                            <span className="value editing">
-                              <input 
-                                type="number" 
-                                value={newInterval}
-                                onChange={(e) => setNewInterval(e.target.value)}
-                                min="1"
-                                max="1440"
-                                className="interval-input"
-                              />
-                              <span className="unit">min</span>
-                              <button className="btn-save-interval" onClick={() => saveInterval(task.task_type)} title="Save">✓</button>
-                              <button className="btn-cancel-interval" onClick={() => setEditingInterval(null)} title="Cancel">✕</button>
+                  {categoryTasks.map(task => {
+                    const isRunning = runningTasks.has(task.task_type) || 
+                      schedulerStatus?.activeTasks?.some(t => t.type === task.task_type);
+                    const count = getTaskCount(task.task_type);
+                    
+                    return (
+                      <div 
+                        key={task.id} 
+                        className={`task-card ${task.enabled ? 'enabled' : 'disabled'} ${isRunning ? 'running' : ''}`}
+                      >
+                        <div className="task-header">
+                          <span className="task-icon">{task.meta.icon}</span>
+                          <div className="task-title">
+                            <h3>{task.meta.name}</h3>
+                            <span className="task-description">{task.meta.description}</span>
+                          </div>
+                          <label className="toggle-switch" title={task.enabled ? 'Disable schedule' : 'Enable schedule'}>
+                            <input 
+                              type="checkbox" 
+                              checked={task.enabled}
+                              onChange={(e) => toggleTask(task.task_type, e.target.checked)}
+                            />
+                            <span className="toggle-slider"></span>
+                          </label>
+                        </div>
+                        
+                        {count !== null && (
+                          <div className="task-count">
+                            <span className="count-value">{count.toLocaleString()}</span>
+                            <span className="count-label">records</span>
+                          </div>
+                        )}
+                        
+                        <div className="task-details">
+                          <div className="detail-row">
+                            <span className="label">Interval:</span>
+                            {editingInterval === task.task_type ? (
+                              <span className="value editing">
+                                <input 
+                                  type="number" 
+                                  value={newInterval}
+                                  onChange={(e) => setNewInterval(e.target.value)}
+                                  min="1"
+                                  max="10080"
+                                  className="interval-input"
+                                  autoFocus
+                                />
+                                <span className="unit">min</span>
+                                <button className="btn-save" onClick={() => saveInterval(task.task_type)}>✓</button>
+                                <button className="btn-cancel" onClick={() => setEditingInterval(null)}>✕</button>
+                              </span>
+                            ) : (
+                              <span 
+                                className="value editable" 
+                                onClick={() => { setEditingInterval(task.task_type); setNewInterval(task.interval_minutes.toString()); }}
+                                title="Click to edit"
+                              >
+                                {formatInterval(task.interval_minutes)}
+                                <span className="edit-icon">✏️</span>
+                              </span>
+                            )}
+                          </div>
+                          <div className="detail-row">
+                            <span className="label">Last Run:</span>
+                            <span className="value">{formatDate(task.last_run_at)}</span>
+                          </div>
+                          <div className="detail-row">
+                            <span className="label">Status:</span>
+                            <span className={`value status ${getStatusClass(task.last_status)}`}>
+                              {task.last_status || 'Never'}
                             </span>
-                          ) : (
-                            <span className="value editable" onClick={() => { setEditingInterval(task.task_type); setNewInterval(task.interval_minutes.toString()); }}>
-                              {task.interval_minutes} min
-                              <span className="edit-icon" title="Click to edit">✏️</span>
-                            </span>
+                          </div>
+                          {task.enabled && (
+                            <div className="detail-row">
+                              <span className="label">Next Run:</span>
+                              <span className="value">{formatDate(task.next_run_at)}</span>
+                            </div>
                           )}
                         </div>
-                        <div className="task-detail">
-                          <span className="label">Last Run:</span>
-                          <span className="value">{formatDate(task.last_run_at)}</span>
-                        </div>
-                        <div className="task-detail">
-                          <span className="label">Next Run:</span>
-                          <span className="value">{task.enabled ? formatDate(task.next_run_at) : '-'}</span>
-                        </div>
-                        <div className="task-detail">
-                          <span className="label">Last Status:</span>
-                          <span className={`value badge ${getStatusBadge(task.last_status)}`}>
-                            {task.last_status || 'Never'}
-                          </span>
-                        </div>
+                        
                         {task.last_error && (
                           <div className="task-error">
                             <small>⚠️ {task.last_error}</small>
                           </div>
                         )}
-                      </div>
-                      
-                      <div className="task-stats">
-                        <span className="stat">✓ {task.run_count || 0} runs</span>
-                        <span className="stat">✕ {task.fail_count || 0} failures</span>
-                      </div>
-                      
-                      <div className="task-actions">
-                        <button 
-                          className="btn-run"
-                          onClick={() => triggerTask(task.task_type)}
-                          disabled={schedulerStatus?.activeTasks?.some(t => t.type === task.task_type)}
-                        >
-                          ▶ Run Now
-                        </button>
-                        <button 
-                          className="btn-history"
-                          onClick={() => fetchTaskHistory(task.task_type)}
-                        >
-                          📜 History
-                        </button>
-                      </div>
-                      
-                      {taskHistory[task.task_type] && (
-                        <div className="task-history">
-                          <h4>Recent Runs</h4>
-                          {taskHistory[task.task_type].map(h => (
-                            <div key={h.id} className={`history-item ${h.status}`}>
-                              <span className="time">{formatDate(h.started_at)}</span>
-                              <span className={`badge ${getStatusBadge(h.status)}`}>{h.status}</span>
-                              <span className="duration">{formatDuration(h.duration_seconds)}</span>
-                            </div>
-                          ))}
+                        
+                        <div className="task-stats">
+                          <span className="stat success">✓ {task.run_count || 0}</span>
+                          <span className="stat error">✕ {task.fail_count || 0}</span>
+                          {task.last_duration_seconds && (
+                            <span className="stat duration">⏱ {formatDuration(task.last_duration_seconds)}</span>
+                          )}
                         </div>
-                      )}
-                    </div>
-                  ))}
+                        
+                        <div className="task-actions">
+                          <button 
+                            className="btn-run"
+                            onClick={() => runTask(task.task_type)}
+                            disabled={isRunning}
+                          >
+                            {isRunning ? (
+                              <><span className="ntx-spinner small"></span> Running...</>
+                            ) : (
+                              <>▶ Run Now</>
+                            )}
+                          </button>
+                          <button 
+                            className="btn-expand"
+                            onClick={() => setExpandedTask(expandedTask === task.task_type ? null : task.task_type)}
+                          >
+                            {expandedTask === task.task_type ? '▲' : '▼'}
+                          </button>
+                        </div>
+                        
+                        {expandedTask === task.task_type && (
+                          <div className="task-expanded">
+                            <h4>Configuration</h4>
+                            <pre>{JSON.stringify(task.config ? JSON.parse(task.config) : {}, null, 2)}</pre>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-              )}
-            </div>
-
-          </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
       {/* History Tab */}
       {activeTab === 'history' && (
-        <div className="dashboard-row log-row">
-          <div className="panel sync-log-panel full-width">
+        <div className="history-container">
+          <div className="panel">
             <div className="panel-header">
-              <h2>📜 Unified Sync Log</h2>
+              <h2>📜 Sync History</h2>
               <span className="log-count">{syncHistory.length} records</span>
             </div>
             
             <div className="log-content">
               {syncHistory.length === 0 ? (
-                <div className="no-logs">No sync history available</div>
+                <div className="empty-state">No sync history available</div>
               ) : (
                 <table className="log-table">
                   <thead>
                     <tr>
                       <th>Time</th>
+                      <th>Task</th>
                       <th>Source</th>
-                      <th>Type</th>
                       <th>Status</th>
                       <th>Duration</th>
-                      <th>Processed</th>
-                      <th>Updated</th>
-                      <th>Failed</th>
-                      <th>Details</th>
+                      <th>Records</th>
+                      <th></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {syncHistory.map(log => (
-                      <>
-                        <tr key={`${log.source}-${log.id}`} className={`log-row ${log.status}`}>
-                          <td className="log-time">{formatDate(log.started_at)}</td>
-                          <td className="log-source">
-                            <span className={`source-badge ${log.source === 'scheduled_task' ? 'scheduler' : 'manual'}`}>
-                              {log.source === 'scheduled_task' ? '⏰ Sched' : '👤 Manual'}
-                            </span>
-                          </td>
-                          <td className="log-type">{log.sync_type}</td>
-                          <td>
-                            <span className={`badge ${getStatusBadge(log.status)}`}>
-                              {log.status}
-                            </span>
-                          </td>
-                          <td className="log-duration">{formatDuration(log.duration_seconds)}</td>
-                          <td className="log-processed">{log.records_created || log.records_processed || 0}</td>
-                          <td className="log-updated info">{log.records_updated || 0}</td>
-                          <td className={`log-failed ${log.records_failed > 0 ? 'error' : ''}`}>
-                            {log.records_failed || 0}
-                          </td>
-                          <td className="log-actions">
-                            <button 
-                              className="btn-expand"
-                              onClick={() => setExpandedLog(expandedLog === `${log.source}-${log.id}` ? null : `${log.source}-${log.id}`)}
-                            >
-                              {expandedLog === `${log.source}-${log.id}` ? '▼' : '▶'}
-                            </button>
-                          </td>
-                        </tr>
-                        {expandedLog === `${log.source}-${log.id}` && (
-                          <tr className="log-details-row">
-                            <td colSpan="9">
-                              <div className="log-details">
-                                <h4>Sync Details</h4>
-                                <div className="details-grid">
-                                  {log.source === 'scheduled_task' ? (
-                                    <div className="detail-item full-width">
-                                      <span className="detail-label">SUMMARY:</span>
-                                      {formatSyncSummary(log.details)}
-                                    </div>
-                                  ) : (
-                                    <>
-                                      <div className="detail-item">
-                                        <span className="detail-label">Total Processed:</span>
-                                        <span className="detail-value">{log.records_processed?.toLocaleString() || 0}</span>
-                                      </div>
-                                      {log.details?.totalUsers && (
-                                        <div className="detail-item">
-                                          <span className="detail-label">Total Users:</span>
-                                          <span className="detail-value">{log.details.totalUsers.toLocaleString()}</span>
-                                        </div>
-                                      )}
-                                    </>
-                                  )}
-                                  {log.details?.activeUsers !== undefined && (
-                                    <div className="detail-item">
-                                      <span className="detail-label">Active Users:</span>
-                                      <span className="detail-value">{log.details.activeUsers.toLocaleString()}</span>
-                                    </div>
-                                  )}
-                                  {log.details?.apiCalls && (
-                                    <div className="detail-item">
-                                      <span className="detail-label">API Calls:</span>
-                                      <span className="detail-value">{log.details.apiCalls.toLocaleString()}</span>
-                                    </div>
-                                  )}
-                                  {log.details?.durationSeconds && (
-                                    <div className="detail-item">
-                                      <span className="detail-label">Duration:</span>
-                                      <span className="detail-value">{formatDuration(log.details.durationSeconds)}</span>
+                    {syncHistory.map(log => {
+                      const meta = TASK_METADATA[log.sync_type] || { icon: '📋', name: log.sync_type };
+                      return (
+                        <>
+                          <tr key={`${log.source}-${log.id}`} className={`log-row ${getStatusClass(log.status)}`}>
+                            <td className="log-time">{formatDate(log.started_at)}</td>
+                            <td className="log-task">
+                              <span className="task-icon">{meta.icon}</span>
+                              <span>{meta.name}</span>
+                            </td>
+                            <td className="log-source">
+                              <span className={`source-badge ${log.source === 'scheduled_task' ? 'scheduled' : 'manual'}`}>
+                                {log.source === 'scheduled_task' ? '⏰' : '👤'}
+                              </span>
+                            </td>
+                            <td>
+                              <span className={`status-badge ${getStatusClass(log.status)}`}>
+                                {log.status}
+                              </span>
+                            </td>
+                            <td className="log-duration">{formatDuration(log.duration_seconds)}</td>
+                            <td className="log-records">{log.records_processed?.toLocaleString() || 0}</td>
+                            <td>
+                              <button 
+                                className="btn-expand"
+                                onClick={() => setExpandedLog(expandedLog === `${log.source}-${log.id}` ? null : `${log.source}-${log.id}`)}
+                              >
+                                {expandedLog === `${log.source}-${log.id}` ? '▼' : '▶'}
+                              </button>
+                            </td>
+                          </tr>
+                          {expandedLog === `${log.source}-${log.id}` && (
+                            <tr className="log-details-row">
+                              <td colSpan="7">
+                                <div className="log-details">
+                                  {formatSyncSummary(log.details || log.result_summary)}
+                                  {log.error_message && (
+                                    <div className="error-details">
+                                      <strong>Error:</strong>
+                                      <pre>{log.error_message}</pre>
                                     </div>
                                   )}
                                 </div>
-                                
-                                {log.error_message && (
-                                  <div className="error-details">
-                                    <h5>⚠️ Error Message</h5>
-                                    <pre>{log.error_message}</pre>
-                                  </div>
-                                )}
-                                
-                                {log.details?.skipped > 0 && (
-                                  <div className="savings-details">
-                                    <span className="savings-badge">
-                                      ⚡ Skipped {log.details.skipped.toLocaleString()} inactive users 
-                                      ({Math.round(log.details.skipped / log.details.totalUsers * 100)}% bandwidth saved)
-                                    </span>
-                                  </div>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </>
-                    ))}
+                              </td>
+                            </tr>
+                          )}
+                        </>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}
@@ -1156,25 +692,25 @@ function SyncDashboard() {
         </div>
       )}
 
-      {/* Footer */}
+      {/* Footer Stats */}
       <footer className="dashboard-footer">
         <div className="footer-stats">
           <div className="footer-stat">
-            <span className="stat-label">Today's Syncs:</span>
-            <span className="stat-value">{syncStats?.today?.syncs || 0}</span>
+            <span className="stat-label">Total Tasks:</span>
+            <span className="stat-value">{tasks.length}</span>
           </div>
           <div className="footer-stat">
-            <span className="stat-label">Records Today:</span>
-            <span className="stat-value">{syncStats?.today?.total_records?.toLocaleString() || 0}</span>
+            <span className="stat-label">Enabled:</span>
+            <span className="stat-value success">{tasks.filter(t => t.enabled).length}</span>
           </div>
-          <div className="footer-stat success">
-            <span className="stat-label">Successful:</span>
-            <span className="stat-value">{syncStats?.today?.successful || 0}</span>
+          <div className="footer-stat">
+            <span className="stat-label">Today's Runs:</span>
+            <span className="stat-value">{syncStats?.today?.syncs || 0}</span>
           </div>
           {syncStats?.today?.failed > 0 && (
             <div className="footer-stat error">
               <span className="stat-label">Failed:</span>
-              <span className="stat-value">{syncStats?.today?.failed}</span>
+              <span className="stat-value">{syncStats.today.failed}</span>
             </div>
           )}
         </div>

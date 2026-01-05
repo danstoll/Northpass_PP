@@ -9,8 +9,9 @@ import DataManagement from './components/DataManagement'
 import SyncDashboard from './components/SyncDashboard'
 import DatabaseReports from './components/DatabaseReports'
 import AdminUsers from './components/AdminUsers'
-import BulkUrlGenerator from './components/BulkUrlGenerator'
 import Settings from './components/Settings'
+import AnalyticsDashboard from './components/AnalyticsDashboard'
+import PamManagement from './components/PamManagement'
 import { extractUrlParams } from './utils/urlEncoder'
 import { extractCustomerParams } from './utils/customerUrlEncoder'
 import './App.css'
@@ -28,8 +29,9 @@ function App() {
   const isDataRoute = currentPath === '/admin/data' || currentPath === '/admin/data/';
   const isSyncDashboardRoute = currentPath === '/admin/sync-dashboard' || currentPath === '/admin/sync-dashboard/' || currentPath === '/admin/sync' || currentPath === '/admin/sync/';
   const isDbReportsRoute = currentPath === '/admin/dbreports' || currentPath === '/admin/dbreports/';
-  const isBulkUrlRoute = currentPath === '/admin/bulk-urls' || currentPath === '/admin/bulk-urls/';
   const isSettingsRoute = currentPath === '/admin/settings' || currentPath === '/admin/settings/';
+  const isAnalyticsRoute = currentPath === '/admin/analytics' || currentPath === '/admin/analytics/';
+  const isPamRoute = currentPath === '/admin/pam' || currentPath === '/admin/pam/';
   const isCustomerRoute = currentPath === '/customer' || currentPath === '/customer/';
   const isPartnerDbRoute = currentPath === '/partner' || currentPath === '/partner/';
   
@@ -106,23 +108,34 @@ function App() {
     );
   }
 
+  // Show analytics dashboard for /admin/analytics route
+  if (isAnalyticsRoute) {
+    return (
+      <div className="app">
+        <AdminHub currentPage="analytics">
+          <AnalyticsDashboard />
+        </AdminHub>
+      </div>
+    );
+  }
+
+  // Show PAM management for /admin/pam route
+  if (isPamRoute) {
+    return (
+      <div className="app">
+        <AdminHub currentPage="pam">
+          <PamManagement />
+        </AdminHub>
+      </div>
+    );
+  }
+
   // Show database reports for /admin/dbreports route
   if (isDbReportsRoute) {
     return (
       <div className="app">
         <AdminHub currentPage="dbreports">
           <DatabaseReports />
-        </AdminHub>
-      </div>
-    );
-  }
-
-  // Show bulk URL generator for /admin/bulk-urls route
-  if (isBulkUrlRoute) {
-    return (
-      <div className="app">
-        <AdminHub currentPage="bulk-urls">
-          <BulkUrlGenerator />
         </AdminHub>
       </div>
     );

@@ -17,7 +17,7 @@ import {
 } from './ui/NintexUI';
 import './AccountOwnerReport.css';
 
-const BASE_URL = 'http://20.125.24.28:3000/';
+const BASE_URL = 'https://ptrlrndb.prod.ntxgallery.com/';
 
 export default function AccountOwnerReport() {
   const [accountOwners, setAccountOwners] = useState([]);
