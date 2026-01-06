@@ -2708,6 +2708,53 @@ router.post('/group-analysis/groups/:groupId/add-members', async (req, res) => {
   }
 });
 
+// Record a group membership in local DB after it was added via Northpass API
+// This keeps the local DB in sync without waiting for a full sync
+router.post('/groups/:groupId/members/:userId/record', async (req, res) => {
+  const { groupId, userId } = req.params;
+  
+  try {
+    // Check if membership already exists
+    const [existing] = await query(
+      'SELECT * FROM lms_group_members WHERE group_id = ? AND user_id = ?',
+      [groupId, userId]
+    );
+    
+    if (existing) {
+      // Already exists, just update source to 'api' (confirmed)
+      await query(
+        'UPDATE lms_group_members SET pending_source = ? WHERE group_id = ? AND user_id = ?',
+        ['api', groupId, userId]
+      );
+      console.log(`✅ Updated existing membership: user ${userId} in group ${groupId}`);
+      return res.json({ success: true, action: 'updated' });
+    }
+    
+    // Insert new membership
+    await query(
+      `INSERT INTO lms_group_members (group_id, user_id, added_at, pending_source) VALUES (?, ?, NOW(), 'api')`,
+      [groupId, userId]
+    );
+    
+    // Update group member count
+    const [countResult] = await query(
+      'SELECT COUNT(*) as count FROM lms_group_members WHERE group_id = ?',
+      [groupId]
+    );
+    await query(
+      'UPDATE lms_groups SET user_count = ? WHERE id = ?',
+      [countResult?.count || 0, groupId]
+    );
+    
+    console.log(`✅ Recorded new membership: user ${userId} in group ${groupId}`);
+    res.json({ success: true, action: 'inserted' });
+    
+  } catch (error) {
+    console.error(`❌ Failed to record membership:`, error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============================================
 // Maintenance Endpoints
 // ============================================
@@ -7102,6 +7149,1003 @@ router.post('/pams/:id/send-report', async (req, res) => {
       console.error('Error logging failure:', logError);
     }
     
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// Partner Family Management Endpoints
+// ============================================
+
+// Get all partner families with member counts
+router.get('/families', async (req, res) => {
+  try {
+    const families = await query(`
+      SELECT 
+        pf.*,
+        hp.account_name as head_partner_name,
+        (SELECT COUNT(*) FROM partners WHERE partner_family = pf.family_name) as member_count,
+        (SELECT GROUP_CONCAT(DISTINCT account_region SEPARATOR ', ') 
+         FROM partners WHERE partner_family = pf.family_name) as regions
+      FROM partner_families pf
+      LEFT JOIN partners hp ON hp.id = pf.head_partner_id
+      ORDER BY pf.family_name
+    `);
+    
+    res.json(families);
+  } catch (error) {
+    console.error('Error fetching families:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get a single partner family with all members
+router.get('/families/:familyName', async (req, res) => {
+  try {
+    const { familyName } = req.params;
+    
+    // Get family config
+    const [family] = await query(
+      'SELECT * FROM partner_families WHERE family_name = ?',
+      [familyName]
+    );
+    
+    // Get all members
+    const members = await query(`
+      SELECT 
+        p.*,
+        g.id as lms_group_id,
+        g.name as lms_group_name,
+        g.user_count as lms_user_count,
+        (SELECT COUNT(*) FROM contacts WHERE partner_id = p.id) as contact_count,
+        (SELECT COUNT(*) FROM contacts c 
+         INNER JOIN lms_users u ON u.id = c.lms_user_id 
+         WHERE c.partner_id = p.id) as lms_linked_count
+      FROM partners p
+      LEFT JOIN lms_groups g ON g.partner_id = p.id
+      WHERE p.partner_family = ?
+      ORDER BY p.is_family_head DESC, p.account_name
+    `, [familyName]);
+    
+    // Get shared users in this family
+    const sharedUsers = await query(`
+      SELECT 
+        su.*,
+        u.email,
+        u.first_name,
+        u.last_name,
+        ap.account_name as assigned_partner_name
+      FROM shared_users su
+      INNER JOIN lms_users u ON u.id = su.lms_user_id
+      LEFT JOIN partners ap ON ap.id = su.assigned_partner_id
+      WHERE su.partner_family = ?
+      ORDER BY u.last_name, u.first_name
+    `, [familyName]);
+    
+    res.json({
+      family: family || { family_name: familyName },
+      members,
+      sharedUsers,
+      memberCount: members.length,
+      sharedUserCount: sharedUsers.length
+    });
+  } catch (error) {
+    console.error('Error fetching family:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create or update a partner family
+router.post('/families', async (req, res) => {
+  try {
+    const { 
+      family_name, 
+      display_name, 
+      is_gsi, 
+      allow_cross_group_users, 
+      aggregate_reporting,
+      head_partner_id,
+      notes 
+    } = req.body;
+    
+    if (!family_name) {
+      return res.status(400).json({ error: 'family_name is required' });
+    }
+    
+    await query(`
+      INSERT INTO partner_families 
+        (family_name, display_name, is_gsi, allow_cross_group_users, aggregate_reporting, head_partner_id, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        display_name = VALUES(display_name),
+        is_gsi = VALUES(is_gsi),
+        allow_cross_group_users = VALUES(allow_cross_group_users),
+        aggregate_reporting = VALUES(aggregate_reporting),
+        head_partner_id = VALUES(head_partner_id),
+        notes = VALUES(notes),
+        updated_at = NOW()
+    `, [
+      family_name,
+      display_name || family_name,
+      is_gsi || false,
+      allow_cross_group_users || false,
+      aggregate_reporting !== false, // default true
+      head_partner_id || null,
+      notes || null
+    ]);
+    
+    // Update partners in this family
+    if (head_partner_id) {
+      // Set is_family_head for the head partner
+      await query('UPDATE partners SET is_family_head = FALSE WHERE partner_family = ?', [family_name]);
+      await query('UPDATE partners SET is_family_head = TRUE WHERE id = ?', [head_partner_id]);
+    }
+    
+    // Update is_gsi flag on all family members
+    await query('UPDATE partners SET is_gsi = ? WHERE partner_family = ?', [is_gsi || false, family_name]);
+    
+    res.json({ success: true, message: `Family "${family_name}" saved` });
+  } catch (error) {
+    console.error('Error saving family:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete a partner family (removes family assignments, doesn't delete partners)
+router.delete('/families/:familyName', async (req, res) => {
+  try {
+    const { familyName } = req.params;
+    
+    // Remove family assignment from partners
+    await query('UPDATE partners SET partner_family = NULL, is_gsi = FALSE, is_family_head = FALSE WHERE partner_family = ?', [familyName]);
+    
+    // Remove shared user records
+    await query('DELETE FROM shared_users WHERE partner_family = ?', [familyName]);
+    
+    // Delete family config
+    await query('DELETE FROM partner_families WHERE family_name = ?', [familyName]);
+    
+    res.json({ success: true, message: `Family "${familyName}" deleted` });
+  } catch (error) {
+    console.error('Error deleting family:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add partners to a family
+router.post('/families/:familyName/members', async (req, res) => {
+  try {
+    const { familyName } = req.params;
+    const { partnerIds } = req.body;
+    
+    if (!partnerIds || !Array.isArray(partnerIds) || partnerIds.length === 0) {
+      return res.status(400).json({ error: 'partnerIds array is required' });
+    }
+    
+    // Ensure family exists
+    const [family] = await query('SELECT * FROM partner_families WHERE family_name = ?', [familyName]);
+    
+    // Update partners
+    const placeholders = partnerIds.map(() => '?').join(',');
+    await query(
+      `UPDATE partners SET partner_family = ?, is_gsi = ? WHERE id IN (${placeholders})`,
+      [familyName, family?.is_gsi || false, ...partnerIds]
+    );
+    
+    const updated = await query(
+      `SELECT id, account_name FROM partners WHERE id IN (${placeholders})`,
+      partnerIds
+    );
+    
+    res.json({ 
+      success: true, 
+      message: `Added ${updated.length} partners to family "${familyName}"`,
+      partners: updated
+    });
+  } catch (error) {
+    console.error('Error adding members:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Remove a partner from a family
+router.delete('/families/:familyName/members/:partnerId', async (req, res) => {
+  try {
+    const { familyName, partnerId } = req.params;
+    
+    await query(
+      'UPDATE partners SET partner_family = NULL, is_gsi = FALSE, is_family_head = FALSE WHERE id = ? AND partner_family = ?',
+      [partnerId, familyName]
+    );
+    
+    res.json({ success: true, message: 'Partner removed from family' });
+  } catch (error) {
+    console.error('Error removing member:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Detect potential partner families by name patterns
+router.get('/families/detect/by-name', async (req, res) => {
+  try {
+    const minMembers = parseInt(req.query.minMembers) || 3;
+    
+    // Get all partners
+    const partners = await query(`
+      SELECT id, account_name, partner_tier, account_region, partner_family
+      FROM partners
+      ORDER BY account_name
+    `);
+    
+    // Group by first word (potential family name)
+    const byPrefix = {};
+    for (const p of partners) {
+      const words = p.account_name.split(/[\s,]+/);
+      const prefix = words[0];
+      
+      // Skip very short prefixes or common words
+      if (prefix.length < 3 || ['The', 'PT', 'PT.', 'LLC', 'Inc', 'Ltd'].includes(prefix)) {
+        continue;
+      }
+      
+      if (!byPrefix[prefix]) {
+        byPrefix[prefix] = [];
+      }
+      byPrefix[prefix].push(p);
+    }
+    
+    // Filter to families with minMembers or more
+    const potentialFamilies = Object.entries(byPrefix)
+      .filter(([_, members]) => members.length >= minMembers)
+      .map(([prefix, members]) => ({
+        suggestedName: prefix,
+        memberCount: members.length,
+        alreadyAssigned: members.filter(m => m.partner_family).length,
+        regions: [...new Set(members.map(m => m.account_region).filter(Boolean))],
+        members: members.map(m => ({
+          id: m.id,
+          name: m.account_name,
+          tier: m.partner_tier,
+          region: m.account_region,
+          currentFamily: m.partner_family
+        }))
+      }))
+      .sort((a, b) => b.memberCount - a.memberCount);
+    
+    res.json({
+      potentialFamilies,
+      totalDetected: potentialFamilies.length,
+      totalPartners: potentialFamilies.reduce((sum, f) => sum + f.memberCount, 0)
+    });
+  } catch (error) {
+    console.error('Error detecting families:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Detect families from Impartner parent relationships
+router.get('/families/detect/by-parent', async (req, res) => {
+  try {
+    // Find partners with impartner_parent_id set
+    const withParent = await query(`
+      SELECT 
+        p.id,
+        p.account_name,
+        p.partner_tier,
+        p.account_region,
+        p.impartner_parent_id,
+        p.partner_family,
+        parent.id as parent_db_id,
+        parent.account_name as parent_name
+      FROM partners p
+      LEFT JOIN partners parent ON parent.salesforce_id = (
+        SELECT salesforce_id FROM partners WHERE id = p.impartner_parent_id LIMIT 1
+      )
+      WHERE p.impartner_parent_id IS NOT NULL
+      ORDER BY p.impartner_parent_id, p.account_name
+    `);
+    
+    // Group by parent
+    const byParent = {};
+    for (const p of withParent) {
+      const parentKey = p.impartner_parent_id;
+      if (!byParent[parentKey]) {
+        byParent[parentKey] = {
+          impartnerParentId: parentKey,
+          parentName: p.parent_name || `Unknown (Impartner ID: ${parentKey})`,
+          parentDbId: p.parent_db_id,
+          children: []
+        };
+      }
+      byParent[parentKey].children.push({
+        id: p.id,
+        name: p.account_name,
+        tier: p.partner_tier,
+        region: p.account_region,
+        currentFamily: p.partner_family
+      });
+    }
+    
+    const parentFamilies = Object.values(byParent).sort((a, b) => b.children.length - a.children.length);
+    
+    res.json({
+      parentFamilies,
+      totalWithParent: withParent.length,
+      distinctParents: parentFamilies.length
+    });
+  } catch (error) {
+    console.error('Error detecting parent families:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Auto-create a family from detected pattern
+router.post('/families/create-from-detection', async (req, res) => {
+  try {
+    const { 
+      family_name, 
+      display_name,
+      is_gsi, 
+      partner_ids,
+      head_partner_id 
+    } = req.body;
+    
+    if (!family_name || !partner_ids || partner_ids.length === 0) {
+      return res.status(400).json({ error: 'family_name and partner_ids are required' });
+    }
+    
+    // Create the family
+    await query(`
+      INSERT INTO partner_families 
+        (family_name, display_name, is_gsi, head_partner_id, aggregate_reporting)
+      VALUES (?, ?, ?, ?, TRUE)
+      ON DUPLICATE KEY UPDATE
+        display_name = VALUES(display_name),
+        is_gsi = VALUES(is_gsi),
+        head_partner_id = VALUES(head_partner_id)
+    `, [family_name, display_name || family_name, is_gsi || false, head_partner_id || null]);
+    
+    // Assign partners to family
+    const placeholders = partner_ids.map(() => '?').join(',');
+    await query(
+      `UPDATE partners SET 
+         partner_family = ?, 
+         is_gsi = ?,
+         is_family_head = (id = ?)
+       WHERE id IN (${placeholders})`,
+      [family_name, is_gsi || false, head_partner_id || 0, ...partner_ids]
+    );
+    
+    res.json({ 
+      success: true, 
+      message: `Created family "${family_name}" with ${partner_ids.length} members`
+    });
+  } catch (error) {
+    console.error('Error creating family:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Find users in multiple groups within the same family (cross-group conflicts)
+router.get('/families/:familyName/conflicts', async (req, res) => {
+  try {
+    const { familyName } = req.params;
+    
+    // Get all groups for partners in this family
+    const familyGroups = await query(`
+      SELECT g.id as group_id, g.name as group_name, p.id as partner_id, p.account_name
+      FROM lms_groups g
+      INNER JOIN partners p ON p.id = g.partner_id
+      WHERE p.partner_family = ?
+    `, [familyName]);
+    
+    if (familyGroups.length === 0) {
+      return res.json({ conflicts: [], message: 'No LMS groups found for this family' });
+    }
+    
+    const groupIds = familyGroups.map(g => g.group_id);
+    const groupMap = new Map(familyGroups.map(g => [g.group_id, g]));
+    
+    // Find users who are in multiple groups from this family
+    const placeholders = groupIds.map(() => '?').join(',');
+    const usersInMultiple = await query(`
+      SELECT 
+        gm.user_id,
+        u.email,
+        u.first_name,
+        u.last_name,
+        GROUP_CONCAT(gm.group_id) as group_ids,
+        COUNT(DISTINCT gm.group_id) as group_count
+      FROM lms_group_members gm
+      INNER JOIN lms_users u ON u.id = gm.user_id
+      WHERE gm.group_id IN (${placeholders})
+      GROUP BY gm.user_id
+      HAVING COUNT(DISTINCT gm.group_id) > 1
+      ORDER BY group_count DESC, u.last_name
+    `, groupIds);
+    
+    // Enrich with group details and CRM info
+    const conflicts = [];
+    for (const user of usersInMultiple) {
+      const userGroupIds = user.group_ids.split(',');
+      const userGroups = userGroupIds.map(gid => groupMap.get(gid)).filter(Boolean);
+      
+      // Check if user is in CRM
+      const [contact] = await query(`
+        SELECT c.*, p.account_name as crm_partner_name
+        FROM contacts c
+        INNER JOIN partners p ON p.id = c.partner_id
+        WHERE c.lms_user_id = ?
+      `, [user.user_id]);
+      
+      conflicts.push({
+        userId: user.user_id,
+        email: user.email,
+        name: `${user.first_name || ''} ${user.last_name || ''}`.trim(),
+        groupCount: user.group_count,
+        groups: userGroups.map(g => ({
+          groupId: g.group_id,
+          groupName: g.group_name,
+          partnerId: g.partner_id,
+          partnerName: g.account_name
+        })),
+        crmContact: contact ? {
+          partnerId: contact.partner_id,
+          partnerName: contact.crm_partner_name,
+          email: contact.email
+        } : null,
+        suggestedAction: contact 
+          ? `Assign to CRM partner: ${contact.crm_partner_name}`
+          : 'Manual review required - not in CRM'
+      });
+    }
+    
+    res.json({
+      familyName,
+      totalConflicts: conflicts.length,
+      conflicts
+    });
+  } catch (error) {
+    console.error('Error finding conflicts:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Resolve a cross-group conflict by assigning user to one partner
+router.post('/families/:familyName/resolve-conflict', async (req, res) => {
+  try {
+    const { familyName } = req.params;
+    const { userId, assignToPartnerId, removeFromOthers } = req.body;
+    
+    if (!userId || !assignToPartnerId) {
+      return res.status(400).json({ error: 'userId and assignToPartnerId are required' });
+    }
+    
+    // Get the target partner's group
+    const [targetGroup] = await query(`
+      SELECT g.id as group_id, g.name as group_name, p.account_name
+      FROM lms_groups g
+      INNER JOIN partners p ON p.id = g.partner_id
+      WHERE p.id = ? AND p.partner_family = ?
+    `, [assignToPartnerId, familyName]);
+    
+    if (!targetGroup) {
+      return res.status(404).json({ error: 'Target partner not found in this family or has no LMS group' });
+    }
+    
+    const results = {
+      assignedTo: targetGroup.account_name,
+      removedFrom: []
+    };
+    
+    if (removeFromOthers) {
+      // Get all other family groups the user is in
+      const otherGroups = await query(`
+        SELECT gm.group_id, g.name as group_name, p.account_name
+        FROM lms_group_members gm
+        INNER JOIN lms_groups g ON g.id = gm.group_id
+        INNER JOIN partners p ON p.id = g.partner_id
+        WHERE gm.user_id = ? 
+          AND p.partner_family = ?
+          AND g.id != ?
+      `, [userId, familyName, targetGroup.group_id]);
+      
+      // Remove from other groups (both locally and via API)
+      for (const group of otherGroups) {
+        // Remove from local DB
+        await query('DELETE FROM lms_group_members WHERE user_id = ? AND group_id = ?', [userId, group.group_id]);
+        results.removedFrom.push(group.account_name);
+        
+        // Note: API removal would need to be done separately via Northpass API
+        // This is tracked for the frontend to handle
+      }
+    }
+    
+    // Record as a shared user assignment (or update existing)
+    await query(`
+      INSERT INTO shared_users (lms_user_id, partner_family, is_shared, assigned_partner_id)
+      VALUES (?, ?, FALSE, ?)
+      ON DUPLICATE KEY UPDATE
+        is_shared = FALSE,
+        assigned_partner_id = ?,
+        updated_at = NOW()
+    `, [userId, familyName, assignToPartnerId, assignToPartnerId]);
+    
+    res.json({
+      success: true,
+      message: `User assigned to ${targetGroup.account_name}`,
+      ...results,
+      requiresApiRemoval: results.removedFrom.length > 0
+    });
+  } catch (error) {
+    console.error('Error resolving conflict:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Mark a user as shared across the family (excluded from individual metrics)
+router.post('/families/:familyName/shared-users', async (req, res) => {
+  try {
+    const { familyName } = req.params;
+    const { userId, notes } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+    
+    await query(`
+      INSERT INTO shared_users (lms_user_id, partner_family, is_shared, notes)
+      VALUES (?, ?, TRUE, ?)
+      ON DUPLICATE KEY UPDATE
+        is_shared = TRUE,
+        notes = COALESCE(?, notes),
+        updated_at = NOW()
+    `, [userId, familyName, notes || null, notes]);
+    
+    res.json({ success: true, message: 'User marked as shared resource' });
+  } catch (error) {
+    console.error('Error marking shared user:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get family summary for analytics (aggregate metrics)
+router.get('/families/:familyName/summary', async (req, res) => {
+  try {
+    const { familyName } = req.params;
+    
+    // Get family config
+    const [family] = await query('SELECT * FROM partner_families WHERE family_name = ?', [familyName]);
+    
+    // Get aggregate stats
+    const stats = await query(`
+      SELECT 
+        COUNT(DISTINCT p.id) as partner_count,
+        COUNT(DISTINCT c.id) as total_contacts,
+        COUNT(DISTINCT CASE WHEN c.lms_user_id IS NOT NULL THEN c.id END) as contacts_with_lms,
+        COUNT(DISTINCT gm.user_id) as total_lms_users,
+        SUM(DISTINCT CASE WHEN e.completed_at IS NOT NULL THEN cp.npcu_value ELSE 0 END) as total_npcu
+      FROM partners p
+      LEFT JOIN contacts c ON c.partner_id = p.id
+      LEFT JOIN lms_groups g ON g.partner_id = p.id
+      LEFT JOIN lms_group_members gm ON gm.group_id = g.id
+      LEFT JOIN lms_enrollments e ON e.user_id = gm.user_id AND e.completed_at IS NOT NULL
+      LEFT JOIN course_properties cp ON cp.course_id = e.course_id
+      WHERE p.partner_family = ?
+    `, [familyName]);
+    
+    // Get per-partner breakdown
+    const breakdown = await query(`
+      SELECT 
+        p.id,
+        p.account_name,
+        p.partner_tier,
+        p.account_region,
+        p.is_family_head,
+        COUNT(DISTINCT c.id) as contacts,
+        COUNT(DISTINCT CASE WHEN c.lms_user_id IS NOT NULL THEN c.id END) as lms_users,
+        g.user_count as group_members
+      FROM partners p
+      LEFT JOIN contacts c ON c.partner_id = p.id
+      LEFT JOIN lms_groups g ON g.partner_id = p.id
+      WHERE p.partner_family = ?
+      GROUP BY p.id
+      ORDER BY p.is_family_head DESC, p.account_name
+    `, [familyName]);
+    
+    // Get shared user count
+    const [sharedCount] = await query(
+      'SELECT COUNT(*) as count FROM shared_users WHERE partner_family = ? AND is_shared = TRUE',
+      [familyName]
+    );
+    
+    res.json({
+      family: family || { family_name: familyName },
+      stats: stats[0],
+      sharedUserCount: sharedCount?.count || 0,
+      breakdown
+    });
+  } catch (error) {
+    console.error('Error getting family summary:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// CERTIFICATION CATEGORY MANAGEMENT
+// ============================================
+
+// Valid certification categories
+const CERT_CATEGORIES = ['nintex_ce', 'nintex_k2', 'nintex_salesforce', 'go_to_market'];
+const CERT_CATEGORY_LABELS = {
+  'nintex_ce': 'Nintex CE',
+  'nintex_k2': 'Nintex Automation K2',
+  'nintex_salesforce': 'Nintex for Salesforce',
+  'go_to_market': 'Go To Market'
+};
+
+// Get all certification courses with their categories
+router.get('/certifications/courses', async (req, res) => {
+  try {
+    const courses = await query(`
+      SELECT 
+        c.id,
+        c.name,
+        c.npcu_value,
+        c.certification_category,
+        c.product_category,
+        c.is_certification
+      FROM lms_courses c
+      WHERE c.npcu_value > 0
+      ORDER BY c.certification_category, c.name
+    `);
+    
+    // Get stats by category
+    const stats = await query(`
+      SELECT 
+        COALESCE(certification_category, 'uncategorized') as category,
+        COUNT(*) as count,
+        SUM(npcu_value) as total_npcu
+      FROM lms_courses
+      WHERE npcu_value > 0
+      GROUP BY certification_category
+    `);
+    
+    res.json({ 
+      courses, 
+      stats,
+      categories: CERT_CATEGORIES,
+      categoryLabels: CERT_CATEGORY_LABELS
+    });
+  } catch (error) {
+    console.error('Error fetching certification courses:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get categorization rules
+router.get('/certifications/rules', async (req, res) => {
+  try {
+    const rules = await query(`
+      SELECT * FROM certification_category_rules
+      ORDER BY priority DESC, pattern
+    `);
+    res.json({ rules, categories: CERT_CATEGORIES, categoryLabels: CERT_CATEGORY_LABELS });
+  } catch (error) {
+    console.error('Error fetching rules:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add a categorization rule
+router.post('/certifications/rules', async (req, res) => {
+  try {
+    const { category, pattern, priority } = req.body;
+    
+    if (!CERT_CATEGORIES.includes(category)) {
+      return res.status(400).json({ error: `Invalid category. Must be one of: ${CERT_CATEGORIES.join(', ')}` });
+    }
+    if (!pattern || pattern.trim().length === 0) {
+      return res.status(400).json({ error: 'Pattern is required' });
+    }
+    
+    await query(
+      'INSERT INTO certification_category_rules (category, pattern, priority) VALUES (?, ?, ?)',
+      [category, pattern.trim(), priority || 0]
+    );
+    
+    res.json({ success: true, message: `Rule added: "${pattern}" → ${category}` });
+  } catch (error) {
+    console.error('Error adding rule:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete a categorization rule
+router.delete('/certifications/rules/:ruleId', async (req, res) => {
+  try {
+    const { ruleId } = req.params;
+    await query('DELETE FROM certification_category_rules WHERE id = ?', [ruleId]);
+    res.json({ success: true, message: 'Rule deleted' });
+  } catch (error) {
+    console.error('Error deleting rule:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Manually set a course's category
+router.put('/certifications/courses/:courseId/category', async (req, res) => {
+  try {
+    const { courseId } = req.params;
+    const { category } = req.body;
+    
+    if (category && !CERT_CATEGORIES.includes(category)) {
+      return res.status(400).json({ error: `Invalid category. Must be one of: ${CERT_CATEGORIES.join(', ')}` });
+    }
+    
+    await query(
+      'UPDATE lms_courses SET certification_category = ? WHERE id = ?',
+      [category || null, courseId]
+    );
+    
+    const [course] = await query('SELECT id, name, certification_category FROM lms_courses WHERE id = ?', [courseId]);
+    res.json({ success: true, course });
+  } catch (error) {
+    console.error('Error updating course category:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Apply categorization rules to all courses (auto-categorize)
+router.post('/certifications/apply-rules', async (req, res) => {
+  try {
+    // Get all rules ordered by priority (highest first)
+    const rules = await query('SELECT * FROM certification_category_rules ORDER BY priority DESC');
+    
+    // Get all certification courses
+    const courses = await query('SELECT id, name FROM lms_courses WHERE npcu_value > 0');
+    
+    let categorized = 0;
+    let unchanged = 0;
+    const results = [];
+    
+    for (const course of courses) {
+      const courseName = course.name.toLowerCase();
+      let matchedCategory = null;
+      let matchedPattern = null;
+      
+      // Try each rule in priority order
+      for (const rule of rules) {
+        if (courseName.includes(rule.pattern.toLowerCase())) {
+          matchedCategory = rule.category;
+          matchedPattern = rule.pattern;
+          break;
+        }
+      }
+      
+      if (matchedCategory) {
+        await query('UPDATE lms_courses SET certification_category = ? WHERE id = ?', [matchedCategory, course.id]);
+        results.push({ courseId: course.id, name: course.name, category: matchedCategory, pattern: matchedPattern });
+        categorized++;
+      } else {
+        unchanged++;
+      }
+    }
+    
+    res.json({
+      success: true,
+      categorized,
+      unchanged,
+      total: courses.length,
+      results: results.slice(0, 50) // Limit results in response
+    });
+  } catch (error) {
+    console.error('Error applying rules:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Calculate certification counts per partner
+router.post('/certifications/calculate-partner-counts', async (req, res) => {
+  try {
+    // Get all partners with their LMS groups
+    const partners = await query(`
+      SELECT p.id, p.account_name, g.id as group_id
+      FROM partners p
+      LEFT JOIN lms_groups g ON g.partner_id = p.id
+      WHERE p.partner_tier IS NOT NULL
+    `);
+    
+    const results = {
+      updated: 0,
+      errors: [],
+      samples: []
+    };
+    
+    for (const partner of partners) {
+      if (!partner.group_id) continue;
+      
+      try {
+        // Count certifications by category for this partner's users
+        const counts = await query(`
+          SELECT 
+            c.certification_category as category,
+            COUNT(DISTINCT e.user_id) as user_count,
+            COUNT(*) as cert_count
+          FROM lms_enrollments e
+          JOIN lms_courses c ON c.id = e.course_id
+          JOIN lms_group_members gm ON gm.user_id = e.user_id
+          WHERE gm.group_id = ?
+            AND e.status = 'completed'
+            AND c.npcu_value > 0
+            AND c.certification_category IS NOT NULL
+            AND (e.expires_at IS NULL OR e.expires_at > NOW())
+          GROUP BY c.certification_category
+        `, [partner.group_id]);
+        
+        // Build counts object
+        const certCounts = {
+          nintex_ce: 0,
+          nintex_k2: 0,
+          nintex_salesforce: 0,
+          go_to_market: 0
+        };
+        
+        for (const row of counts) {
+          if (row.category && certCounts.hasOwnProperty(row.category)) {
+            certCounts[row.category] = row.cert_count;
+          }
+        }
+        
+        // Update partner record
+        await query(`
+          UPDATE partners SET
+            cert_count_nintex_ce = ?,
+            cert_count_nintex_k2 = ?,
+            cert_count_nintex_salesforce = ?,
+            cert_count_go_to_market = ?,
+            has_gtm_certification = ?,
+            cert_counts_updated_at = NOW()
+          WHERE id = ?
+        `, [
+          certCounts.nintex_ce,
+          certCounts.nintex_k2,
+          certCounts.nintex_salesforce,
+          certCounts.go_to_market,
+          certCounts.go_to_market > 0,
+          partner.id
+        ]);
+        
+        results.updated++;
+        
+        // Keep first 10 as samples
+        if (results.samples.length < 10) {
+          results.samples.push({
+            partnerId: partner.id,
+            partnerName: partner.account_name,
+            counts: certCounts
+          });
+        }
+        
+      } catch (err) {
+        results.errors.push({ partnerId: partner.id, error: err.message });
+      }
+    }
+    
+    res.json({
+      success: true,
+      ...results,
+      message: `Updated certification counts for ${results.updated} partners`
+    });
+  } catch (error) {
+    console.error('Error calculating partner counts:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get certification stats by partner (for reporting)
+router.get('/certifications/partner-stats', async (req, res) => {
+  try {
+    const { tier, region, hasGtm } = req.query;
+    
+    let whereClause = 'WHERE cert_counts_updated_at IS NOT NULL';
+    const params = [];
+    
+    if (tier) {
+      whereClause += ' AND partner_tier = ?';
+      params.push(tier);
+    }
+    if (region) {
+      whereClause += ' AND account_region = ?';
+      params.push(region);
+    }
+    if (hasGtm === 'true') {
+      whereClause += ' AND has_gtm_certification = TRUE';
+    } else if (hasGtm === 'false') {
+      whereClause += ' AND has_gtm_certification = FALSE';
+    }
+    
+    const stats = await query(`
+      SELECT 
+        id,
+        account_name,
+        partner_tier,
+        account_region,
+        cert_count_nintex_ce,
+        cert_count_nintex_k2,
+        cert_count_nintex_salesforce,
+        cert_count_go_to_market,
+        has_gtm_certification,
+        (cert_count_nintex_ce + cert_count_nintex_k2 + cert_count_nintex_salesforce + cert_count_go_to_market) as total_certs,
+        cert_counts_updated_at
+      FROM partners
+      ${whereClause}
+      ORDER BY total_certs DESC, account_name
+    `, params);
+    
+    // Summary stats
+    const [summary] = await query(`
+      SELECT 
+        COUNT(*) as total_partners,
+        SUM(has_gtm_certification) as partners_with_gtm,
+        SUM(cert_count_nintex_ce) as total_nintex_ce,
+        SUM(cert_count_nintex_k2) as total_nintex_k2,
+        SUM(cert_count_nintex_salesforce) as total_salesforce,
+        SUM(cert_count_go_to_market) as total_gtm
+      FROM partners
+      ${whereClause}
+    `, params);
+    
+    res.json({ 
+      partners: stats, 
+      summary,
+      categoryLabels: CERT_CATEGORY_LABELS 
+    });
+  } catch (error) {
+    console.error('Error fetching partner cert stats:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Sync certification data to Impartner (placeholder - to be implemented)
+router.post('/certifications/sync-to-impartner', async (req, res) => {
+  try {
+    // Get partners with certification counts that have changed
+    const partners = await query(`
+      SELECT 
+        p.id,
+        p.account_name,
+        p.salesforce_id,
+        p.cert_count_nintex_ce,
+        p.cert_count_nintex_k2,
+        p.cert_count_nintex_salesforce,
+        p.has_gtm_certification
+      FROM partners p
+      WHERE p.salesforce_id IS NOT NULL
+        AND p.cert_counts_updated_at IS NOT NULL
+      ORDER BY p.account_name
+    `);
+    
+    // For now, return what would be synced
+    // The actual Impartner API call will be implemented based on their API spec
+    const syncPayload = partners.map(p => ({
+      salesforceId: p.salesforce_id,
+      accountName: p.account_name,
+      // Map to Impartner boolean fields
+      Nintex_CE_Certifications: p.cert_count_nintex_ce > 0,
+      Nintex_K2_Certifications: p.cert_count_nintex_k2 > 0,
+      Nintex_for_Salesforce_Certifications: p.cert_count_nintex_salesforce > 0
+    }));
+    
+    res.json({
+      success: true,
+      message: `Ready to sync ${syncPayload.length} partners to Impartner`,
+      preview: syncPayload.slice(0, 20),
+      totalCount: syncPayload.length,
+      note: 'Actual Impartner sync not yet implemented - this is a preview'
+    });
+  } catch (error) {
+    console.error('Error preparing Impartner sync:', error);
     res.status(500).json({ error: error.message });
   }
 });

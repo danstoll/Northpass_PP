@@ -37,6 +37,8 @@ import {
   ExitToApp,
   Timeline,
   SupervisorAccount,
+  GroupWork,
+  School,
 } from '@mui/icons-material';
 import { useAuth } from '../context/AuthContext';
 
@@ -61,6 +63,8 @@ const NAV_SECTIONS = [
     items: [
       { id: 'users', label: 'User Management', path: '/admin/users', icon: <PersonAdd />, permission: { category: 'user_management', action: 'view' } },
       { id: 'pam', label: 'PAM Management', path: '/admin/pam', icon: <SupervisorAccount />, permission: { category: 'user_management', action: 'view' } },
+      { id: 'groups', label: 'Group Management', path: '/admin/groups', icon: <GroupWork />, permission: { category: 'user_management', action: 'view' } },
+      { id: 'certifications', label: 'Certifications', path: '/admin/certifications', icon: <School />, permission: { category: 'data_management', action: 'view' } },
     ]
   },
   {

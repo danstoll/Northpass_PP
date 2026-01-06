@@ -6,7 +6,7 @@
 const { query, transaction, getPool } = require('./connection.cjs');
 const crypto = require('crypto');
 
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 12;
 
 /**
  * Create all database tables
@@ -825,6 +825,229 @@ Get started by completing your certifications to help your team meet NPCU goals.
       } catch (err) {
         console.log(`  - Impartner sync task: ${err.message}`);
       }
+    }
+    
+    // Version 11: Add partner family support for GSIs and multi-location partners
+    if (currentVersion < 11) {
+      console.log('📦 Running v11 migration: Add partner family support...');
+      
+      // Add columns for parent/child relationships and family grouping
+      const partnerColumns = [
+        { name: 'parent_partner_id', def: 'INT NULL AFTER salesforce_id' },
+        { name: 'impartner_parent_id', def: 'INT NULL AFTER parent_partner_id' },
+        { name: 'partner_family', def: 'VARCHAR(100) NULL AFTER impartner_parent_id' },
+        { name: 'is_gsi', def: 'BOOLEAN DEFAULT FALSE AFTER partner_family' },
+        { name: 'is_family_head', def: 'BOOLEAN DEFAULT FALSE AFTER is_gsi' }
+      ];
+      
+      for (const col of partnerColumns) {
+        try {
+          await query(`ALTER TABLE partners ADD COLUMN ${col.name} ${col.def}`);
+          console.log(`  ✓ Added partners.${col.name}`);
+        } catch (err) {
+          if (!err.message.includes('Duplicate column')) {
+            console.log(`  - partners.${col.name}: ${err.message}`);
+          }
+        }
+      }
+      
+      // Add indexes for family lookups
+      try {
+        await query('ALTER TABLE partners ADD INDEX idx_parent_partner (parent_partner_id)');
+        console.log('  ✓ Added index idx_parent_partner');
+      } catch (err) {
+        if (!err.message.includes('Duplicate key')) {
+          console.log(`  - idx_parent_partner: ${err.message}`);
+        }
+      }
+      
+      try {
+        await query('ALTER TABLE partners ADD INDEX idx_partner_family (partner_family)');
+        console.log('  ✓ Added index idx_partner_family');
+      } catch (err) {
+        if (!err.message.includes('Duplicate key')) {
+          console.log(`  - idx_partner_family: ${err.message}`);
+        }
+      }
+      
+      try {
+        await query('ALTER TABLE partners ADD INDEX idx_is_gsi (is_gsi)');
+        console.log('  ✓ Added index idx_is_gsi');
+      } catch (err) {
+        if (!err.message.includes('Duplicate key')) {
+          console.log(`  - idx_is_gsi: ${err.message}`);
+        }
+      }
+      
+      // Add foreign key for parent relationship (self-referential)
+      try {
+        await query('ALTER TABLE partners ADD CONSTRAINT fk_parent_partner FOREIGN KEY (parent_partner_id) REFERENCES partners(id) ON DELETE SET NULL');
+        console.log('  ✓ Added foreign key fk_parent_partner');
+      } catch (err) {
+        if (!err.message.includes('Duplicate')) {
+          console.log(`  - fk_parent_partner: ${err.message}`);
+        }
+      }
+      
+      // Create partner_families table for managing family configurations
+      try {
+        await query(`
+          CREATE TABLE IF NOT EXISTS partner_families (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            family_name VARCHAR(100) NOT NULL UNIQUE,
+            display_name VARCHAR(255),
+            is_gsi BOOLEAN DEFAULT FALSE,
+            allow_cross_group_users BOOLEAN DEFAULT FALSE COMMENT 'Allow users to be in multiple groups within family',
+            aggregate_reporting BOOLEAN DEFAULT TRUE COMMENT 'Show roll-up metrics for the family',
+            head_partner_id INT NULL COMMENT 'Primary/HQ partner for this family',
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_family_name (family_name),
+            INDEX idx_is_gsi (is_gsi),
+            FOREIGN KEY (head_partner_id) REFERENCES partners(id) ON DELETE SET NULL
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        console.log('  ✓ Created partner_families table');
+      } catch (err) {
+        console.log(`  - partner_families table: ${err.message}`);
+      }
+      
+      // Create shared_users table to track users shared across family members
+      try {
+        await query(`
+          CREATE TABLE IF NOT EXISTS shared_users (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            lms_user_id VARCHAR(50) NOT NULL,
+            partner_family VARCHAR(100) NOT NULL,
+            is_shared BOOLEAN DEFAULT TRUE COMMENT 'True = shared resource, excluded from individual metrics',
+            assigned_partner_id INT NULL COMMENT 'If assigned, which partner they primarily belong to',
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY unique_user_family (lms_user_id, partner_family),
+            INDEX idx_partner_family (partner_family),
+            INDEX idx_assigned_partner (assigned_partner_id),
+            FOREIGN KEY (lms_user_id) REFERENCES lms_users(id) ON DELETE CASCADE,
+            FOREIGN KEY (assigned_partner_id) REFERENCES partners(id) ON DELETE SET NULL
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        console.log('  ✓ Created shared_users table');
+      } catch (err) {
+        console.log(`  - shared_users table: ${err.message}`);
+      }
+      
+      console.log('  ✓ Partner family support migration complete');
+    }
+    
+    // Migration v12: Add certification categories
+    if (currentVersion < 12) {
+      console.log('📦 Running migration v12: Certification categories...');
+      
+      // Add certification_category column to lms_courses
+      const certCatColumns = [
+        { name: 'certification_category', type: "VARCHAR(50) DEFAULT NULL COMMENT 'nintex_ce, nintex_k2, nintex_salesforce, go_to_market'" },
+      ];
+      
+      for (const col of certCatColumns) {
+        try {
+          await query(`ALTER TABLE lms_courses ADD COLUMN ${col.name} ${col.type}`);
+          console.log(`  ✓ Added column lms_courses.${col.name}`);
+        } catch (err) {
+          if (!err.message.includes('Duplicate column')) {
+            console.log(`  - lms_courses.${col.name}: ${err.message}`);
+          }
+        }
+      }
+      
+      // Add index for certification_category
+      try {
+        await query('ALTER TABLE lms_courses ADD INDEX idx_cert_category (certification_category)');
+        console.log('  ✓ Added index idx_cert_category');
+      } catch (err) {
+        if (!err.message.includes('Duplicate key')) {
+          console.log(`  - idx_cert_category: ${err.message}`);
+        }
+      }
+      
+      // Create certification_category_rules table for auto-categorization patterns
+      try {
+        await query(`
+          CREATE TABLE IF NOT EXISTS certification_category_rules (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            category VARCHAR(50) NOT NULL COMMENT 'nintex_ce, nintex_k2, nintex_salesforce, go_to_market',
+            pattern VARCHAR(255) NOT NULL COMMENT 'Pattern to match in course name (case-insensitive)',
+            priority INT DEFAULT 0 COMMENT 'Higher priority rules are applied first',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_category (category),
+            INDEX idx_priority (priority DESC)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        console.log('  ✓ Created certification_category_rules table');
+        
+        // Insert default categorization rules
+        const defaultRules = [
+          // K2 rules (highest priority - specific product)
+          { category: 'nintex_k2', pattern: 'K2', priority: 100 },
+          { category: 'nintex_k2', pattern: 'Automation K2', priority: 100 },
+          
+          // Salesforce rules (high priority - specific product)
+          { category: 'nintex_salesforce', pattern: 'Salesforce', priority: 90 },
+          { category: 'nintex_salesforce', pattern: 'DocGen for Salesforce', priority: 90 },
+          
+          // GTM rules (medium-high priority)
+          { category: 'go_to_market', pattern: 'Go to Market', priority: 80 },
+          { category: 'go_to_market', pattern: 'GTM', priority: 80 },
+          { category: 'go_to_market', pattern: 'Sales Professional', priority: 80 },
+          { category: 'go_to_market', pattern: 'Sales Enablement', priority: 80 },
+          
+          // Nintex CE rules (lower priority - catch remaining)
+          { category: 'nintex_ce', pattern: 'Automation Cloud', priority: 50 },
+          { category: 'nintex_ce', pattern: 'Process Manager', priority: 50 },
+          { category: 'nintex_ce', pattern: 'Promapp', priority: 50 },
+          { category: 'nintex_ce', pattern: 'RPA', priority: 50 },
+          { category: 'nintex_ce', pattern: 'eSign', priority: 50 },
+          { category: 'nintex_ce', pattern: 'Apps', priority: 50 },
+          { category: 'nintex_ce', pattern: 'Office 365', priority: 50 },
+          { category: 'nintex_ce', pattern: 'SharePoint', priority: 50 },
+          { category: 'nintex_ce', pattern: 'Xtensions', priority: 50 },
+          { category: 'nintex_ce', pattern: 'Process Discovery', priority: 50 },
+        ];
+        
+        for (const rule of defaultRules) {
+          await query(
+            'INSERT INTO certification_category_rules (category, pattern, priority) VALUES (?, ?, ?)',
+            [rule.category, rule.pattern, rule.priority]
+          );
+        }
+        console.log(`  ✓ Inserted ${defaultRules.length} default categorization rules`);
+        
+      } catch (err) {
+        console.log(`  - certification_category_rules table: ${err.message}`);
+      }
+      
+      // Add certification count columns to partners for Impartner sync
+      const partnerCertColumns = [
+        { name: 'cert_count_nintex_ce', type: 'INT DEFAULT 0 COMMENT "Count of Nintex CE certifications"' },
+        { name: 'cert_count_nintex_k2', type: 'INT DEFAULT 0 COMMENT "Count of Nintex K2 certifications"' },
+        { name: 'cert_count_nintex_salesforce', type: 'INT DEFAULT 0 COMMENT "Count of Nintex for Salesforce certifications"' },
+        { name: 'cert_count_go_to_market', type: 'INT DEFAULT 0 COMMENT "Count of Go To Market certifications"' },
+        { name: 'has_gtm_certification', type: 'BOOLEAN DEFAULT FALSE COMMENT "Partner has at least one GTM certification"' },
+        { name: 'cert_counts_updated_at', type: 'TIMESTAMP NULL COMMENT "Last time cert counts were calculated"' },
+      ];
+      
+      for (const col of partnerCertColumns) {
+        try {
+          await query(`ALTER TABLE partners ADD COLUMN ${col.name} ${col.type}`);
+          console.log(`  ✓ Added column partners.${col.name}`);
+        } catch (err) {
+          if (!err.message.includes('Duplicate column')) {
+            console.log(`  - partners.${col.name}: ${err.message}`);
+          }
+        }
+      }
+      
+      console.log('  ✓ Certification categories migration complete');
     }
     
     await query('UPDATE schema_info SET version = ? WHERE id = 1', [SCHEMA_VERSION]);

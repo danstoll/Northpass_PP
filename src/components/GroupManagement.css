@@ -1,0 +1,213 @@
+/* Group Management Styles */
+
+.group-management {
+  padding: var(--admin-spacing-lg);
+}
+
+/* Family Cards */
+.family-card {
+  background: var(--admin-bg-card);
+  border: 1px solid var(--admin-border-default);
+  border-radius: var(--admin-radius-lg);
+  padding: var(--admin-spacing-md);
+  margin-bottom: var(--admin-spacing-md);
+  transition: box-shadow 0.2s ease;
+}
+
+.family-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.family-card.gsi {
+  border-left: 4px solid var(--nintex-purple);
+}
+
+.family-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--admin-spacing-md);
+}
+
+.family-info {
+  flex: 1;
+}
+
+.family-name {
+  display: flex;
+  align-items: center;
+  gap: var(--admin-spacing-sm);
+  margin-bottom: var(--admin-spacing-sm);
+}
+
+.family-name h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: var(--admin-text-primary);
+}
+
+.family-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--admin-spacing-xs);
+}
+
+.family-actions {
+  display: flex;
+  gap: var(--admin-spacing-xs);
+}
+
+/* Detection Cards */
+.detection-card {
+  background: var(--admin-bg-elevated);
+  border: 1px dashed var(--nintex-purple);
+  border-radius: var(--admin-radius-lg);
+  padding: var(--admin-spacing-md);
+  margin-bottom: var(--admin-spacing-md);
+}
+
+.detection-card.selected {
+  border-style: solid;
+  background: var(--admin-bg-card);
+}
+
+.detection-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--admin-spacing-sm);
+}
+
+.detection-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--admin-spacing-xs);
+  margin-top: var(--admin-spacing-sm);
+}
+
+/* Conflict Cards */
+.conflict-card {
+  background: var(--admin-bg-card);
+  border: 1px solid var(--admin-border-default);
+  border-left: 4px solid var(--admin-warning-text);
+  border-radius: var(--admin-radius-lg);
+  padding: var(--admin-spacing-md);
+  margin-bottom: var(--admin-spacing-md);
+}
+
+.conflict-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--admin-spacing-md);
+}
+
+.conflict-user {
+  display: flex;
+  align-items: center;
+  gap: var(--admin-spacing-sm);
+  margin-bottom: var(--admin-spacing-xs);
+}
+
+.conflict-user h4 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--admin-text-primary);
+}
+
+.conflict-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--admin-spacing-xs);
+  margin-top: var(--admin-spacing-sm);
+}
+
+.conflict-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--admin-spacing-xs);
+}
+
+/* Settings Panel */
+.detection-settings {
+  background: var(--admin-bg-elevated);
+  border-radius: var(--admin-radius-lg);
+  padding: var(--admin-spacing-md);
+  margin-bottom: var(--admin-spacing-lg);
+}
+
+.detection-settings-row {
+  display: flex;
+  align-items: center;
+  gap: var(--admin-spacing-md);
+  margin-bottom: var(--admin-spacing-sm);
+}
+
+.detection-settings-help {
+  font-size: 0.85rem;
+  color: var(--admin-text-muted);
+}
+
+/* Member Chips */
+.member-chip {
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.member-chip.selected {
+  background: var(--nintex-orange);
+  color: white;
+}
+
+.member-chip.head {
+  background: var(--nintex-purple);
+  color: white;
+}
+
+/* Empty States */
+.group-empty-state {
+  text-align: center;
+  padding: var(--admin-spacing-xl);
+  color: var(--admin-text-muted);
+}
+
+.group-empty-state svg {
+  font-size: 3rem;
+  margin-bottom: var(--admin-spacing-md);
+  opacity: 0.5;
+}
+
+/* Dialog Styles */
+.resolve-dialog-group {
+  width: 100%;
+  justify-content: flex-start !important;
+  margin-bottom: var(--admin-spacing-sm) !important;
+  text-transform: none !important;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .family-header {
+    flex-direction: column;
+  }
+  
+  .family-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  
+  .conflict-header {
+    flex-direction: column;
+  }
+  
+  .conflict-actions {
+    width: 100%;
+    flex-direction: row;
+    justify-content: flex-end;
+  }
+  
+  .detection-settings-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

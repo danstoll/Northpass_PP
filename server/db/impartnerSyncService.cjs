@@ -312,7 +312,7 @@ async function syncPartners(mode = 'incremental') {
       'Account_Owner__cf', 'Account_Owner_Email__cf',
       'Partner_Type__cf', 'Website', 'CrmId',
       'MailingCity', 'MailingCountry', 'Region',
-      'MemberCount', 'Updated'
+      'MemberCount', 'Updated', 'ParentAccountId'
     ].join(',');
     
     const allAccounts = await fetchAllRecords('Account', fields, null, sinceDate);
@@ -339,6 +339,7 @@ async function syncPartners(mode = 'incremental') {
       try {
         const accountName = account.name;
         const salesforceId = account.crmId || null;
+        const impartnerParentId = account.parentAccountId || null;
         
         // Look up existing partner by Salesforce ID first, then by name
         let existing = null;
@@ -358,7 +359,8 @@ async function syncPartners(mode = 'incremental') {
           owner_email: account.account_Owner_Email__cf || null,
           partner_type: account.partner_Type__cf || null,
           salesforce_id: salesforceId,
-          website: account.website || null
+          website: account.website || null,
+          impartner_parent_id: impartnerParentId
         };
         
         if (existing) {
@@ -372,6 +374,7 @@ async function syncPartners(mode = 'incremental') {
                partner_type = ?,
                salesforce_id = ?,
                website = ?,
+               impartner_parent_id = ?,
                updated_at = NOW()
              WHERE id = ?`,
             [
@@ -382,6 +385,7 @@ async function syncPartners(mode = 'incremental') {
               partnerData.partner_type,
               partnerData.salesforce_id,
               partnerData.website,
+              partnerData.impartner_parent_id,
               existing.id
             ]
           );
@@ -389,8 +393,8 @@ async function syncPartners(mode = 'incremental') {
         } else {
           // Insert new partner
           await query(
-            `INSERT INTO partners (account_name, partner_tier, account_region, account_owner, owner_email, partner_type, salesforce_id, website)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO partners (account_name, partner_tier, account_region, account_owner, owner_email, partner_type, salesforce_id, website, impartner_parent_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               partnerData.account_name,
               partnerData.partner_tier,
@@ -399,7 +403,8 @@ async function syncPartners(mode = 'incremental') {
               partnerData.owner_email,
               partnerData.partner_type,
               partnerData.salesforce_id,
-              partnerData.website
+              partnerData.website,
+              partnerData.impartner_parent_id
             ]
           );
           stats.created++;

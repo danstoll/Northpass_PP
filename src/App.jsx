@@ -11,6 +11,8 @@ import AdminUsers from './components/AdminUsers'
 import Settings from './components/Settings'
 import AnalyticsDashboard from './components/AnalyticsDashboard'
 import PamManagement from './components/PamManagement'
+import GroupManagement from './components/GroupManagement'
+import CertificationCategories from './components/CertificationCategories'
 import { extractUrlParams } from './utils/urlEncoder'
 import { extractCustomerParams } from './utils/customerUrlEncoder'
 import './App.css'
@@ -31,6 +33,8 @@ function App() {
   const isSettingsRoute = currentPath === '/admin/settings' || currentPath === '/admin/settings/';
   const isAnalyticsRoute = currentPath === '/admin/analytics' || currentPath === '/admin/analytics/';
   const isPamRoute = currentPath === '/admin/pam' || currentPath === '/admin/pam/';
+  const isGroupsRoute = currentPath === '/admin/groups' || currentPath === '/admin/groups/';
+  const isCertificationsRoute = currentPath === '/admin/certifications' || currentPath === '/admin/certifications/';
   const isCustomerRoute = currentPath === '/customer' || currentPath === '/customer/';
   const isPartnerDbRoute = currentPath === '/partner' || currentPath === '/partner/';
   
@@ -124,6 +128,28 @@ function App() {
       <div className="app">
         <AdminHub currentPage="pam">
           <PamManagement />
+        </AdminHub>
+      </div>
+    );
+  }
+
+  // Show group management for /admin/groups route
+  if (isGroupsRoute) {
+    return (
+      <div className="app">
+        <AdminHub currentPage="groups">
+          <GroupManagement />
+        </AdminHub>
+      </div>
+    );
+  }
+
+  // Show certification categories for /admin/certifications route
+  if (isCertificationsRoute) {
+    return (
+      <div className="app">
+        <AdminHub currentPage="certifications">
+          <CertificationCategories />
         </AdminHub>
       </div>
     );

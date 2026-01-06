@@ -1345,8 +1345,24 @@ const UserManagement = () => {
 
   // Fix missing group memberships for a specific partner
   const fixPartnerMemberships = async (partnerId) => {
-    const partner = audit?.byPartner?.[partnerId];
-    if (!partner) return;
+    // partnerId from partnersWithIssues is a string, but byPartner keys may be numeric
+    // Try both string and numeric lookup
+    const partner = audit?.byPartner?.[partnerId] || audit?.byPartner?.[String(partnerId)] || audit?.byPartner?.[Number(partnerId)];
+    
+    console.log('🔧 fixPartnerMemberships called with partnerId:', partnerId, 'type:', typeof partnerId);
+    console.log('   byPartner keys:', Object.keys(audit?.byPartner || {}));
+    console.log('   Found partner:', partner ? partner.partnerName : 'NOT FOUND');
+    
+    if (!partner) {
+      console.error('❌ Partner not found in audit.byPartner for ID:', partnerId);
+      setAuditError(`Partner not found for ID: ${partnerId}`);
+      return;
+    }
+    
+    console.log('   missingPartnerGroup:', partner.missingPartnerGroup?.length || 0);
+    console.log('   missingAllPartnersGroup:', partner.missingAllPartnersGroup?.length || 0);
+    console.log('   partnerGroupId:', partner.partnerGroupId);
+    console.log('   allPartnersGroupId:', audit?.allPartnersGroupId);
     
     setFixing(true);
     setFixProgress({ current: 0, total: 0, stage: 'preparing' });
@@ -1357,9 +1373,14 @@ const UserManagement = () => {
       allPartnersGroup: { success: 0, failed: 0, errors: [] }
     };
     
+    // Track if we actually did anything
+    let didWork = false;
+    
     try {
       // Fix partner group memberships
       if (partner.partnerGroupId && partner.missingPartnerGroup.length > 0) {
+        didWork = true;
+        console.log(`🔄 Fixing ${partner.missingPartnerGroup.length} partner group memberships for group ${partner.partnerGroupId}...`);
         setFixProgress({ 
           current: 0, 
           total: partner.missingPartnerGroup.length, 
@@ -1369,11 +1390,16 @@ const UserManagement = () => {
         for (let i = 0; i < partner.missingPartnerGroup.length; i++) {
           const user = partner.missingPartnerGroup[i];
           try {
+            console.log(`   Adding user ${user.userId} (${user.email}) to partner group...`);
             await northpassApi.addUserToGroup(partner.partnerGroupId, user.userId);
+            // Record the membership in local DB so audit reflects the change
+            await fetch(`/api/db/groups/${partner.partnerGroupId}/members/${user.userId}/record`, { method: 'POST' });
             results.partnerGroup.success++;
+            console.log(`   ✅ Added ${user.email}`);
           } catch (err) {
             results.partnerGroup.failed++;
             results.partnerGroup.errors.push({ user: user.email, error: err.message });
+            console.error(`   ❌ Failed to add ${user.email}:`, err.message);
           }
           setFixProgress({ 
             current: i + 1, 
@@ -1381,10 +1407,14 @@ const UserManagement = () => {
             stage: 'partnerGroup' 
           });
         }
+      } else {
+        console.log(`⚠️ Skipping partner group fix: partnerGroupId=${partner.partnerGroupId}, missingCount=${partner.missingPartnerGroup?.length}`);
       }
       
       // Fix All Partners group memberships
       if (audit.allPartnersGroupId && partner.missingAllPartnersGroup.length > 0) {
+        didWork = true;
+        console.log(`🔄 Fixing ${partner.missingAllPartnersGroup.length} All Partners memberships for group ${audit.allPartnersGroupId}...`);
         setFixProgress({ 
           current: 0, 
           total: partner.missingAllPartnersGroup.length, 
@@ -1394,11 +1424,16 @@ const UserManagement = () => {
         for (let i = 0; i < partner.missingAllPartnersGroup.length; i++) {
           const user = partner.missingAllPartnersGroup[i];
           try {
+            console.log(`   Adding user ${user.userId} (${user.email}) to All Partners...`);
             await northpassApi.addUserToGroup(audit.allPartnersGroupId, user.userId);
+            // Record the membership in local DB so audit reflects the change
+            await fetch(`/api/db/groups/${audit.allPartnersGroupId}/members/${user.userId}/record`, { method: 'POST' });
             results.allPartnersGroup.success++;
+            console.log(`   ✅ Added ${user.email}`);
           } catch (err) {
             results.allPartnersGroup.failed++;
             results.allPartnersGroup.errors.push({ user: user.email, error: err.message });
+            console.error(`   ❌ Failed to add ${user.email}:`, err.message);
           }
           setFixProgress({ 
             current: i + 1, 
@@ -1406,8 +1441,15 @@ const UserManagement = () => {
             stage: 'allPartnersGroup' 
           });
         }
+      } else {
+        console.log(`⚠️ Skipping All Partners fix: allPartnersGroupId=${audit?.allPartnersGroupId}, missingCount=${partner.missingAllPartnersGroup?.length}`);
       }
       
+      if (!didWork) {
+        console.log('⚠️ No work to do - both arrays empty or no group IDs');
+      }
+      
+      console.log('📊 Fix results:', results);
       setFixResults(results);
       
       // Refresh audit after fixes

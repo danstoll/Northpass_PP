@@ -1,0 +1,101 @@
+/* Certification Categories Styles */
+
+.certification-categories {
+  padding: var(--admin-spacing-lg);
+}
+
+/* Category Chips */
+.category-chip-nintex_ce {
+  background-color: #FF6B35 !important;
+  color: white !important;
+}
+
+.category-chip-nintex_k2 {
+  background-color: #6B4C9A !important;
+  color: white !important;
+}
+
+.category-chip-nintex_salesforce {
+  background-color: #00A1E0 !important;
+  color: white !important;
+}
+
+.category-chip-go_to_market {
+  background-color: #28a745 !important;
+  color: white !important;
+}
+
+/* Course Table */
+.course-table {
+  margin-top: var(--admin-spacing-md);
+}
+
+.course-table th {
+  background: var(--admin-bg-elevated);
+  font-weight: 600;
+}
+
+.course-table td {
+  vertical-align: middle;
+}
+
+/* Rule pattern display */
+.rule-pattern {
+  font-family: 'Consolas', 'Monaco', monospace;
+  background: var(--admin-bg-elevated);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+/* Partner stats table */
+.partner-stats-table .cert-count {
+  font-weight: 600;
+  text-align: center;
+}
+
+.partner-stats-table .cert-count.has-certs {
+  color: var(--nintex-orange);
+}
+
+.partner-stats-table .gtm-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Summary cards */
+.cert-summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--admin-spacing-md);
+  margin-bottom: var(--admin-spacing-lg);
+}
+
+/* Action buttons row */
+.cert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--admin-spacing-sm);
+  margin-bottom: var(--admin-spacing-lg);
+}
+
+/* Category select in table */
+.category-select {
+  min-width: 160px;
+}
+
+.category-select .MuiSelect-select {
+  padding: 6px 12px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .cert-actions {
+    flex-direction: column;
+  }
+  
+  .cert-actions > * {
+    width: 100%;
+  }
+}
