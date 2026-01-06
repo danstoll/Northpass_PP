@@ -1509,41 +1509,42 @@ const UserManagement = () => {
   }, []);
 
   // Fix all users missing from All Partners group
+  // Uses server-side endpoint that updates both Northpass API AND local database
   const fixAllPartnersSync = async () => {
     if (!syncAudit?.allMissingUsers?.length) return;
     
     setSyncFixing(true);
     setSyncProgress({ current: 0, total: syncAudit.allMissingUsers.length });
     
-    const results = { added: 0, failed: 0, errors: [] };
-    
     try {
       // Get unique user IDs
       const userIds = [...new Set(syncAudit.allMissingUsers.map(u => u.userId))];
       
-      // Add users in batches of 10
-      for (let i = 0; i < userIds.length; i += 10) {
-        const batch = userIds.slice(i, i + 10);
-        setSyncProgress({ current: i, total: userIds.length });
-        
-        try {
-          const result = await northpassApi.addPeopleToGroup(syncAudit.allPartnersGroupId, batch);
-          if (result.success) {
-            results.added += batch.length;
-          } else {
-            results.failed += batch.length;
-            results.errors.push({ batch: i / 10, error: result.error });
-          }
-        } catch (err) {
-          results.failed += batch.length;
-          results.errors.push({ batch: i / 10, error: err.message });
-        }
+      // Call server endpoint that handles both API and DB updates
+      const response = await fetch('/api/db/maintenance/add-to-all-partners', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userIds,
+          allPartnersGroupId: syncAudit.allPartnersGroupId
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (response.ok) {
+        setSyncResults({
+          added: result.results.apiAdded,
+          failed: result.results.apiFailed,
+          dbAdded: result.results.dbAdded,
+          errors: result.results.errors
+        });
+      } else {
+        setSyncError(result.error || 'Failed to add users');
       }
       
-      setSyncResults(results);
-      
-      // Refresh audit
-      setTimeout(() => runSyncAudit(), 2000);
+      // Refresh audit - local DB is already updated so this should show correct results
+      setTimeout(() => runSyncAudit(), 1000);
       
     } catch (err) {
       setSyncError('Fix failed: ' + err.message);

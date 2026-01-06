@@ -2,6 +2,7 @@
  * Partner Reporting Service
  * Provides reports for account owners, regions, and certification compliance
  * Uses partner_npcu_cache table for fast queries (vs N+1 query pattern)
+ * LMS Group is the master source for user counts and NPCU calculations
  */
 
 const { query } = require('./connection.cjs');
@@ -9,15 +10,17 @@ const { query } = require('./connection.cjs');
 /**
  * Refresh the NPCU cache table
  * Should be called after enrollment syncs or periodically
+ * Uses LMS group members as the master source (not CRM contacts)
  */
 async function refreshNpcuCache() {
-  console.log('🔄 Refreshing NPCU cache...');
+  console.log('🔄 Refreshing NPCU cache (using LMS group members)...');
   const start = Date.now();
   
   try {
     // Delete and repopulate (simpler than complex upsert)
     await query('DELETE FROM partner_npcu_cache');
     
+    // Use LMS group members as the source for NPCU calculations
     await query(`
       INSERT INTO partner_npcu_cache (partner_id, active_npcu, expired_npcu, total_certifications, certified_users)
       SELECT 
@@ -35,8 +38,9 @@ async function refreshNpcuCache() {
         COUNT(DISTINCT e.id) as total_certifications,
         COUNT(DISTINCT e.user_id) as certified_users
       FROM partners p
-      LEFT JOIN contacts ct ON ct.partner_id = p.id AND ct.lms_user_id IS NOT NULL
-      LEFT JOIN lms_enrollments e ON e.user_id = ct.lms_user_id AND e.status = 'completed'
+      LEFT JOIN lms_groups g ON g.partner_id = p.id
+      LEFT JOIN lms_group_members gm ON gm.group_id = g.id
+      LEFT JOIN lms_enrollments e ON e.user_id = gm.user_id AND e.status = 'completed'
       LEFT JOIN lms_courses c ON c.id = e.course_id AND c.npcu_value > 0
       GROUP BY p.id
     `);

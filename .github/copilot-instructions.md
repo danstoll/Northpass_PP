@@ -80,13 +80,14 @@ Invoke-WebRequest -Uri "https://ptrlrndb.prod.ntxgallery.com/assets/index-*.js" 
 - ✨ **Welcome Screen**: Professional onboarding when no parameters provided
 - 💾 **MariaDB Integration**: Full partner and contact database with sync capabilities
 - 👤 **Admin Tools Suite**: Comprehensive administration interface with 11+ tools
-- 📥 **Excel Import**: Partner and contact data import from Excel files
+- 📥 **Excel Import**: Partner and contact data import from Excel files (legacy, replaced by Impartner sync)
 - 🔄 **LMS Synchronization**: Automated 2-hour sync with Northpass API
 - 📊 **Database Reports**: Paginated analytics with 1000-record chunks
 - 👥 **User Management**: Find CRM contacts missing from LMS and bulk add
 - 🔗 **Group Matching**: Automatic partner-to-group linking with ptr_ prefix handling
 - 🎯 **Manager Assignment**: Track partner account managers
 - 🔍 **Group Analysis**: Advanced LMS group management and partner matching
+- 🔄 **Impartner CRM Sync**: Automated partner/contact sync from Impartner PRM API (replaces manual Excel import)
 
 ## Technical Architecture
 - **Frontend**: React 18 + Vite with MUI (Material-UI) v5 + Nintex design system
@@ -196,9 +197,9 @@ MUI is split into separate chunks for optimal loading:
 - **Session-based authentication** stored in sessionStorage
 
 ### Admin Pages (6 tools - streamlined January 2025)
-1. **Data Management** (`/admin/data`) - Import partner/contact Excel files to MariaDB
+1. **Data Management** (`/admin/data`) - Browse partner data, data cleaning, LMS matching (Impartner sync moved to Sync Dashboard)
 2. **LMS Sync** (`/admin/sync-dashboard` or `/admin/sync`) - **Unified sync dashboard** with:
-   - **Task Cards**: All 9 sync tasks shown in unified card grid (Users, Groups, Courses, NPCU, Enrollments, LMS Bundle, Group Analysis, Member Sync, Cleanup)
+   - **Task Cards**: All 10 sync tasks shown in unified card grid (Users, Groups, Courses, NPCU, Enrollments, Impartner CRM, LMS Bundle, Group Analysis, Member Sync, Cleanup)
    - **Manual Run**: Each task has a ▶ Run Now button for on-demand execution
    - **Scheduling**: Each task has enable/disable toggle and editable interval
    - **Categories**: Tasks organized by Data Sync, Analysis, Maintenance
@@ -207,7 +208,7 @@ MUI is split into separate chunks for optimal loading:
    - **Partner Analytics**: Overview Dashboard, Partner Leaderboard, Certification Gaps, Partners Without Groups
    - **User Reports**: User Certifications, Contacts Not in LMS, Inactive Users
    - **Course & Activity**: Popular Courses, Recent Activity, Expiring Certifications
-4. **Owner Report** (`/admin/owners`) - Account owner certification tracking
+4. **Owner Report** (`/admin/owners`) - Account owner certification tracking with partner URLs
 5. **User Management** (`/admin/users`) - Comprehensive user and group management with 6 tabs:
    - **Missing CRM Users**: Find CRM contacts not in LMS and add them
    - **Domain Analysis**: Match LMS users to partners by email domain
@@ -215,8 +216,6 @@ MUI is split into separate chunks for optimal loading:
    - **Contact Group Audit**: Audit contacts for proper LMS group memberships (merged from Maintenance)
    - **All Partners Sync**: Ensure partner users are in "All Partners" group (merged from Maintenance)
    - **Orphan Discovery**: Find LMS users who registered directly (bypassing CRM) and link them to partners
-6. **URL Generator** (`/admin`) - Generate partner portal URLs
-7. **Bulk URLs** (`/admin/bulk-urls`) - Batch generate portal URLs
 
 ### Archived Tools (in archive/unused-components/)
 - PartnerImport - Replaced by Data Management
@@ -224,11 +223,12 @@ MUI is split into separate chunks for optimal loading:
 - GroupAnalysis (Live) - Replaced by GroupAnalysisDB
 - DataSync - Replaced by LMS Sync Dashboard (consolidated January 2025)
 - Maintenance - Merged into User Management (January 2025)
+- AdminPanel (URL Generator) - Removed January 2025, URLs now in Owner Report
 
 ### Database Sync Architecture
-**Schema Version**: 8 (January 2025)
+**Schema Version**: 10 (January 2025)
 
-**scheduled_tasks table**: Full task scheduler with 9 task types:
+**scheduled_tasks table**: Full task scheduler with 10 task types:
 - **Data Sync Tasks**:
   - `sync_users` - Sync LMS users (2h interval)
   - `sync_groups` - Sync LMS groups (2h interval)
@@ -236,11 +236,86 @@ MUI is split into separate chunks for optimal loading:
   - `sync_npcu` - Sync NPCU values (6h interval)
   - `sync_enrollments` - Sync user enrollments (4h interval, partner users only)
   - `lms_sync` - LMS Bundle: All syncs combined (legacy composite task)
+  - `impartner_sync` - **NEW**: Sync partners/contacts from Impartner PRM (6h interval)
 - **Analysis Tasks**:
   - `group_analysis` - Find potential users by domain (6h interval)
   - `group_members_sync` - Confirm pending group members (6h interval)
 - **Maintenance Tasks**:
   - `cleanup` - Remove old logs and data (daily)
+
+### Impartner CRM Sync (January 2025)
+**Replaces manual CRM Excel import** with automated API sync from Impartner PRM.
+
+**Service**: `server/db/impartnerSyncService.cjs`
+**Routes**: `server/impartnerRoutes.cjs` (sync endpoints under `/api/impartner/sync/*`)
+
+**API Endpoints:**
+```powershell
+# Preview what would be synced (dry run)
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/impartner/sync/preview" -Method Get
+
+# Get sync status and last sync timestamps
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/impartner/sync/status" -Method Get
+
+# Get current filter configuration
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/impartner/sync/filters" -Method Get
+
+# Sync partners only (incremental by default)
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/impartner/sync/partners" -Method Post
+
+# Sync contacts only (incremental by default)
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/impartner/sync/contacts" -Method Post
+
+# Full sync (partners + contacts)
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/impartner/sync/all" -Method Post
+
+# Force full sync (fetch all records, not just changed)
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/impartner/sync/all?mode=full" -Method Post
+```
+
+**Impartner API Configuration:**
+- **Host**: `https://prod.impartner.live`
+- **Auth**: `Authorization: prm-key <api-key>` + `X-PRM-TenantId: 1`
+- **Objects**: `Account` (partners), `User` (contacts)
+- **Page Size**: 100 records per request
+
+**Filter Configuration (matches CRM export filters):**
+- **Partner Tiers**: Premier, Premier Plus, Certified, Registered, Aggregator (excludes Pending)
+- **Account Status**: Excludes Inactive
+- **Contact Status**: Active only
+- **Account Names**: Excludes names containing "nintex"
+- **Email Domains**: Excludes bill.com, nintex.com, safalo.com, crestan.com
+- **Email Patterns**: Excludes demo, sales, support, accounts, test, renewals, finance, payable
+
+**Field Mapping (Impartner → MariaDB):**
+
+Partners:
+| Impartner Field | MariaDB Field |
+|-----------------|---------------|
+| Name | account_name |
+| Partner_Tier__cf | partner_tier |
+| Account_Owner__cf | account_owner |
+| Account_Owner_Email__cf | owner_email |
+| Partner_Type__cf | partner_type |
+| CrmId | salesforce_id |
+| Website | website |
+| MailingCountry | account_region |
+
+Contacts:
+| Impartner Field | MariaDB Field |
+|-----------------|---------------|
+| Email | email |
+| FirstName | first_name |
+| LastName | last_name |
+| Title | title |
+| Phone | phone |
+| AccountName | partner_id (lookup) |
+
+**Sync Statistics (Full Sync Jan 2025):**
+- Impartner Accounts: 2,141 → 1,421 after filters (720 filtered)
+- Impartner Users: 34,808 → 31,048 after filters (3,760 filtered)
+- Duration: ~26 minutes for full sync
+- LMS links preserved: 2,730 contacts
 
 **Sync Features:**
 - **Task Scheduler** (`server/db/taskScheduler.cjs`): Database-backed with mutex locks, retry logic, execution history

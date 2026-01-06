@@ -1,26 +1,21 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Box, Card, CardContent, Typography, Grid, Table, TableBody, TableCell,
+  Box, Card, CardContent, Typography, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, Paper, Chip, IconButton, Button,
   TextField, Dialog, DialogTitle, DialogContent, DialogActions, Alert,
-  Tabs, Tab, Switch, FormControlLabel, Tooltip, CircularProgress, Divider,
-  InputAdornment, FormControl, InputLabel, Select, MenuItem
+  Tabs, Tab, Switch, FormControlLabel, Tooltip, CircularProgress,
+  InputAdornment, FormControl, InputLabel, Select, MenuItem, Grid
 } from '@mui/material';
 import {
   Person as PersonIcon,
   Email as EmailIcon,
-  Settings as SettingsIcon,
   Send as SendIcon,
   Add as AddIcon,
   Refresh as RefreshIcon,
-  Check as CheckIcon,
-  Close as CloseIcon,
   History as HistoryIcon,
-  Business as BusinessIcon,
-  AccountCircle as AccountIcon,
   Visibility as VisibilityIcon,
   VisibilityOff as VisibilityOffIcon,
-  ArrowBack as ArrowBackIcon
+  Check as CheckIcon
 } from '@mui/icons-material';
 import { PageHeader, PageContent, StatCard, StatsRow, ActionButton, LoadingState } from './ui/NintexUI';
 import './PamManagement.css';
@@ -46,25 +41,22 @@ export default function PamManagement() {
   const [includeInactive, setIncludeInactive] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   
-  // Email settings
-  const [emailSettings, setEmailSettings] = useState({});
+  // Email logs
   const [emailLogs, setEmailLogs] = useState([]);
   
   // Dialogs
-  const [createAccountDialog, setCreateAccountDialog] = useState({ open: false, pam: null });
+  const [createAccountDialog, setCreateAccountDialog] = useState({ open: false, pam: null, mode: 'create' });
   const [pamDetailsDialog, setPamDetailsDialog] = useState({ open: false, pam: null, partners: [] });
-  const [testEmailDialog, setTestEmailDialog] = useState({ open: false });
   
   // Form states
   const [accountForm, setAccountForm] = useState({ email: '', password: '', firstName: '', lastName: '' });
   const [showPassword, setShowPassword] = useState(false);
-  const [testEmail, setTestEmail] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchingUsers, setSearchingUsers] = useState(false);
   
   // Operation states
   const [syncing, setSyncing] = useState(false);
   const [sendingReport, setSendingReport] = useState({});
-  const [savingSettings, setSavingSettings] = useState(false);
-  const [testingEmail, setTestingEmail] = useState(false);
   const [alert, setAlert] = useState({ show: false, message: '', severity: 'success' });
 
   // Fetch PAMs
@@ -83,17 +75,6 @@ export default function PamManagement() {
     }
   }, [includeInactive]);
 
-  // Fetch email settings
-  const fetchEmailSettings = useCallback(async () => {
-    try {
-      const response = await fetch('/api/db/email-settings');
-      const data = await response.json();
-      setEmailSettings(data);
-    } catch (error) {
-      console.error('Error fetching email settings:', error);
-    }
-  }, []);
-
   // Fetch email logs
   const fetchEmailLogs = useCallback(async () => {
     try {
@@ -107,9 +88,8 @@ export default function PamManagement() {
 
   useEffect(() => {
     fetchPams();
-    fetchEmailSettings();
     fetchEmailLogs();
-  }, [fetchPams, fetchEmailSettings, fetchEmailLogs]);
+  }, [fetchPams, fetchEmailLogs]);
 
   const showAlert = (message, severity = 'success') => {
     setAlert({ show: true, message, severity });
@@ -178,7 +158,48 @@ export default function PamManagement() {
       firstName: nameParts[0] || '',
       lastName: nameParts.slice(1).join(' ') || ''
     });
-    setCreateAccountDialog({ open: true, pam });
+    setSearchResults([]);
+    setCreateAccountDialog({ open: true, pam, mode: 'create' });
+  };
+
+  // Search for existing admin users
+  const searchAdminUsers = async (email) => {
+    if (!email || email.length < 3) {
+      setSearchResults([]);
+      return;
+    }
+    try {
+      setSearchingUsers(true);
+      const response = await fetch(`/api/db/admin-users/search?email=${encodeURIComponent(email)}`);
+      const data = await response.json();
+      setSearchResults(data);
+    } catch (error) {
+      console.error('Error searching users:', error);
+    } finally {
+      setSearchingUsers(false);
+    }
+  };
+
+  // Link existing account
+  const linkAccount = async (adminUser) => {
+    try {
+      const { pam } = createAccountDialog;
+      const response = await fetch(`/api/db/pams/${pam.id}/link-account`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: adminUser.email })
+      });
+      const data = await response.json();
+      if (response.ok) {
+        showAlert(`Account linked for ${pam.owner_name}`);
+        setCreateAccountDialog({ open: false, pam: null, mode: 'create' });
+        fetchPams();
+      } else {
+        throw new Error(data.error);
+      }
+    } catch (error) {
+      showAlert(error.message, 'error');
+    }
   };
 
   // Create account
@@ -193,7 +214,7 @@ export default function PamManagement() {
       const data = await response.json();
       if (response.ok) {
         showAlert(`Account created for ${pam.owner_name}`);
-        setCreateAccountDialog({ open: false, pam: null });
+        setCreateAccountDialog({ open: false, pam: null, mode: 'create' });
         fetchPams();
       } else {
         throw new Error(data.error);
@@ -234,51 +255,6 @@ export default function PamManagement() {
     }
   };
 
-  // Save email settings
-  const saveEmailSettings = async () => {
-    try {
-      setSavingSettings(true);
-      const response = await fetch('/api/db/email-settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(emailSettings)
-      });
-      if (response.ok) {
-        showAlert('Email settings saved');
-      } else {
-        throw new Error('Failed to save settings');
-      }
-    } catch (error) {
-      showAlert(error.message, 'error');
-    } finally {
-      setSavingSettings(false);
-    }
-  };
-
-  // Send test email
-  const sendTestEmail = async () => {
-    try {
-      setTestingEmail(true);
-      const response = await fetch('/api/db/email-settings/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ testEmail })
-      });
-      const data = await response.json();
-      if (response.ok) {
-        showAlert('Test email sent successfully');
-        setTestEmailDialog({ open: false });
-        fetchEmailLogs();
-      } else {
-        throw new Error(data.error);
-      }
-    } catch (error) {
-      showAlert(error.message, 'error');
-    } finally {
-      setTestingEmail(false);
-    }
-  };
-
   // Filter PAMs by search term
   const filteredPams = pams.filter(pam =>
     pam.owner_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -293,14 +269,10 @@ export default function PamManagement() {
   return (
     <PageContent>
       <PageHeader
-        icon={PersonIcon}
+        icon="👤"
         title="PAM Management"
         subtitle="Manage Partner Account Managers and email reports"
-        backButton={
-          <IconButton onClick={() => navigateTo('/admin')} sx={{ mr: 1 }}>
-            <ArrowBackIcon />
-          </IconButton>
-        }
+        onBack={() => navigateTo('/admin')}
       />
 
       {alert.show && (
@@ -311,27 +283,27 @@ export default function PamManagement() {
 
       <StatsRow>
         <StatCard
-          title="Total Owners"
+          label="Total Owners"
           value={stats.totalOwners}
-          icon={<BusinessIcon />}
+          icon="🏢"
           variant="primary"
         />
         <StatCard
-          title="Active PAMs"
+          label="Active PAMs"
           value={stats.activePams}
-          icon={<PersonIcon />}
+          icon="👤"
           variant="success"
         />
         <StatCard
-          title="With Accounts"
+          label="With Accounts"
           value={stats.withAccounts}
-          icon={<AccountIcon />}
+          icon="🔑"
           variant="primary"
         />
         <StatCard
-          title="Email Enabled"
+          label="Email Enabled"
           value={stats.emailEnabled}
-          icon={<EmailIcon />}
+          icon="📧"
           variant="success"
         />
       </StatsRow>
@@ -340,7 +312,6 @@ export default function PamManagement() {
         <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
           <Tabs value={tabValue} onChange={(e, v) => setTabValue(v)}>
             <Tab icon={<PersonIcon />} label="Partner Managers" />
-            <Tab icon={<SettingsIcon />} label="Email Settings" />
             <Tab icon={<HistoryIcon />} label="Email History" />
           </Tabs>
         </Box>
@@ -470,7 +441,7 @@ export default function PamManagement() {
                           <IconButton 
                             size="small" 
                             onClick={() => sendReport(pam)}
-                            disabled={!pam.email || !emailSettings.enabled || sendingReport[pam.id]}
+                            disabled={!pam.email || sendingReport[pam.id]}
                           >
                             {sendingReport[pam.id] ? (
                               <CircularProgress size={16} />
@@ -497,110 +468,8 @@ export default function PamManagement() {
           </TableContainer>
         </TabPanel>
 
-        {/* TAB 1: Email Settings */}
+        {/* TAB 1: Email History */}
         <TabPanel value={tabValue} index={1}>
-          <Box sx={{ p: 2, maxWidth: 600 }}>
-            <Typography variant="h6" gutterBottom>SMTP Configuration</Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-              Configure email settings to send reports to Partner Account Managers
-            </Typography>
-
-            <Grid container spacing={2}>
-              <Grid item xs={12}>
-                <FormControlLabel
-                  control={
-                    <Switch
-                      checked={emailSettings.enabled || false}
-                      onChange={(e) => setEmailSettings({ ...emailSettings, enabled: e.target.checked })}
-                    />
-                  }
-                  label="Enable Email Sending"
-                />
-              </Grid>
-              <Grid item xs={12} sm={8}>
-                <TextField
-                  fullWidth
-                  label="SMTP Host"
-                  value={emailSettings.smtp_host || ''}
-                  onChange={(e) => setEmailSettings({ ...emailSettings, smtp_host: e.target.value })}
-                  placeholder="smtp.office365.com"
-                  size="small"
-                />
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <TextField
-                  fullWidth
-                  label="Port"
-                  type="number"
-                  value={emailSettings.smtp_port || 587}
-                  onChange={(e) => setEmailSettings({ ...emailSettings, smtp_port: parseInt(e.target.value) })}
-                  size="small"
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
-                  label="SMTP Username"
-                  value={emailSettings.smtp_user || ''}
-                  onChange={(e) => setEmailSettings({ ...emailSettings, smtp_user: e.target.value })}
-                  size="small"
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
-                  label="SMTP Password"
-                  type="password"
-                  value={emailSettings.smtp_pass || ''}
-                  onChange={(e) => setEmailSettings({ ...emailSettings, smtp_pass: e.target.value })}
-                  size="small"
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
-                  label="From Email"
-                  value={emailSettings.from_email || ''}
-                  onChange={(e) => setEmailSettings({ ...emailSettings, from_email: e.target.value })}
-                  placeholder="noreply@nintex.com"
-                  size="small"
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
-                  label="From Name"
-                  value={emailSettings.from_name || ''}
-                  onChange={(e) => setEmailSettings({ ...emailSettings, from_name: e.target.value })}
-                  placeholder="Nintex Partner Portal"
-                  size="small"
-                />
-              </Grid>
-              <Grid item xs={12}>
-                <Box sx={{ display: 'flex', gap: 2, mt: 2 }}>
-                  <ActionButton
-                    variant="contained"
-                    onClick={saveEmailSettings}
-                    loading={savingSettings}
-                  >
-                    Save Settings
-                  </ActionButton>
-                  <Button
-                    variant="outlined"
-                    startIcon={<SendIcon />}
-                    onClick={() => setTestEmailDialog({ open: true })}
-                    disabled={!emailSettings.smtp_host}
-                  >
-                    Send Test Email
-                  </Button>
-                </Box>
-              </Grid>
-            </Grid>
-          </Box>
-        </TabPanel>
-
-        {/* TAB 2: Email History */}
-        <TabPanel value={tabValue} index={2}>
           <Box sx={{ p: 2 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
               <Typography variant="h6">Recent Emails</Typography>
@@ -665,70 +534,149 @@ export default function PamManagement() {
         </TabPanel>
       </Card>
 
-      {/* Create Account Dialog */}
-      <Dialog open={createAccountDialog.open} onClose={() => setCreateAccountDialog({ open: false, pam: null })}>
-        <DialogTitle>Create Login Account</DialogTitle>
+      {/* Create/Link Account Dialog */}
+      <Dialog open={createAccountDialog.open} onClose={() => setCreateAccountDialog({ open: false, pam: null, mode: 'create' })} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          {createAccountDialog.mode === 'create' ? 'Create Login Account' : 'Link Existing Account'}
+        </DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Create a login account for <strong>{createAccountDialog.pam?.owner_name}</strong>
+            {createAccountDialog.mode === 'create' 
+              ? <>Create a new login account for <strong>{createAccountDialog.pam?.owner_name}</strong></>
+              : <>Link an existing admin account to <strong>{createAccountDialog.pam?.owner_name}</strong></>}
           </Typography>
-          <TextField
-            fullWidth
-            label="Email"
-            type="email"
-            value={accountForm.email}
-            onChange={(e) => setAccountForm({ ...accountForm, email: e.target.value })}
-            margin="normal"
-            required
-          />
-          <TextField
-            fullWidth
-            label="Password"
-            type={showPassword ? 'text' : 'password'}
-            value={accountForm.password}
-            onChange={(e) => setAccountForm({ ...accountForm, password: e.target.value })}
-            margin="normal"
-            required
-            InputProps={{
-              endAdornment: (
-                <InputAdornment position="end">
-                  <IconButton onClick={() => setShowPassword(!showPassword)} edge="end">
-                    {showPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
-                  </IconButton>
-                </InputAdornment>
-              )
-            }}
-          />
-          <Grid container spacing={2}>
-            <Grid item xs={6}>
+          
+          {/* Mode Toggle */}
+          <Box sx={{ mb: 2, display: 'flex', gap: 1 }}>
+            <Button
+              size="small"
+              variant={createAccountDialog.mode === 'create' ? 'contained' : 'outlined'}
+              onClick={() => setCreateAccountDialog(prev => ({ ...prev, mode: 'create' }))}
+            >
+              Create New
+            </Button>
+            <Button
+              size="small"
+              variant={createAccountDialog.mode === 'link' ? 'contained' : 'outlined'}
+              onClick={() => setCreateAccountDialog(prev => ({ ...prev, mode: 'link' }))}
+            >
+              Link Existing
+            </Button>
+          </Box>
+
+          {createAccountDialog.mode === 'create' ? (
+            <>
               <TextField
                 fullWidth
-                label="First Name"
-                value={accountForm.firstName}
-                onChange={(e) => setAccountForm({ ...accountForm, firstName: e.target.value })}
+                label="Email"
+                type="email"
+                value={accountForm.email}
+                onChange={(e) => setAccountForm({ ...accountForm, email: e.target.value })}
                 margin="normal"
+                required
               />
-            </Grid>
-            <Grid item xs={6}>
               <TextField
                 fullWidth
-                label="Last Name"
-                value={accountForm.lastName}
-                onChange={(e) => setAccountForm({ ...accountForm, lastName: e.target.value })}
+                label="Password"
+                type={showPassword ? 'text' : 'password'}
+                value={accountForm.password}
+                onChange={(e) => setAccountForm({ ...accountForm, password: e.target.value })}
                 margin="normal"
+                required
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton onClick={() => setShowPassword(!showPassword)} edge="end">
+                        {showPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                      </IconButton>
+                    </InputAdornment>
+                  )
+                }}
               />
-            </Grid>
-          </Grid>
+              <Grid container spacing={2}>
+                <Grid item xs={6}>
+                  <TextField
+                    fullWidth
+                    label="First Name"
+                    value={accountForm.firstName}
+                    onChange={(e) => setAccountForm({ ...accountForm, firstName: e.target.value })}
+                    margin="normal"
+                  />
+                </Grid>
+                <Grid item xs={6}>
+                  <TextField
+                    fullWidth
+                    label="Last Name"
+                    value={accountForm.lastName}
+                    onChange={(e) => setAccountForm({ ...accountForm, lastName: e.target.value })}
+                    margin="normal"
+                  />
+                </Grid>
+              </Grid>
+            </>
+          ) : (
+            <>
+              <TextField
+                fullWidth
+                label="Search by email"
+                placeholder="Type at least 3 characters..."
+                value={accountForm.email}
+                onChange={(e) => {
+                  setAccountForm({ ...accountForm, email: e.target.value });
+                  searchAdminUsers(e.target.value);
+                }}
+                margin="normal"
+                InputProps={{
+                  endAdornment: searchingUsers && (
+                    <InputAdornment position="end">
+                      <CircularProgress size={20} />
+                    </InputAdornment>
+                  )
+                }}
+              />
+              {searchResults.length > 0 && (
+                <Paper variant="outlined" sx={{ mt: 1, maxHeight: 200, overflow: 'auto' }}>
+                  {searchResults.map((user) => (
+                    <Box
+                      key={user.id}
+                      sx={{
+                        p: 1.5,
+                        cursor: 'pointer',
+                        '&:hover': { bgcolor: 'action.hover' },
+                        borderBottom: '1px solid',
+                        borderColor: 'divider'
+                      }}
+                      onClick={() => linkAccount(user)}
+                    >
+                      <Typography variant="body2" fontWeight="medium">
+                        {user.first_name} {user.last_name}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {user.email} • {user.profile_name}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Paper>
+              )}
+              {accountForm.email.length >= 3 && searchResults.length === 0 && !searchingUsers && (
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  No matching accounts found. Try creating a new account instead.
+                </Typography>
+              )}
+            </>
+          )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setCreateAccountDialog({ open: false, pam: null })}>Cancel</Button>
-          <Button 
-            variant="contained" 
-            onClick={createAccount}
-            disabled={!accountForm.email || !accountForm.password}
-          >
-            Create Account
-          </Button>
+          <Button onClick={() => setCreateAccountDialog({ open: false, pam: null, mode: 'create' })}>Cancel</Button>
+          {createAccountDialog.mode === 'create' && (
+            <Button 
+              variant="contained" 
+              onClick={createAccount}
+              disabled={!accountForm.email || !accountForm.password}
+            >
+              Create Account
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
 
@@ -776,33 +724,6 @@ export default function PamManagement() {
           <Button onClick={() => setPamDetailsDialog({ open: false, pam: null, partners: [] })}>
             Close
           </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Test Email Dialog */}
-      <Dialog open={testEmailDialog.open} onClose={() => setTestEmailDialog({ open: false })}>
-        <DialogTitle>Send Test Email</DialogTitle>
-        <DialogContent>
-          <TextField
-            fullWidth
-            label="Send test email to"
-            type="email"
-            value={testEmail}
-            onChange={(e) => setTestEmail(e.target.value)}
-            margin="normal"
-            placeholder="your-email@example.com"
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setTestEmailDialog({ open: false })}>Cancel</Button>
-          <ActionButton 
-            variant="contained" 
-            onClick={sendTestEmail}
-            loading={testingEmail}
-            disabled={!testEmail}
-          >
-            Send Test
-          </ActionButton>
         </DialogActions>
       </Dialog>
     </PageContent>

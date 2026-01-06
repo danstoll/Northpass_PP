@@ -27,13 +27,12 @@ A comprehensive React-based certification tracking and partner management applic
 ### 🔧 Admin Tools (`/admin`)
 | Tool | Path | Description |
 |------|------|-------------|
+| **Analytics** | `/admin` | Analytics dashboard (default landing) |
 | **Data Management** | `/admin/data` | Import partner/contact Excel files |
 | **LMS Sync Dashboard** | `/admin/sync` | Unified sync control with incremental sync |
 | **Database Reports** | `/admin/dbreports` | 10 on-demand analytics reports |
-| **Owner Report** | `/admin/owners` | Account owner certification tracking |
+| **Owner Report** | `/admin/owners` | Account owner certification tracking with partner URLs |
 | **User Management** | `/admin/users` | 5-tab user/group management interface |
-| **URL Generator** | `/admin` | Generate partner portal URLs |
-| **Bulk URLs** | `/admin/bulk-urls` | Batch generate portal URLs |
 
 ### 💾 Database & Sync
 - **MariaDB Integration**: Full partner, contact, and LMS data storage

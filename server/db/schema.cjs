@@ -6,7 +6,7 @@
 const { query, transaction, getPool } = require('./connection.cjs');
 const crypto = require('crypto');
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 10;
 
 /**
  * Create all database tables
@@ -347,6 +347,25 @@ async function createTables() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
+  // Notification templates (email/slack message content)
+  await query(`
+    CREATE TABLE IF NOT EXISTS notification_templates (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      template_key VARCHAR(50) NOT NULL UNIQUE,
+      template_name VARCHAR(100) NOT NULL,
+      comm_type ENUM('email', 'slack', 'system') NOT NULL,
+      subject VARCHAR(500),
+      content TEXT NOT NULL,
+      description TEXT,
+      variables JSON,
+      is_active BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_key (template_key),
+      INDEX idx_comm_type (comm_type)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
   console.log('✅ All tables created successfully');
 }
 
@@ -680,6 +699,132 @@ async function runMigrations() {
       }
       
       console.log('  ✓ Individual sync tasks created');
+    }
+    
+    // Version 9: Add notification templates table with default templates
+    if (currentVersion < 9) {
+      console.log('📦 Running v9 migration: Add notification templates...');
+      
+      // Create notification_templates table
+      await query(`
+        CREATE TABLE IF NOT EXISTS notification_templates (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          template_key VARCHAR(50) NOT NULL UNIQUE,
+          template_name VARCHAR(100) NOT NULL,
+          comm_type ENUM('email', 'slack', 'system') NOT NULL,
+          subject VARCHAR(500),
+          content TEXT NOT NULL,
+          description TEXT,
+          variables JSON,
+          is_active BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          INDEX idx_key (template_key),
+          INDEX idx_comm_type (comm_type)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      console.log('  ✓ Created notification_templates table');
+      
+      // Insert default templates
+      const defaultTemplates = [
+        {
+          key: 'pam_weekly_report',
+          name: 'PAM Weekly Report',
+          commType: 'email',
+          subject: 'Weekly Partner Report - {{reportDate}}',
+          content: `<div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto;">
+  <div style="background: linear-gradient(135deg, #6B4C9A, #FF6B35); padding: 20px; color: white;">
+    <h1 style="margin: 0;">Weekly Partner Report</h1>
+    <p style="margin: 5px 0 0 0; opacity: 0.9;">{{reportDate}}</p>
+  </div>
+  <div style="padding: 20px;">
+    <p>Hi {{pamFirstName}},</p>
+    <p>Here's your weekly summary of partner activity:</p>
+    {{partnerTable}}
+    {{expiringCertsSection}}
+    <p style="color: #666; font-size: 12px; margin-top: 30px;">
+      This report was generated automatically by the Nintex Partner Portal.
+    </p>
+  </div>
+</div>`,
+          description: 'Weekly email report sent to Partner Account Managers',
+          variables: JSON.stringify(['reportDate', 'pamFirstName', 'partnerTable', 'expiringCertsSection'])
+        },
+        {
+          key: 'sync_error_alert',
+          name: 'Sync Error Alert',
+          commType: 'system',
+          subject: null,
+          content: `🚨 *Sync Task Failed*
+
+*Task:* {{taskName}}
+*Error:* {{errorMessage}}
+*Time:* {{timestamp}}
+*Duration:* {{duration}} seconds
+
+Please check the sync dashboard for details.`,
+          description: 'System alert sent to #partnerteam when a sync task fails',
+          variables: JSON.stringify(['taskName', 'errorMessage', 'timestamp', 'duration'])
+        },
+        {
+          key: 'sync_success_summary',
+          name: 'Daily Sync Summary',
+          commType: 'system',
+          subject: null,
+          content: `✅ *Daily Sync Summary*
+
+{{summaryContent}}
+
+_Generated at {{timestamp}}_`,
+          description: 'Daily summary of sync operations (optional)',
+          variables: JSON.stringify(['summaryContent', 'timestamp'])
+        },
+        {
+          key: 'user_welcome',
+          name: 'User Welcome Message',
+          commType: 'slack',
+          subject: null,
+          content: `👋 *Welcome to the Partner Portal!*
+
+Hi {{userName}}, you've been added to the {{partnerName}} partner group.
+
+Get started by completing your certifications to help your team meet NPCU goals.`,
+          description: 'Slack message sent when a new user is added to a partner group',
+          variables: JSON.stringify(['userName', 'partnerName'])
+        }
+      ];
+      
+      for (const tpl of defaultTemplates) {
+        try {
+          await query(`
+            INSERT INTO notification_templates (template_key, template_name, comm_type, subject, content, description, variables)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE template_name = VALUES(template_name)
+          `, [tpl.key, tpl.name, tpl.commType, tpl.subject, tpl.content, tpl.description, tpl.variables]);
+        } catch (err) {
+          console.log(`  - Template ${tpl.key}: ${err.message}`);
+        }
+      }
+      console.log('  ✓ Added default notification templates');
+    }
+    
+    // Version 10: Add Impartner CRM sync task
+    if (currentVersion < 10) {
+      console.log('📦 Running v10 migration: Add Impartner sync task...');
+      
+      try {
+        await query(`
+          INSERT INTO scheduled_tasks (task_type, task_name, enabled, interval_minutes, config)
+          VALUES ('impartner_sync', 'Impartner CRM Sync', FALSE, 360, '{"mode": "incremental"}')
+          ON DUPLICATE KEY UPDATE 
+            task_name = VALUES(task_name),
+            interval_minutes = VALUES(interval_minutes),
+            config = VALUES(config)
+        `);
+        console.log('  ✓ Added Impartner CRM sync task (6-hour interval, disabled by default)');
+      } catch (err) {
+        console.log(`  - Impartner sync task: ${err.message}`);
+      }
     }
     
     await query('UPDATE schema_info SET version = ? WHERE id = 1', [SCHEMA_VERSION]);

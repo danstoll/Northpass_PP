@@ -3,7 +3,7 @@
 
 const CACHE_PREFIX = 'northpass_cache_';
 // Cache version - increment this when making breaking changes to force cache invalidation
-const CACHE_VERSION = 207; // v111: Added domain blocking and custom domains for Group Analysis
+const CACHE_VERSION = 232; // v221: Changed admin reports to use LMS group as master (not CRM contacts)
 const CACHE_VERSION_KEY = 'northpass_cache_version';
 const DEFAULT_CACHE_DURATION = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
 const MAX_LOCALSTORAGE_ITEM_SIZE = 50 * 1024; // 50KB max per item for localStorage

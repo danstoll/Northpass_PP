@@ -1,10 +1,11 @@
 /**
  * Data Management Page
- * Central hub for importing and managing partner data from Excel
+ * Central hub for managing partner data - cleaning, browsing, and LMS linking
+ * Impartner CRM sync has been moved to the LMS Sync Dashboard
  * Uses MariaDB for persistent storage via server API
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Card,
@@ -19,7 +20,6 @@ import {
   Chip,
 } from '@mui/material';
 import {
-  CloudUpload,
   Storage,
   Sync,
   CleaningServices,
@@ -54,13 +54,6 @@ const DataManagement = () => {
   // Active tab for sections
   const [activeTab, setActiveTab] = useState('overview');
   
-  // Import state
-  const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState(null);
-  const [importProgress, setImportProgress] = useState(null);
-  const [dragActive, setDragActive] = useState(false);
-  const fileInputRef = React.useRef(null);
-  
   // Data cleaning state
   const [cleaningInProgress, setCleaningInProgress] = useState(false);
   const [cleaningResult, setCleaningResult] = useState(null);
@@ -75,7 +68,7 @@ const DataManagement = () => {
   // LMS matching state
   const [matchStats, setMatchStats] = useState(null);
   
-  // Quick sync state
+  // Quick sync state (for LMS sync redirect)
   const [syncing, setSyncing] = useState(false);
   const [syncType, setSyncType] = useState(null);
   const [syncResult, setSyncResult] = useState(null);
@@ -178,173 +171,6 @@ const DataManagement = () => {
         type: 'reset',
         error: err.message
       });
-    }
-  };
-
-  // File handling for drag and drop
-  const handleDrag = useCallback((e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === 'dragenter' || e.type === 'dragover') {
-      setDragActive(true);
-    } else if (e.type === 'dragleave') {
-      setDragActive(false);
-    }
-  }, []);
-
-  const handleDrop = useCallback((e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFile(e.dataTransfer.files[0]);
-    }
-  }, []);
-
-  const handleFileInput = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      handleFile(e.target.files[0]);
-    }
-  };
-
-  const handleFile = async (file) => {
-    if (!file.name.match(/\.(xlsx|xls)$/i)) {
-      alert('Please upload an Excel file (.xlsx or .xls)');
-      return;
-    }
-
-    setImporting(true);
-    setImportResult(null);
-    setImportProgress({ stage: 'reading', message: 'Reading file...', percent: 0 });
-
-    let progressInterval = null;
-    let statusInterval = null;
-
-    try {
-      // Read file as base64
-      setImportProgress({ stage: 'reading', message: 'Reading Excel file...', percent: 2 });
-      const base64 = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target.result.split(',')[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-      
-      setImportProgress({ stage: 'uploading', message: 'Uploading to server...', percent: 5 });
-      
-      // Send to server (returns immediately, runs in background)
-      const response = await fetch(`${API_BASE}/excel`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileData: base64,
-          fileName: file.name,
-          clearExisting: false  // Smart sync - preserve LMS links
-        })
-      });
-
-      const startResult = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(startResult.error || 'Import failed to start');
-      }
-      
-      // Import started - begin polling for progress and status
-      setImportProgress({ stage: 'processing', message: 'Import started...', percent: 10 });
-
-      // Poll progress (detailed progress from importProgress module)
-      progressInterval = setInterval(async () => {
-        try {
-          const res = await fetch(`${API_BASE}/progress`);
-          if (res.ok) {
-            const progress = await res.json();
-            if (progress.active) {
-              setImportProgress(progress);
-            }
-          }
-        } catch (e) {
-          // Ignore polling errors
-        }
-      }, 500);
-
-      // Poll status (overall import completion)
-      await new Promise((resolve, reject) => {
-        statusInterval = setInterval(async () => {
-          try {
-            const res = await fetch(`${API_BASE}/status`);
-            if (res.ok) {
-              const status = await res.json();
-              
-              if (status.status === 'completed') {
-                clearInterval(statusInterval);
-                clearInterval(progressInterval);
-                setImportResult(status.result);
-                setImportProgress(null);
-                resolve();
-              } else if (status.status === 'failed') {
-                clearInterval(statusInterval);
-                clearInterval(progressInterval);
-                setImportResult({ 
-                  success: false, 
-                  error: status.error || status.result?.error || 'Import failed'
-                });
-                setImportProgress(null);
-                resolve();
-              }
-              // If still 'running', continue polling
-            }
-          } catch (e) {
-            // Ignore polling errors
-          }
-        }, 1000);
-        
-        // Timeout after 30 minutes - but check if still running
-        setTimeout(async () => {
-          clearInterval(statusInterval);
-          clearInterval(progressInterval);
-          
-          // Check one more time if import is still running
-          try {
-            const res = await fetch(`${API_BASE}/status`);
-            if (res.ok) {
-              const status = await res.json();
-              if (status.status === 'completed') {
-                setImportResult(status.result);
-                setImportProgress(null);
-                resolve();
-                return;
-              } else if (status.status === 'running') {
-                // Still running - don't show error, show info message
-                setImportResult({ 
-                  success: true, 
-                  message: 'Import is still running in background. Refresh the page in a few minutes to see results.',
-                  stats: { note: 'Import in progress' }
-                });
-                setImportProgress(null);
-                resolve();
-                return;
-              }
-            }
-          } catch (e) {
-            // Ignore
-          }
-          
-          reject(new Error('Import timed out - check server logs'));
-        }, 1800000); // 30 minutes
-      });
-      
-      // Reload data after import
-      await loadData();
-      
-    } catch (err) {
-      console.error('Import error:', err);
-      setImportResult({ success: false, error: err.message });
-      setImportProgress(null);
-    } finally {
-      if (progressInterval) clearInterval(progressInterval);
-      if (statusInterval) clearInterval(statusInterval);
-      setImporting(false);
     }
   };
 
@@ -505,107 +331,33 @@ const DataManagement = () => {
       <PageHeader
         icon={<Storage />}
         title="Partner Data Management"
-        subtitle="Import partner contact data from Excel into MariaDB"
+        subtitle="Browse partner data and manage data cleaning tasks"
       />
 
-      {/* File Upload Area */}
-      <SectionCard title="Import Partner Contacts" icon={<CloudUpload />}>
-        <Box 
-          sx={{
-            border: dragActive ? '2px solid' : '2px dashed',
-            borderColor: dragActive ? 'primary.main' : 'rgba(255,255,255,0.2)',
-            borderRadius: 2,
-            p: 4,
-            textAlign: 'center',
-            cursor: 'pointer',
-            transition: 'all 0.2s',
-            bgcolor: dragActive ? 'rgba(255,107,53,0.1)' : 'transparent',
-            '&:hover': {
-              borderColor: 'rgba(255,255,255,0.4)',
-              bgcolor: 'rgba(255,255,255,0.02)',
-            },
-          }}
-          onDragEnter={handleDrag}
-          onDragLeave={handleDrag}
-          onDragOver={handleDrag}
-          onDrop={handleDrop}
-          onClick={() => !importing && fileInputRef.current?.click()}
-        >
-          {importing ? (
-            <Box sx={{ py: 3, width: '100%', maxWidth: 400, mx: 'auto' }}>
-              <CircularProgress 
-                variant={importProgress?.percent > 0 ? "determinate" : "indeterminate"}
-                value={importProgress?.percent || 0}
-                size={60}
-                thickness={4}
-                sx={{ mb: 2 }}
-              />
-              <Typography variant="h6" sx={{ mb: 1 }}>
-                {importProgress?.percent || 0}%
-              </Typography>
-              <Typography variant="body2" sx={{ opacity: 0.9, mb: 1 }}>
-                {importProgress?.message || 'Processing...'}
-              </Typography>
-              {importProgress?.current > 0 && importProgress?.total > 0 && (
-                <Typography variant="caption" sx={{ opacity: 0.6 }}>
-                  {importProgress.current.toLocaleString()} / {importProgress.total.toLocaleString()} records
-                </Typography>
-              )}
-              <Box sx={{ mt: 2, width: '100%', bgcolor: 'rgba(255,255,255,0.1)', borderRadius: 1, overflow: 'hidden' }}>
-                <Box 
-                  sx={{ 
-                    height: 8, 
-                    bgcolor: 'primary.main', 
-                    width: `${importProgress?.percent || 0}%`,
-                    transition: 'width 0.3s ease'
-                  }} 
-                />
-              </Box>
-            </Box>
-          ) : (
-            <>
-              <CloudUpload sx={{ fontSize: 48, opacity: 0.6, mb: 2 }} />
-              <Typography variant="h6" sx={{ mb: 1 }}>
-                Drag & drop Excel file here
-              </Typography>
-              <Typography variant="body2" sx={{ opacity: 0.7, mb: 2 }}>
-                or click to browse
-              </Typography>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".xlsx,.xls"
-                onChange={handleFileInput}
-                style={{ display: 'none' }}
-              />
-              <ActionButton 
-                variant="outlined"
-                icon={<CloudUpload />}
-                onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
-              >
-                Choose File
-              </ActionButton>
-              <Typography variant="caption" sx={{ display: 'block', opacity: 0.5, mt: 2 }}>
-                Supported: .xlsx, .xls files with partner contact data
-              </Typography>
-            </>
-          )}
+      {/* Impartner Sync Redirect Notice */}
+      <Box sx={{ 
+        p: 3, 
+        mb: 3, 
+        bgcolor: 'rgba(107, 76, 154, 0.1)', 
+        border: '1px solid rgba(107, 76, 154, 0.3)',
+        borderRadius: 2 
+      }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Sync sx={{ fontSize: 32, color: 'var(--nintex-purple)' }} />
+          <Box>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+              Looking for Impartner CRM Sync?
+            </Typography>
+            <Typography variant="body2" sx={{ opacity: 0.8 }}>
+              Impartner sync operations have been moved to the{' '}
+              <a href="/admin/sync" style={{ color: 'var(--nintex-orange)', fontWeight: 600 }}>
+                LMS Sync Dashboard
+              </a>
+              {' '}where all sync tasks are managed in one place.
+            </Typography>
+          </Box>
         </Box>
-
-        {/* Import Result */}
-        {importResult && (
-          <ResultAlert
-            type={importResult.success ? 'success' : 'error'}
-            title={importResult.success ? 'Import Successful!' : 'Import Failed'}
-            message={importResult.success 
-              ? `Partners: ${importResult.stats?.partnersCreated || 0} new, ${importResult.stats?.partnersUpdated || 0} updated${importResult.stats?.partnersRemoved ? `, ${importResult.stats.partnersRemoved} removed` : ''}. Contacts: ${importResult.stats?.contactsCreated || 0} new, ${importResult.stats?.contactsUpdated || 0} updated${importResult.stats?.contactsUnchanged ? `, ${importResult.stats.contactsUnchanged} unchanged` : ''}${importResult.stats?.contactsRemoved ? `, ${importResult.stats.contactsRemoved} removed` : ''}${importResult.stats?.lmsLinksPreserved ? `. ${importResult.stats.lmsLinksPreserved} LMS links preserved.` : ''}`
-              : importResult.error
-            }
-            onClose={() => setImportResult(null)}
-            sx={{ mt: 2 }}
-          />
-        )}
-      </SectionCard>
+      </Box>
 
       {/* Tabs for different sections */}
       {stats?.totalContacts > 0 && (
@@ -1079,9 +831,9 @@ const DataManagement = () => {
       {!loading && (!stats || stats.totalContacts === 0) && (
         <Box sx={{ textAlign: 'center', py: 6 }}>
           <Typography sx={{ fontSize: '3rem', mb: 2 }}>📁</Typography>
-          <Typography variant="h3" sx={{ mb: 1 }}>No Data Imported Yet</Typography>
+          <Typography variant="h3" sx={{ mb: 1 }}>No Data Synced Yet</Typography>
           <Typography variant="body2" sx={{ opacity: 0.7 }}>
-            Upload your partner contact Excel file above to get started.
+            Run an Impartner sync above to pull partners and contacts from CRM.
           </Typography>
         </Box>
       )}
@@ -1095,7 +847,7 @@ const DataManagement = () => {
             gap: 3,
           }}>
             {[
-              { step: 1, title: 'Import Excel Data', desc: 'Upload your partner contact export file.' },
+              { step: 1, title: 'Sync from Impartner', desc: 'Pull partners & contacts from CRM API.' },
               { step: 2, title: 'Auto-Link to LMS', desc: 'Contacts matched to Northpass users.' },
               { step: 3, title: 'Clean & Organize', desc: 'Remove unwanted contacts by filter.' },
               { step: 4, title: 'Use Everywhere', desc: 'Data available in all admin tools.' },

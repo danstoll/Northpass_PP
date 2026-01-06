@@ -475,6 +475,51 @@ async function importContacts(fileBuffer, fileName, options = {}) {
       console.log('⚠️ No partners parsed from file - skipping stale partner removal');
     }
 
+    // Step 5: Sync PAMs from partner data (owner_name + owner_email)
+    progress.updateProgress('pams', 'Syncing Partner Account Managers...', 94);
+    const pamStats = { created: 0, updated: 0 };
+    
+    // Get unique owner combinations from partners
+    const uniqueOwners = await query(`
+      SELECT DISTINCT account_owner, owner_email, account_region 
+      FROM partners 
+      WHERE account_owner IS NOT NULL AND account_owner != ''
+    `);
+    
+    for (const owner of uniqueOwners) {
+      const ownerName = owner.account_owner.trim();
+      const ownerEmail = owner.owner_email || null;
+      const region = owner.account_region || null;
+      
+      try {
+        // Check if PAM already exists
+        const [existing] = await query('SELECT id, email FROM partner_managers WHERE owner_name = ?', [ownerName]);
+        
+        if (existing) {
+          // Update email/region if changed (only if we have new data)
+          if (ownerEmail && ownerEmail !== existing.email) {
+            await query('UPDATE partner_managers SET email = ?, region = COALESCE(?, region) WHERE id = ?', 
+              [ownerEmail, region, existing.id]);
+            pamStats.updated++;
+          }
+        } else {
+          // Create new PAM record
+          await query(
+            `INSERT INTO partner_managers (owner_name, email, region, is_active_pam, email_reports_enabled, report_frequency)
+             VALUES (?, ?, ?, TRUE, TRUE, 'weekly')`,
+            [ownerName, ownerEmail, region]
+          );
+          pamStats.created++;
+        }
+      } catch (err) {
+        console.error(`Error syncing PAM ${ownerName}:`, err.message);
+      }
+    }
+    
+    console.log(`✅ PAMs: ${pamStats.created} created, ${pamStats.updated} updated from ${uniqueOwners.length} unique owners`);
+    stats.pamsCreated = pamStats.created;
+    stats.pamsUpdated = pamStats.updated;
+
     // Log the import
     progress.updateProgress('finalizing', 'Saving import log...', 96);
     await query(

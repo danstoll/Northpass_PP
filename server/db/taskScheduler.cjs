@@ -8,6 +8,7 @@
  * - Automatic retry on failure
  * - Detailed execution history
  * - Missed task detection and catch-up
+ * - System alerts on task failures (via Nintex Workflow Cloud)
  */
 
 const { query } = require('./connection.cjs');
@@ -18,6 +19,9 @@ const IS_PRODUCTION = process.env.NODE_ENV === 'production' || process.env.ENABL
 // In-memory state
 let schedulerInterval = null;
 let runningTasks = new Map(); // task_type -> { startedAt, progress }
+
+// System alerts enabled by default in production
+let systemAlertsEnabled = IS_PRODUCTION;
 
 /**
  * Update task progress (called by task executors)
@@ -212,6 +216,18 @@ async function runTask(task) {
     }
     
     console.error(`❌ Task failed: ${task.task_name} - ${error.message}`);
+    
+    // Send system alert for task failure (if enabled)
+    if (systemAlertsEnabled) {
+      try {
+        const { sendSyncErrorAlert } = require('./notificationService.cjs');
+        await sendSyncErrorAlert(task.task_name, error.message, durationSeconds);
+        console.log(`📤 Sent system alert for failed task: ${task.task_name}`);
+      } catch (alertError) {
+        console.error(`⚠️ Failed to send system alert: ${alertError.message}`);
+      }
+    }
+    
     throw error;
     
   } finally {
@@ -269,6 +285,10 @@ async function executeTask(taskType, config) {
     
     case 'cleanup':
       return await runCleanup(config);
+    
+    // Impartner CRM sync (replaces manual Excel import)
+    case 'impartner_sync':
+      return await runImpartnerSync(config);
     
     default:
       throw new Error(`Unknown task type: ${taskType}`);
@@ -666,6 +686,45 @@ async function runCleanup(config) {
 }
 
 /**
+ * Impartner CRM Sync Task
+ * Syncs partners and contacts from Impartner PRM API to replace manual Excel import
+ */
+async function runImpartnerSync(config) {
+  const impartnerSyncService = require('./impartnerSyncService.cjs');
+  const mode = config.mode || 'incremental';
+  
+  const results = { 
+    recordsProcessed: 0, 
+    partners: null, 
+    contacts: null 
+  };
+  
+  updateTaskProgress('impartner_sync', 'Starting Impartner sync', 0, 100);
+  
+  try {
+    // Step 1: Sync partners
+    updateTaskProgress('impartner_sync', 'Syncing partners from Impartner', 10, 100);
+    results.partners = await impartnerSyncService.syncPartners(mode);
+    
+    // Step 2: Sync contacts
+    updateTaskProgress('impartner_sync', 'Syncing contacts from Impartner', 50, 100);
+    results.contacts = await impartnerSyncService.syncContacts(mode);
+    
+    // Calculate totals
+    results.recordsProcessed = 
+      (results.partners?.processed || 0) + 
+      (results.contacts?.processed || 0);
+    
+    updateTaskProgress('impartner_sync', 'Complete', 100, 100);
+    
+    return results;
+  } catch (err) {
+    results.error = err.message;
+    throw err;
+  }
+}
+
+/**
  * Get all tasks with their status
  */
 async function getAllTasks() {
@@ -796,6 +855,7 @@ function getSchedulerStatus() {
   return {
     running: schedulerInterval !== null || (IS_PRODUCTION && hasEnabledTasks),
     isProduction: IS_PRODUCTION,
+    systemAlertsEnabled: systemAlertsEnabled,
     activeTasks: Array.from(runningTasks.entries()).map(([type, info]) => ({
       type,
       startedAt: info.startedAt,
@@ -804,6 +864,16 @@ function getSchedulerStatus() {
     })),
     checkInterval: CHECK_INTERVAL_MS
   };
+}
+
+/**
+ * Enable or disable system alerts for task failures
+ * @param {boolean} enabled - Whether to enable alerts
+ */
+function setSystemAlertsEnabled(enabled) {
+  systemAlertsEnabled = enabled;
+  console.log(`📢 System alerts ${enabled ? 'enabled' : 'disabled'}`);
+  return systemAlertsEnabled;
 }
 
 module.exports = {
@@ -818,5 +888,6 @@ module.exports = {
   getAnalysisDetails,
   saveManualAnalysis,
   getSchedulerStatus,
+  setSystemAlertsEnabled,
   runGroupAnalysis // Export for manual runs
 };

@@ -2,7 +2,6 @@ import CompanyWidget from './components/CompanyWidget'
 import CustomerDashboard from './components/CustomerDashboard'
 import PartnerDashboardDB from './components/PartnerDashboardDB'
 import AdminHub from './components/AdminHub'
-import AdminPanel from './components/AdminPanel'
 import UserManagement from './components/UserManagement'
 import AccountOwnerReport from './components/AccountOwnerReport'
 import DataManagement from './components/DataManagement'
@@ -174,12 +173,12 @@ function App() {
     );
   }
 
-  // Show admin panel for admin route (default admin page)
+  // Show analytics dashboard for admin route (default admin page)
   if (isAdminRoute) {
     return (
       <div className="app">
-        <AdminHub currentPage="urls">
-          <AdminPanel />
+        <AdminHub currentPage="analytics">
+          <AnalyticsDashboard />
         </AdminHub>
       </div>
     );

@@ -836,6 +836,34 @@ router.get('/contacts/all', async (req, res) => {
   }
 });
 
+// Delete a contact by ID
+router.delete('/contacts/:id', async (req, res) => {
+  try {
+    const contactId = parseInt(req.params.id);
+    if (!contactId) {
+      return res.status(400).json({ error: 'Invalid contact ID' });
+    }
+    
+    // Get contact info before deleting
+    const [contact] = await query('SELECT email, partner_id FROM contacts WHERE id = ?', [contactId]);
+    if (!contact) {
+      return res.status(404).json({ error: 'Contact not found' });
+    }
+    
+    await query('DELETE FROM contacts WHERE id = ?', [contactId]);
+    
+    console.log(`Deleted contact ${contactId} (${contact.email}) from partner ${contact.partner_id}`);
+    res.json({ 
+      success: true, 
+      message: `Deleted contact ${contact.email}`,
+      deletedId: contactId 
+    });
+  } catch (error) {
+    console.error('Error deleting contact:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.post('/partners/import', async (req, res) => {
   try {
     const { partners, contacts, clearExisting } = req.body;
@@ -3014,6 +3042,115 @@ router.get('/maintenance/all-partners-sync-audit', async (req, res) => {
   }
 });
 
+// Add users to "All Partners" group via API AND update local database
+// This ensures the local DB reflects the changes immediately after API calls
+router.post('/maintenance/add-to-all-partners', async (req, res) => {
+  const { userIds, allPartnersGroupId } = req.body;
+  
+  if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+    return res.status(400).json({ error: 'userIds array is required' });
+  }
+  
+  if (!allPartnersGroupId) {
+    return res.status(400).json({ error: 'allPartnersGroupId is required' });
+  }
+  
+  const results = { 
+    apiAdded: 0, 
+    apiFailed: 0, 
+    dbAdded: 0, 
+    dbFailed: 0, 
+    errors: [] 
+  };
+  
+  try {
+    // Process in batches of 10
+    const BATCH_SIZE = 10;
+    
+    for (let i = 0; i < userIds.length; i += BATCH_SIZE) {
+      const batch = userIds.slice(i, i + BATCH_SIZE);
+      
+      try {
+        // Build the data array for JSON:API format
+        const peopleData = batch.map(userId => ({
+          type: 'people',
+          id: String(userId)
+        }));
+        
+        // Make API call to add users to group
+        const apiResponse = await fetch(`https://api.northpass.com/v2/groups/${allPartnersGroupId}/relationships/people`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Api-Key': process.env.NORTHPASS_API_KEY || 'wcU0QRpN9jnPvXEc5KXMiuVWk'
+          },
+          body: JSON.stringify({ data: peopleData })
+        });
+        
+        if (apiResponse.ok) {
+          results.apiAdded += batch.length;
+          
+          // Update local database for each user in this batch
+          for (const userId of batch) {
+            try {
+              await query(
+                `INSERT IGNORE INTO lms_group_members (group_id, user_id, added_at) VALUES (?, ?, NOW())`,
+                [allPartnersGroupId, userId]
+              );
+              results.dbAdded++;
+            } catch (dbErr) {
+              results.dbFailed++;
+              console.error(`DB insert failed for user ${userId}:`, dbErr.message);
+            }
+          }
+        } else {
+          const errorData = await apiResponse.json().catch(() => ({}));
+          results.apiFailed += batch.length;
+          results.errors.push({ 
+            batch: Math.floor(i / BATCH_SIZE), 
+            userIds: batch,
+            status: apiResponse.status,
+            error: errorData.error || errorData.message || `API returned ${apiResponse.status}` 
+          });
+        }
+      } catch (err) {
+        results.apiFailed += batch.length;
+        results.errors.push({ 
+          batch: Math.floor(i / BATCH_SIZE), 
+          error: err.message 
+        });
+      }
+      
+      // Rate limit between batches
+      if (i + BATCH_SIZE < userIds.length) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+    }
+    
+    // Update the group's user count in local DB
+    const [memberCount] = await query(
+      `SELECT COUNT(*) as count FROM lms_group_members WHERE group_id = ?`,
+      [allPartnersGroupId]
+    );
+    await query(
+      `UPDATE lms_groups SET user_count = ? WHERE id = ?`,
+      [memberCount.count, allPartnersGroupId]
+    );
+    
+    console.log(`✅ Add to All Partners: API added ${results.apiAdded}, DB added ${results.dbAdded}, Failed ${results.apiFailed}`);
+    
+    res.json({
+      success: results.apiFailed === 0,
+      results,
+      message: `Added ${results.apiAdded} users via API, ${results.dbAdded} to local DB`
+    });
+    
+  } catch (error) {
+    console.error('Add to All Partners error:', error);
+    res.status(500).json({ error: error.message, results });
+  }
+});
+
 // ============================================
 // Report Endpoints
 // ============================================
@@ -3119,6 +3256,9 @@ router.get('/reports/partner-leaderboard', async (req, res) => {
       return res.json(reportCache['partner-leaderboard'].data);
     }
     const { tier, region, limit = 50 } = req.query;
+    
+    // Simple query using lms_groups.user_count and partner_npcu_cache
+    // LMS group is master for user count
     let sql = `
       SELECT 
         p.id,
@@ -3126,16 +3266,14 @@ router.get('/reports/partner-leaderboard', async (req, res) => {
         p.partner_tier,
         p.account_region,
         p.account_owner,
-        COUNT(DISTINCT ct.id) as total_contacts,
-        COUNT(DISTINCT CASE WHEN ct.lms_user_id IS NOT NULL THEN ct.id END) as contacts_in_lms,
-        COUNT(DISTINCT CASE WHEN e.status = 'completed' THEN e.id END) as total_completions,
-        COUNT(DISTINCT CASE WHEN e.status = 'completed' AND c.is_certification = 1 THEN e.id END) as total_certifications,
-        COALESCE(SUM(CASE WHEN e.status = 'completed' THEN c.npcu_value ELSE 0 END), 0) as total_npcu
+        (SELECT COUNT(*) FROM contacts ct WHERE ct.partner_id = p.id) as total_contacts,
+        COALESCE(g.user_count, 0) as lms_users,
+        COALESCE(nc.total_certifications, 0) as total_certifications,
+        COALESCE(nc.active_npcu, 0) as total_npcu,
+        COALESCE(nc.certified_users, 0) as certified_users
       FROM partners p
-      LEFT JOIN contacts ct ON ct.partner_id = p.id
-      LEFT JOIN lms_users u ON u.id = ct.lms_user_id
-      LEFT JOIN lms_enrollments e ON e.user_id = u.id
-      LEFT JOIN lms_courses c ON c.id = e.course_id
+      LEFT JOIN lms_groups g ON g.partner_id = p.id
+      LEFT JOIN partner_npcu_cache nc ON nc.partner_id = p.id
       WHERE 1=1
     `;
     const params = [];
@@ -3147,10 +3285,10 @@ router.get('/reports/partner-leaderboard', async (req, res) => {
       sql += ' AND p.account_region = ?';
       params.push(region);
     }
-    sql += ' GROUP BY p.id';
     sql += ' ORDER BY total_npcu DESC, total_certifications DESC';
     sql += ' LIMIT ?';
     params.push(parseInt(limit));
+    
     const results = await query(sql, params);
     setCache('partner-leaderboard', results);
     res.json(results);
@@ -3586,6 +3724,9 @@ router.get('/reports/owner-accounts', async (req, res) => {
     if (!owner) {
       return res.status(400).json({ error: 'Owner parameter is required' });
     }
+    
+    // Simple query using lms_groups.user_count and partner_npcu_cache
+    // LMS group is master for user count
     const results = await query(`
       SELECT 
         p.id,
@@ -3593,32 +3734,19 @@ router.get('/reports/owner-accounts', async (req, res) => {
         p.partner_tier,
         p.account_region,
         p.account_owner,
-        COUNT(DISTINCT c.id) as contact_count,
-        COUNT(DISTINCT CASE WHEN c.lms_user_id IS NOT NULL THEN c.id END) as contacts_in_lms,
-        COALESCE(SUM(
-          CASE WHEN e.status = 'completed' 
-               AND co.is_certification = 1 
-               AND (e.expires_at IS NULL OR e.expires_at > NOW())
-          THEN co.npcu_value ELSE 0 END
-        ), 0) as total_npcu,
-        COUNT(DISTINCT 
-          CASE WHEN e.status = 'completed' 
-               AND co.is_certification = 1 
-               AND (e.expires_at IS NULL OR e.expires_at > NOW())
-          THEN e.id END
-        ) as active_certifications,
+        (SELECT COUNT(*) FROM contacts c WHERE c.partner_id = p.id) as contact_count,
+        COALESCE(g.user_count, 0) as lms_users,
+        COALESCE(nc.active_npcu, 0) as total_npcu,
+        COALESCE(nc.total_certifications, 0) as active_certifications,
         g.id as group_id,
         g.name as group_name
       FROM partners p
-      LEFT JOIN contacts c ON c.partner_id = p.id
-      LEFT JOIN lms_users u ON u.id = c.lms_user_id
-      LEFT JOIN lms_enrollments e ON e.user_id = u.id
-      LEFT JOIN lms_courses co ON co.id = e.course_id
       LEFT JOIN lms_groups g ON g.partner_id = p.id
+      LEFT JOIN partner_npcu_cache nc ON nc.partner_id = p.id
       WHERE p.account_owner = ?
-      GROUP BY p.id, g.id, g.name
       ORDER BY p.account_name
     `, [owner]);
+    
     setCache(cacheKey, results);
     res.json(results);
   } catch (error) {
@@ -5566,15 +5694,20 @@ router.get('/users/breakdown', async (req, res) => {
  * Find orphaned partner users - LMS users whose email domain matches a partner
  * but who are NOT yet linked to that partner
  * These are users who registered directly in Northpass bypassing the CRM automation
+ * 
+ * IMPORTANT: Only considers domains that represent a significant portion of a partner's
+ * contacts (default 20%). This prevents one-off domains (like 1 dentsu.com contact among
+ * 22 merkle.com contacts) from causing false matches, while still supporting small partners.
  */
 router.get('/users/orphans', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 500;
     const offset = parseInt(req.query.offset) || 0;
     const includeDismissed = req.query.includeDismissed === 'true';
+    const minDomainPercentage = parseInt(req.query.minDomainPercentage) || 20; // Domain must represent at least X% of partner's contacts
     
-    // Find users whose email domain matches a partner's domain but aren't linked
-    // Uses partner_domains table if available, otherwise extracts from contacts
+    // Find users whose email domain matches a partner's PRIMARY domain but aren't linked
+    // Only considers domains that represent at least minDomainPercentage% of the partner's contacts
     const orphanedUsers = await query(`
       SELECT 
         u.id as user_id,
@@ -5588,20 +5721,41 @@ router.get('/users/orphans', async (req, res) => {
         p.account_name as matched_partner,
         p.partner_tier,
         p.account_region,
-        p.account_owner
+        p.account_owner,
+        partner_domains.domain_count as domain_contact_count,
+        partner_domains.total_contacts as partner_total_contacts,
+        partner_domains.domain_percentage
       FROM lms_users u
       INNER JOIN (
-        -- Get partner domains from contacts table
-        SELECT DISTINCT 
-          c.partner_id,
-          SUBSTRING_INDEX(c.email, '@', -1) as domain
-        FROM contacts c
-        WHERE c.partner_id IS NOT NULL
-        AND c.email LIKE '%@%'
-        AND SUBSTRING_INDEX(c.email, '@', -1) NOT IN (
-          'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 
-          'aol.com', 'icloud.com', 'live.com', 'msn.com', 'me.com'
-        )
+        -- Get partner domains that represent at least X% of the partner's contacts
+        SELECT 
+          domain_counts.partner_id,
+          domain_counts.domain,
+          domain_counts.domain_count,
+          partner_totals.total_contacts,
+          ROUND(100.0 * domain_counts.domain_count / partner_totals.total_contacts, 1) as domain_percentage
+        FROM (
+          SELECT 
+            c.partner_id,
+            SUBSTRING_INDEX(c.email, '@', -1) as domain,
+            COUNT(*) as domain_count
+          FROM contacts c
+          WHERE c.partner_id IS NOT NULL
+          AND c.email LIKE '%@%'
+          AND SUBSTRING_INDEX(c.email, '@', -1) NOT IN (
+            'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 
+            'aol.com', 'icloud.com', 'live.com', 'msn.com', 'me.com',
+            'sharklasers.com', 'guerrillamail.com', 'mailinator.com'
+          )
+          GROUP BY c.partner_id, SUBSTRING_INDEX(c.email, '@', -1)
+        ) domain_counts
+        INNER JOIN (
+          SELECT partner_id, COUNT(*) as total_contacts
+          FROM contacts
+          WHERE partner_id IS NOT NULL AND email LIKE '%@%'
+          GROUP BY partner_id
+        ) partner_totals ON domain_counts.partner_id = partner_totals.partner_id
+        WHERE (100.0 * domain_counts.domain_count / partner_totals.total_contacts) >= ?
       ) partner_domains ON SUBSTRING_INDEX(u.email, '@', -1) = partner_domains.domain
       INNER JOIN partners p ON p.id = partner_domains.partner_id
       WHERE NOT EXISTS (
@@ -5624,23 +5778,38 @@ router.get('/users/orphans', async (req, res) => {
       ` : ''}
       ORDER BY p.account_name, u.created_at_lms DESC
       LIMIT ? OFFSET ?
-    `, [limit, offset]);
+    `, [minDomainPercentage, limit, offset]);
     
-    // Get total count
+    // Get total count (same filtering logic)
     const [countResult] = await query(`
       SELECT COUNT(*) as count
       FROM lms_users u
       INNER JOIN (
-        SELECT DISTINCT 
-          c.partner_id,
-          SUBSTRING_INDEX(c.email, '@', -1) as domain
-        FROM contacts c
-        WHERE c.partner_id IS NOT NULL
-        AND c.email LIKE '%@%'
-        AND SUBSTRING_INDEX(c.email, '@', -1) NOT IN (
-          'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 
-          'aol.com', 'icloud.com', 'live.com', 'msn.com', 'me.com'
-        )
+        SELECT 
+          domain_counts.partner_id,
+          domain_counts.domain
+        FROM (
+          SELECT 
+            c.partner_id,
+            SUBSTRING_INDEX(c.email, '@', -1) as domain,
+            COUNT(*) as domain_count
+          FROM contacts c
+          WHERE c.partner_id IS NOT NULL
+          AND c.email LIKE '%@%'
+          AND SUBSTRING_INDEX(c.email, '@', -1) NOT IN (
+            'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 
+            'aol.com', 'icloud.com', 'live.com', 'msn.com', 'me.com',
+            'sharklasers.com', 'guerrillamail.com', 'mailinator.com'
+          )
+          GROUP BY c.partner_id, SUBSTRING_INDEX(c.email, '@', -1)
+        ) domain_counts
+        INNER JOIN (
+          SELECT partner_id, COUNT(*) as total_contacts
+          FROM contacts
+          WHERE partner_id IS NOT NULL AND email LIKE '%@%'
+          GROUP BY partner_id
+        ) partner_totals ON domain_counts.partner_id = partner_totals.partner_id
+        WHERE (100.0 * domain_counts.domain_count / partner_totals.total_contacts) >= ?
       ) partner_domains ON SUBSTRING_INDEX(u.email, '@', -1) = partner_domains.domain
       INNER JOIN partners p ON p.id = partner_domains.partner_id
       WHERE NOT EXISTS (
@@ -5658,7 +5827,7 @@ router.get('/users/orphans', async (req, res) => {
         WHERE do.user_id = u.id AND do.partner_id = p.id
       )
       ` : ''}
-    `);
+    `, [minDomainPercentage]);
     
     // Group by partner for summary
     const byPartner = {};
@@ -5706,6 +5875,7 @@ router.get('/users/orphans', async (req, res) => {
 router.get('/users/orphans/summary', async (req, res) => {
   try {
     const includeDismissed = req.query.includeDismissed === 'true';
+    const minDomainPercentage = parseInt(req.query.minDomainPercentage) || 20;
     
     const summary = await query(`
       SELECT 
@@ -5717,16 +5887,31 @@ router.get('/users/orphans/summary', async (req, res) => {
         COUNT(DISTINCT u.id) as orphan_count
       FROM lms_users u
       INNER JOIN (
-        SELECT DISTINCT 
-          c.partner_id,
-          SUBSTRING_INDEX(c.email, '@', -1) as domain
-        FROM contacts c
-        WHERE c.partner_id IS NOT NULL
-        AND c.email LIKE '%@%'
-        AND SUBSTRING_INDEX(c.email, '@', -1) NOT IN (
-          'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 
-          'aol.com', 'icloud.com', 'live.com', 'msn.com', 'me.com'
-        )
+        SELECT 
+          domain_counts.partner_id,
+          domain_counts.domain
+        FROM (
+          SELECT 
+            c.partner_id,
+            SUBSTRING_INDEX(c.email, '@', -1) as domain,
+            COUNT(*) as domain_count
+          FROM contacts c
+          WHERE c.partner_id IS NOT NULL
+          AND c.email LIKE '%@%'
+          AND SUBSTRING_INDEX(c.email, '@', -1) NOT IN (
+            'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 
+            'aol.com', 'icloud.com', 'live.com', 'msn.com', 'me.com',
+            'sharklasers.com', 'guerrillamail.com', 'mailinator.com'
+          )
+          GROUP BY c.partner_id, SUBSTRING_INDEX(c.email, '@', -1)
+        ) domain_counts
+        INNER JOIN (
+          SELECT partner_id, COUNT(*) as total_contacts
+          FROM contacts
+          WHERE partner_id IS NOT NULL AND email LIKE '%@%'
+          GROUP BY partner_id
+        ) partner_totals ON domain_counts.partner_id = partner_totals.partner_id
+        WHERE (100.0 * domain_counts.domain_count / partner_totals.total_contacts) >= ?
       ) partner_domains ON SUBSTRING_INDEX(u.email, '@', -1) = partner_domains.domain
       INNER JOIN partners p ON p.id = partner_domains.partner_id
       WHERE NOT EXISTS (
@@ -5746,13 +5931,14 @@ router.get('/users/orphans/summary', async (req, res) => {
       ` : ''}
       GROUP BY p.id, p.account_name, p.partner_tier, p.account_region, p.account_owner
       ORDER BY orphan_count DESC
-    `);
+    `, [minDomainPercentage]);
     
     const totalOrphans = summary.reduce((sum, p) => sum + p.orphan_count, 0);
     
     res.json({
       totalOrphans,
       partnersWithOrphans: summary.length,
+      minDomainPercentage,
       partners: summary
     });
   } catch (error) {
@@ -5768,6 +5954,7 @@ router.get('/users/orphans/partner/:partnerId', async (req, res) => {
   try {
     const { partnerId } = req.params;
     const includeDismissed = req.query.includeDismissed === 'true';
+    const minDomainPercentage = parseInt(req.query.minDomainPercentage) || 20;
     
     // Get partner info
     const [partner] = await query('SELECT * FROM partners WHERE id = ?', [partnerId]);
@@ -5775,7 +5962,14 @@ router.get('/users/orphans/partner/:partnerId', async (req, res) => {
       return res.status(404).json({ error: 'Partner not found' });
     }
     
-    // Get orphaned users for this partner
+    // Get total contacts for this partner (for percentage calculation)
+    const [partnerTotals] = await query(`
+      SELECT COUNT(*) as total_contacts 
+      FROM contacts 
+      WHERE partner_id = ? AND email LIKE '%@%'
+    `, [partnerId]);
+    
+    // Get orphaned users for this partner (only domains representing >= X% of contacts)
     const orphans = await query(`
       SELECT 
         u.id as user_id,
@@ -5786,19 +5980,27 @@ router.get('/users/orphans/partner/:partnerId', async (req, res) => {
         u.created_at_lms,
         u.last_active_at,
         SUBSTRING_INDEX(u.email, '@', -1) as domain,
+        partner_domains.domain_count as domain_contact_count,
+        partner_domains.domain_percentage,
         do.id as dismissed_id,
         do.reason as dismissed_reason,
         do.dismissed_at
       FROM lms_users u
       INNER JOIN (
-        SELECT DISTINCT SUBSTRING_INDEX(c.email, '@', -1) as domain
+        SELECT 
+          SUBSTRING_INDEX(c.email, '@', -1) as domain,
+          COUNT(*) as domain_count,
+          ROUND(100.0 * COUNT(*) / ?, 1) as domain_percentage
         FROM contacts c
         WHERE c.partner_id = ?
         AND c.email LIKE '%@%'
         AND SUBSTRING_INDEX(c.email, '@', -1) NOT IN (
           'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 
-          'aol.com', 'icloud.com', 'live.com', 'msn.com', 'me.com'
+          'aol.com', 'icloud.com', 'live.com', 'msn.com', 'me.com',
+          'sharklasers.com', 'guerrillamail.com', 'mailinator.com'
         )
+        GROUP BY SUBSTRING_INDEX(c.email, '@', -1)
+        HAVING (100.0 * COUNT(*) / ?) >= ?
       ) partner_domains ON SUBSTRING_INDEX(u.email, '@', -1) = partner_domains.domain
       LEFT JOIN dismissed_orphans do ON do.user_id = u.id AND do.partner_id = ?
       WHERE NOT EXISTS (
@@ -5812,7 +6014,7 @@ router.get('/users/orphans/partner/:partnerId', async (req, res) => {
       )
       ${!includeDismissed ? 'AND do.id IS NULL' : ''}
       ORDER BY do.id IS NOT NULL, u.created_at_lms DESC
-    `, [partnerId, partnerId]);
+    `, [partnerTotals.total_contacts, partnerId, partnerTotals.total_contacts, minDomainPercentage, partnerId]);
     
     // Get dismissed count for this partner
     const [dismissedCount] = await query(`
@@ -6067,6 +6269,9 @@ router.put('/pams/:id', async (req, res) => {
     const { id } = req.params;
     const { is_active_pam, email, notes, email_reports_enabled, report_frequency, region } = req.body;
     
+    // Convert undefined to null for MySQL2 compatibility
+    const toNull = (v) => v === undefined ? null : v;
+    
     await query(`
       UPDATE partner_managers SET
         is_active_pam = COALESCE(?, is_active_pam),
@@ -6076,11 +6281,72 @@ router.put('/pams/:id', async (req, res) => {
         report_frequency = COALESCE(?, report_frequency),
         region = COALESCE(?, region)
       WHERE id = ?
-    `, [is_active_pam, email, notes, email_reports_enabled, report_frequency, region, id]);
+    `, [toNull(is_active_pam), toNull(email), toNull(notes), toNull(email_reports_enabled), toNull(report_frequency), toNull(region), id]);
     
     res.json({ success: true, message: 'PAM updated' });
   } catch (error) {
     console.error('Error updating PAM:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Sync PAMs from partner CRM data (owner_name + owner_email)
+ * This populates partner_managers from the partners table
+ */
+router.post('/pams/sync-from-crm', async (req, res) => {
+  try {
+    const stats = { created: 0, updated: 0, skipped: 0 };
+    
+    // Get unique owner combinations from partners
+    const uniqueOwners = await query(`
+      SELECT DISTINCT account_owner, owner_email, account_region 
+      FROM partners 
+      WHERE account_owner IS NOT NULL AND account_owner != ''
+    `);
+    
+    for (const owner of uniqueOwners) {
+      const ownerName = owner.account_owner.trim();
+      const ownerEmail = owner.owner_email || null;
+      const region = owner.account_region || null;
+      
+      try {
+        // Check if PAM already exists
+        const [existing] = await query('SELECT id, email FROM partner_managers WHERE owner_name = ?', [ownerName]);
+        
+        if (existing) {
+          // Update email/region if changed (only if we have new data)
+          if (ownerEmail && ownerEmail !== existing.email) {
+            await query('UPDATE partner_managers SET email = ?, region = COALESCE(?, region) WHERE id = ?', 
+              [ownerEmail, region, existing.id]);
+            stats.updated++;
+          } else {
+            stats.skipped++;
+          }
+        } else {
+          // Create new PAM record
+          await query(
+            `INSERT INTO partner_managers (owner_name, email, region, is_active_pam, email_reports_enabled, report_frequency)
+             VALUES (?, ?, ?, TRUE, TRUE, 'weekly')`,
+            [ownerName, ownerEmail, region]
+          );
+          stats.created++;
+        }
+      } catch (err) {
+        console.error(`Error syncing PAM ${ownerName}:`, err.message);
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Synced PAMs from CRM data`,
+      stats: {
+        ...stats,
+        totalOwners: uniqueOwners.length
+      }
+    });
+  } catch (error) {
+    console.error('Error syncing PAMs from CRM:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -6143,13 +6409,83 @@ router.post('/pams/:id/create-account', async (req, res) => {
 });
 
 /**
- * Sync account owners from partners table
+ * Link existing admin account to a PAM
+ */
+router.post('/pams/:id/link-account', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+    
+    // Get PAM record
+    const [pam] = await query('SELECT * FROM partner_managers WHERE id = ?', [id]);
+    if (!pam) {
+      return res.status(404).json({ error: 'PAM not found' });
+    }
+    
+    // Check if already linked
+    if (pam.admin_user_id) {
+      return res.status(400).json({ error: 'PAM already has a linked account' });
+    }
+    
+    // Find existing admin user by email
+    const [adminUser] = await query('SELECT id, email, first_name, last_name FROM admin_users WHERE email = ?', [email.toLowerCase()]);
+    if (!adminUser) {
+      return res.status(404).json({ error: 'No admin account found with that email' });
+    }
+    
+    // Link to PAM record
+    await query('UPDATE partner_managers SET admin_user_id = ?, email = ? WHERE id = ?', 
+      [adminUser.id, email.toLowerCase(), id]);
+    
+    res.json({
+      success: true,
+      message: `Account linked successfully (${adminUser.first_name} ${adminUser.last_name})`,
+      userId: adminUser.id
+    });
+  } catch (error) {
+    console.error('Error linking PAM account:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Search for existing admin users (for linking)
+ */
+router.get('/admin-users/search', async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email || email.length < 3) {
+      return res.json([]);
+    }
+    
+    const users = await query(`
+      SELECT id, email, first_name, last_name, is_active, 
+             (SELECT name FROM admin_profiles WHERE id = profile_id) as profile_name
+      FROM admin_users 
+      WHERE email LIKE ? AND is_active = TRUE
+      ORDER BY email
+      LIMIT 10
+    `, [`%${email.toLowerCase()}%`]);
+    
+    res.json(users);
+  } catch (error) {
+    console.error('Error searching admin users:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Sync account owners from partners table (includes email from CRM)
  */
 router.post('/pams/sync-owners', async (req, res) => {
   try {
-    // Get all unique account owners from partners
+    // Get all unique account owners from partners (including owner_email from CRM)
     const owners = await query(`
-      SELECT DISTINCT account_owner, account_region
+      SELECT DISTINCT account_owner, owner_email, account_region
       FROM partners
       WHERE account_owner IS NOT NULL AND account_owner != ''
     `);
@@ -6159,28 +6495,130 @@ router.post('/pams/sync-owners', async (req, res) => {
     
     for (const owner of owners) {
       try {
+        const ownerEmail = owner.owner_email || null;
         const result = await query(`
-          INSERT INTO partner_managers (owner_name, region, is_active_pam)
-          VALUES (?, ?, FALSE)
-          ON DUPLICATE KEY UPDATE region = COALESCE(VALUES(region), region)
-        `, [owner.account_owner, owner.account_region]);
+          INSERT INTO partner_managers (owner_name, email, region, is_active_pam, email_reports_enabled, report_frequency)
+          VALUES (?, ?, ?, TRUE, TRUE, 'weekly')
+          ON DUPLICATE KEY UPDATE 
+            email = COALESCE(VALUES(email), email),
+            region = COALESCE(VALUES(region), region)
+        `, [owner.account_owner, ownerEmail, owner.account_region]);
         
         if (result.insertId) added++;
         else if (result.affectedRows > 0) updated++;
       } catch (err) {
         // Skip duplicates
+        console.error(`Error syncing owner ${owner.account_owner}:`, err.message);
       }
     }
     
     res.json({
       success: true,
-      message: `Synced ${owners.length} owners: ${added} added, ${updated} updated`
+      message: `Synced ${owners.length} owners: ${added} added, ${updated} updated (with emails)`
     });
   } catch (error) {
     console.error('Error syncing owners:', error);
     res.status(500).json({ error: error.message });
   }
 });
+
+// ============================================================================
+// Notification Templates API
+// ============================================================================
+
+/**
+ * Get all notification templates
+ */
+router.get('/notification-templates', async (req, res) => {
+  try {
+    const { getTemplates } = require('./db/notificationService.cjs');
+    const templates = await getTemplates();
+    res.json(templates);
+  } catch (error) {
+    console.error('Error getting templates:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get a specific template
+ */
+router.get('/notification-templates/:key', async (req, res) => {
+  try {
+    const { getTemplate } = require('./db/notificationService.cjs');
+    const template = await getTemplate(req.params.key);
+    if (!template) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    res.json(template);
+  } catch (error) {
+    console.error('Error getting template:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Update a template
+ */
+router.put('/notification-templates/:id', async (req, res) => {
+  try {
+    const { updateTemplate } = require('./db/notificationService.cjs');
+    const template = await updateTemplate(parseInt(req.params.id), req.body);
+    res.json(template);
+  } catch (error) {
+    console.error('Error updating template:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Create a new template
+ */
+router.post('/notification-templates', async (req, res) => {
+  try {
+    const { createTemplate } = require('./db/notificationService.cjs');
+    const template = await createTemplate(req.body);
+    res.json(template);
+  } catch (error) {
+    console.error('Error creating template:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Delete a template
+ */
+router.delete('/notification-templates/:id', async (req, res) => {
+  try {
+    const { deleteTemplate } = require('./db/notificationService.cjs');
+    const deleted = await deleteTemplate(parseInt(req.params.id));
+    if (!deleted) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting template:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Preview a rendered template
+ */
+router.post('/notification-templates/:key/preview', async (req, res) => {
+  try {
+    const { renderTemplate } = require('./db/notificationService.cjs');
+    const rendered = await renderTemplate(req.params.key, req.body.variables || {});
+    res.json(rendered);
+  } catch (error) {
+    console.error('Error previewing template:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// Email Settings & Test
+// ============================================================================
 
 /**
  * Get email settings
@@ -6242,67 +6680,43 @@ router.put('/email-settings', async (req, res) => {
 });
 
 /**
- * Test email configuration
+ * Test notification via Nintex Workflow Cloud
+ * Supports both email and slack notification types
  */
 router.post('/email-settings/test', async (req, res) => {
   try {
-    const { testEmail } = req.body;
+    const { testEmail, commType = 'email' } = req.body;
     
-    if (!testEmail) {
+    if (commType === 'email' && !testEmail) {
       return res.status(400).json({ error: 'Test email address required' });
     }
     
-    // Get settings
-    const [settings] = await query('SELECT * FROM email_settings WHERE id = 1');
+    // Use Nintex Workflow Cloud for notifications
+    const { sendTestNotification } = require('./db/notificationService.cjs');
     
-    if (!settings || !settings.smtp_host) {
-      return res.status(400).json({ error: 'Email not configured' });
-    }
-    
-    // Try to send test email
-    const nodemailer = require('nodemailer');
-    
-    const transporter = nodemailer.createTransport({
-      host: settings.smtp_host,
-      port: settings.smtp_port,
-      secure: settings.smtp_port === 465,
-      auth: {
-        user: settings.smtp_user,
-        pass: settings.smtp_pass
-      }
-    });
-    
-    await transporter.sendMail({
-      from: `"${settings.from_name}" <${settings.from_email}>`,
-      to: testEmail,
-      subject: 'Test Email from Nintex Partner Portal',
-      text: 'This is a test email to verify your email configuration is working correctly.',
-      html: `
-        <div style="font-family: Arial, sans-serif; padding: 20px;">
-          <h2 style="color: #6B4C9A;">Nintex Partner Portal</h2>
-          <p>This is a test email to verify your email configuration is working correctly.</p>
-          <p style="color: #666; font-size: 12px;">Sent at: ${new Date().toISOString()}</p>
-        </div>
-      `
-    });
+    const result = await sendTestNotification(commType, testEmail);
     
     // Log success
     await query(`
       INSERT INTO email_log (recipient_email, subject, email_type, status, sent_at)
-      VALUES (?, 'Test Email', 'test', 'sent', NOW())
-    `, [testEmail]);
+      VALUES (?, 'Test Notification', ?, 'sent', NOW())
+    `, [testEmail || 'Slack Channel', commType]);
     
-    res.json({ success: true, message: 'Test email sent successfully' });
+    res.json({ 
+      success: true, 
+      message: `Test ${commType} notification sent successfully`,
+      instanceId: result.instanceId
+    });
   } catch (error) {
-    console.error('Error sending test email:', error);
+    console.error('Error sending test notification:', error);
     
     // Log failure
     await query(`
       INSERT INTO email_log (recipient_email, subject, email_type, status, error_message)
-      VALUES (?, 'Test Email', 'test', 'failed', ?)
-    `, [req.body.testEmail || 'unknown', error.message]);
+      VALUES (?, 'Test Notification', ?, 'failed', ?)
+    `, [req.body.testEmail || 'Slack Channel', req.body.commType || 'email', error.message]);
     
-    res.status(500).json({ error: `Failed to send email: ${error.message}` });
+    res.status(500).json({ error: `Failed to send notification: ${error.message}` });
   }
 });
 
@@ -6327,7 +6741,7 @@ router.get('/email-log', async (req, res) => {
 });
 
 /**
- * Send weekly report to a specific PAM
+ * Send weekly report to a specific PAM via Nintex Workflow Cloud
  */
 router.post('/pams/:id/send-report', async (req, res) => {
   try {
@@ -6339,101 +6753,323 @@ router.post('/pams/:id/send-report', async (req, res) => {
       return res.status(400).json({ error: 'PAM not found or no email configured' });
     }
     
-    // Get their partners
+    // NPCU requirements by tier
+    const tierRequirements = {
+      'Premier': 20,
+      'Select': 10,
+      'Registered': 5,
+      'Certified': 0
+    };
+    
+    // Get their partners with comprehensive stats - LMS Group is the master source
     const partners = await query(`
       SELECT 
         p.*,
-        (SELECT COUNT(*) FROM contacts c WHERE c.partner_id = p.id) as contact_count,
+        (SELECT COUNT(*) FROM contacts c WHERE c.partner_id = p.id) as crm_contacts,
+        COALESCE(g.user_count, 0) as lms_users,
         (SELECT COUNT(DISTINCT e.user_id) 
          FROM lms_enrollments e 
-         JOIN contacts c ON c.lms_user_id = e.user_id 
-         WHERE c.partner_id = p.id AND e.status = 'completed') as certified_users,
-        (SELECT SUM(COALESCE(cp.npcu_value, 0))
+         JOIN lms_group_members gm ON gm.user_id = e.user_id AND gm.group_id = g.id
+         JOIN course_properties cp ON cp.course_id = e.course_id AND cp.npcu_value > 0
+         WHERE e.status = 'completed'
+         AND (e.expires_at IS NULL OR e.expires_at > NOW())) as certified_users,
+        (SELECT COALESCE(SUM(cp.npcu_value), 0)
          FROM lms_enrollments e
-         JOIN contacts c ON c.lms_user_id = e.user_id
+         JOIN lms_group_members gm ON gm.user_id = e.user_id AND gm.group_id = g.id
          JOIN course_properties cp ON cp.course_id = e.course_id
-         WHERE c.partner_id = p.id 
-         AND e.status = 'completed'
+         WHERE e.status = 'completed'
          AND (e.expires_at IS NULL OR e.expires_at > NOW())) as total_npcu
       FROM partners p
+      LEFT JOIN lms_groups g ON g.partner_id = p.id
       WHERE p.account_owner = ?
       ORDER BY p.account_name
     `, [pam.owner_name]);
     
-    // Get email settings
-    const [settings] = await query('SELECT * FROM email_settings WHERE id = 1');
-    if (!settings || !settings.enabled) {
-      return res.status(400).json({ error: 'Email not configured or disabled' });
-    }
+    // Get NEW certifications this week (last 7 days) - from LMS group members
+    const newCertsThisWeek = await query(`
+      SELECT 
+        u.first_name,
+        u.last_name,
+        p.account_name as partner_name,
+        c.name as course_name,
+        cp.npcu_value,
+        e.completed_at
+      FROM lms_enrollments e
+      INNER JOIN lms_users u ON u.id = e.user_id
+      INNER JOIN lms_courses c ON c.id = e.course_id
+      INNER JOIN course_properties cp ON cp.course_id = e.course_id AND cp.npcu_value > 0
+      INNER JOIN lms_groups g ON 1=1
+      INNER JOIN lms_group_members gm ON gm.group_id = g.id AND gm.user_id = u.id
+      INNER JOIN partners p ON p.id = g.partner_id
+      WHERE e.status = 'completed'
+        AND e.completed_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+        AND p.account_owner = ?
+      ORDER BY e.completed_at DESC
+      LIMIT 20
+    `, [pam.owner_name]);
     
-    // Build report
-    const nodemailer = require('nodemailer');
-    const transporter = nodemailer.createTransport({
-      host: settings.smtp_host,
-      port: settings.smtp_port,
-      secure: settings.smtp_port === 465,
-      auth: { user: settings.smtp_user, pass: settings.smtp_pass }
+    // Get expiring certifications for this PAM's partners (next 90 days) - from LMS group members
+    const expiringCerts = await query(`
+      SELECT 
+        u.first_name,
+        u.last_name,
+        u.email,
+        p.account_name as partner_name,
+        c.name as course_name,
+        cp.npcu_value,
+        e.expires_at,
+        DATEDIFF(e.expires_at, NOW()) as days_until_expiry
+      FROM lms_enrollments e
+      INNER JOIN lms_users u ON u.id = e.user_id
+      INNER JOIN lms_courses c ON c.id = e.course_id
+      INNER JOIN course_properties cp ON cp.course_id = e.course_id AND cp.npcu_value > 0
+      INNER JOIN lms_groups g ON 1=1
+      INNER JOIN lms_group_members gm ON gm.group_id = g.id AND gm.user_id = u.id
+      INNER JOIN partners p ON p.id = g.partner_id
+      WHERE e.status = 'completed'
+        AND e.expires_at IS NOT NULL
+        AND e.expires_at > NOW()
+        AND e.expires_at <= DATE_ADD(NOW(), INTERVAL 90 DAY)
+        AND p.account_owner = ?
+      ORDER BY e.expires_at ASC
+      LIMIT 25
+    `, [pam.owner_name]);
+    
+    // Calculate summary stats
+    const totalPartners = partners.length;
+    const totalCrmContacts = partners.reduce((sum, p) => sum + (p.crm_contacts || 0), 0);
+    const totalLmsUsers = partners.reduce((sum, p) => sum + (p.lms_users || 0), 0);
+    const totalCertifiedUsers = partners.reduce((sum, p) => sum + (p.certified_users || 0), 0);
+    const totalNpcu = partners.reduce((sum, p) => sum + (p.total_npcu || 0), 0);
+    
+    // Partners below tier requirements
+    const partnersAtRisk = partners.filter(p => {
+      const required = tierRequirements[p.partner_tier] || 0;
+      return required > 0 && (p.total_npcu || 0) < required;
     });
+    
+    // Partners with no LMS users
+    const partnersNoLms = partners.filter(p => !p.lms_users || p.lms_users === 0);
     
     const reportDate = new Date().toLocaleDateString('en-US', { 
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' 
     });
     
-    // Build HTML report
-    let partnerRows = partners.map(p => `
-      <tr>
-        <td style="padding: 8px; border-bottom: 1px solid #eee;">${p.account_name}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.partner_tier || '-'}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.contact_count || 0}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.certified_users || 0}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.total_npcu || 0}</td>
-      </tr>
-    `).join('');
-    
-    const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto;">
-        <div style="background: linear-gradient(135deg, #6B4C9A, #FF6B35); padding: 20px; color: white;">
-          <h1 style="margin: 0;">Weekly Partner Report</h1>
-          <p style="margin: 5px 0 0 0; opacity: 0.9;">${reportDate}</p>
+    // Build summary cards HTML
+    const summaryCardsHtml = `
+      <div style="display: flex; flex-wrap: wrap; gap: 15px; margin: 20px 0;">
+        <div style="flex: 1; min-width: 140px; background: #e8f5e9; border-radius: 8px; padding: 15px; text-align: center;">
+          <div style="font-size: 28px; font-weight: bold; color: #2e7d32;">${newCertsThisWeek.length}</div>
+          <div style="color: #666; font-size: 12px;">New Certs This Week</div>
         </div>
-        
-        <div style="padding: 20px;">
-          <p>Hi ${pam.owner_name.split(' ')[0]},</p>
-          <p>Here's your weekly summary of partner activity:</p>
-          
-          <h3 style="color: #6B4C9A; border-bottom: 2px solid #6B4C9A; padding-bottom: 5px;">
-            Your Partners (${partners.length})
-          </h3>
-          
-          <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
-            <thead>
-              <tr style="background: #f5f5f5;">
-                <th style="padding: 10px; text-align: left;">Partner</th>
-                <th style="padding: 10px; text-align: center;">Tier</th>
-                <th style="padding: 10px; text-align: center;">Contacts</th>
-                <th style="padding: 10px; text-align: center;">Certified</th>
-                <th style="padding: 10px; text-align: center;">NPCU</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${partnerRows || '<tr><td colspan="5" style="padding: 20px; text-align: center;">No partners assigned</td></tr>'}
-            </tbody>
-          </table>
-          
-          <p style="color: #666; font-size: 12px; margin-top: 30px;">
-            This report was generated automatically by the Nintex Partner Portal.
-            <br>To manage your preferences, contact your administrator.
-          </p>
+        <div style="flex: 1; min-width: 140px; background: ${partnersAtRisk.length > 0 ? '#fff3e0' : '#e8f5e9'}; border-radius: 8px; padding: 15px; text-align: center;">
+          <div style="font-size: 28px; font-weight: bold; color: ${partnersAtRisk.length > 0 ? '#e65100' : '#2e7d32'};">${partnersAtRisk.length}</div>
+          <div style="color: #666; font-size: 12px;">Below Tier Target</div>
+        </div>
+        <div style="flex: 1; min-width: 140px; background: ${expiringCerts.length > 0 ? '#ffebee' : '#e8f5e9'}; border-radius: 8px; padding: 15px; text-align: center;">
+          <div style="font-size: 28px; font-weight: bold; color: ${expiringCerts.length > 0 ? '#c62828' : '#2e7d32'};">${expiringCerts.length}</div>
+          <div style="color: #666; font-size: 12px;">Expiring Soon</div>
+        </div>
+        <div style="flex: 1; min-width: 140px; background: ${partnersNoLms.length > 0 ? '#fff3e0' : '#e8f5e9'}; border-radius: 8px; padding: 15px; text-align: center;">
+          <div style="font-size: 28px; font-weight: bold; color: ${partnersNoLms.length > 0 ? '#e65100' : '#2e7d32'};">${partnersNoLms.length}</div>
+          <div style="color: #666; font-size: 12px;">No LMS Users</div>
         </div>
       </div>
     `;
     
-    await transporter.sendMail({
-      from: `"${settings.from_name}" <${settings.from_email}>`,
-      to: pam.email,
-      subject: `Weekly Partner Report - ${reportDate}`,
-      html
-    });
+    // Build new certifications section
+    let newCertsSection = '';
+    if (newCertsThisWeek.length > 0) {
+      const certRows = newCertsThisWeek.map(cert => `
+        <tr>
+          <td style="padding: 8px; border-bottom: 1px solid #eee;">${cert.first_name} ${cert.last_name}</td>
+          <td style="padding: 8px; border-bottom: 1px solid #eee;">${cert.partner_name}</td>
+          <td style="padding: 8px; border-bottom: 1px solid #eee;">${cert.course_name}</td>
+          <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${cert.npcu_value}</td>
+        </tr>
+      `).join('');
+      
+      newCertsSection = `
+        <h3 style="color: #2e7d32; border-bottom: 2px solid #2e7d32; padding-bottom: 5px; margin-top: 30px;">
+          🎉 New Certifications This Week (${newCertsThisWeek.length})
+        </h3>
+        <table style="width: 100%; border-collapse: collapse; margin: 15px 0;">
+          <thead>
+            <tr style="background: #e8f5e9;">
+              <th style="padding: 10px; text-align: left;">Person</th>
+              <th style="padding: 10px; text-align: left;">Partner</th>
+              <th style="padding: 10px; text-align: left;">Certification</th>
+              <th style="padding: 10px; text-align: center;">NPCU</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${certRows}
+          </tbody>
+        </table>
+      `;
+    }
+    
+    // Build partners at risk section
+    let atRiskSection = '';
+    if (partnersAtRisk.length > 0) {
+      const riskRows = partnersAtRisk.map(p => {
+        const required = tierRequirements[p.partner_tier] || 0;
+        const gap = required - (p.total_npcu || 0);
+        return `
+          <tr>
+            <td style="padding: 8px; border-bottom: 1px solid #eee;">${p.account_name}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.partner_tier}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.total_npcu || 0}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${required}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center; color: #c62828; font-weight: bold;">-${gap}</td>
+          </tr>
+        `;
+      }).join('');
+      
+      atRiskSection = `
+        <h3 style="color: #e65100; border-bottom: 2px solid #e65100; padding-bottom: 5px; margin-top: 30px;">
+          ⚠️ Partners Below Tier Requirements (${partnersAtRisk.length})
+        </h3>
+        <p style="color: #666; font-size: 13px;">These partners need attention to maintain their tier status:</p>
+        <table style="width: 100%; border-collapse: collapse; margin: 15px 0;">
+          <thead>
+            <tr style="background: #fff3e0;">
+              <th style="padding: 10px; text-align: left;">Partner</th>
+              <th style="padding: 10px; text-align: center;">Tier</th>
+              <th style="padding: 10px; text-align: center;">Current NPCU</th>
+              <th style="padding: 10px; text-align: center;">Required</th>
+              <th style="padding: 10px; text-align: center;">Gap</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${riskRows}
+          </tbody>
+        </table>
+      `;
+    }
+    
+    // Build main partner table with enhanced columns
+    let partnerRows = partners.map(p => {
+      const required = tierRequirements[p.partner_tier] || 0;
+      const npcu = p.total_npcu || 0;
+      const npcuColor = required > 0 && npcu < required ? '#c62828' : npcu >= required && required > 0 ? '#2e7d32' : '#333';
+      const npcuDisplay = required > 0 ? `${npcu}/${required}` : `${npcu}`;
+      
+      return `
+        <tr>
+          <td style="padding: 8px; border-bottom: 1px solid #eee;">${p.account_name}</td>
+          <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.partner_tier || '-'}</td>
+          <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.crm_contacts || 0}</td>
+          <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.lms_users || 0}</td>
+          <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.certified_users || 0}</td>
+          <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center; color: ${npcuColor}; font-weight: bold;">${npcuDisplay}</td>
+        </tr>
+      `;
+    }).join('');
+    
+    // Build expiring certifications section
+    let expiringCertsSection = '';
+    if (expiringCerts.length > 0) {
+      const expiringRows = expiringCerts.map(cert => {
+        let urgencyColor = '#2e7d32';
+        let urgencyText = `${cert.days_until_expiry} days`;
+        if (cert.days_until_expiry <= 30) {
+          urgencyColor = '#c62828';
+          urgencyText = `⚠️ ${cert.days_until_expiry} days`;
+        } else if (cert.days_until_expiry <= 60) {
+          urgencyColor = '#e65100';
+        }
+        
+        return `
+          <tr>
+            <td style="padding: 8px; border-bottom: 1px solid #eee;">${cert.first_name} ${cert.last_name}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee;">${cert.partner_name}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee;">${cert.course_name}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${cert.npcu_value}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center; color: ${urgencyColor}; font-weight: bold;">${urgencyText}</td>
+          </tr>
+        `;
+      }).join('');
+      
+      expiringCertsSection = `
+        <h3 style="color: #c62828; border-bottom: 2px solid #c62828; padding-bottom: 5px; margin-top: 30px;">
+          ⏰ Expiring Certifications (${expiringCerts.length})
+        </h3>
+        <p style="color: #666; font-size: 13px;">These certifications will expire within the next 90 days:</p>
+        <table style="width: 100%; border-collapse: collapse; margin: 15px 0;">
+          <thead>
+            <tr style="background: #ffebee;">
+              <th style="padding: 10px; text-align: left;">Person</th>
+              <th style="padding: 10px; text-align: left;">Partner</th>
+              <th style="padding: 10px; text-align: left;">Certification</th>
+              <th style="padding: 10px; text-align: center;">NPCU</th>
+              <th style="padding: 10px; text-align: center;">Expires In</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${expiringRows}
+          </tbody>
+        </table>
+      `;
+    }
+    
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; background: #fff;">
+        <div style="background: linear-gradient(135deg, #6B4C9A, #FF6B35); padding: 25px; color: white;">
+          <h1 style="margin: 0; font-size: 24px;">Weekly Partner Report</h1>
+          <p style="margin: 5px 0 0 0; opacity: 0.9;">${reportDate}</p>
+        </div>
+        
+        <div style="padding: 25px;">
+          <p style="font-size: 15px;">Hi ${pam.owner_name.split(' ')[0]},</p>
+          <p style="color: #666;">Here's your weekly summary of partner activity and actionable insights:</p>
+          
+          ${summaryCardsHtml}
+          
+          ${newCertsSection}
+          
+          ${atRiskSection}
+          
+          <h3 style="color: #6B4C9A; border-bottom: 2px solid #6B4C9A; padding-bottom: 5px; margin-top: 30px;">
+            📊 All Partners (${partners.length})
+          </h3>
+          <p style="color: #666; font-size: 13px;">
+            Total: ${totalCrmContacts} CRM contacts | ${totalLmsUsers} LMS users | ${totalCertifiedUsers} certified | ${totalNpcu} NPCU
+          </p>
+          
+          <table style="width: 100%; border-collapse: collapse; margin: 15px 0;">
+            <thead>
+              <tr style="background: #f5f5f5;">
+                <th style="padding: 10px; text-align: left;">Partner</th>
+                <th style="padding: 10px; text-align: center;">Tier</th>
+                <th style="padding: 10px; text-align: center;">CRM<br>Contacts</th>
+                <th style="padding: 10px; text-align: center;">LMS<br>Users</th>
+                <th style="padding: 10px; text-align: center;">Certified<br>Users</th>
+                <th style="padding: 10px; text-align: center;">NPCU</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${partnerRows || '<tr><td colspan="6" style="padding: 20px; text-align: center; color: #999;">No partners assigned</td></tr>'}
+            </tbody>
+          </table>
+          
+          ${expiringCertsSection}
+          
+          <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin-top: 30px;">
+            <p style="color: #666; font-size: 12px; margin: 0;">
+              This report was generated automatically by the Nintex Partner Portal.
+              <br>To manage your preferences, contact your administrator.
+            </p>
+          </div>
+        </div>
+      </div>
+    `;
+    
+    // Send via Nintex Workflow Cloud
+    const { sendEmail } = require('./db/notificationService.cjs');
+    const subject = `Weekly Partner Report - ${reportDate}`;
+    
+    const result = await sendEmail(pam.email, subject, html);
     
     // Update last sent
     await query('UPDATE partner_managers SET last_report_sent = NOW() WHERE id = ?', [id]);
@@ -6442,11 +7078,30 @@ router.post('/pams/:id/send-report', async (req, res) => {
     await query(`
       INSERT INTO email_log (recipient_email, recipient_name, subject, email_type, status, sent_at)
       VALUES (?, ?, ?, 'weekly_report', 'sent', NOW())
-    `, [pam.email, pam.owner_name, `Weekly Partner Report - ${reportDate}`]);
+    `, [pam.email, pam.owner_name, subject]);
     
-    res.json({ success: true, message: 'Report sent successfully' });
+    res.json({ 
+      success: true, 
+      message: 'Report sent successfully via Nintex Workflow',
+      instanceId: result.instanceId,
+      expiringCertifications: expiringCerts.length
+    });
   } catch (error) {
     console.error('Error sending report:', error);
+    
+    // Log failure
+    try {
+      const [pam] = await query('SELECT * FROM partner_managers WHERE id = ?', [req.params.id]);
+      if (pam) {
+        await query(`
+          INSERT INTO email_log (recipient_email, recipient_name, subject, email_type, status, error_message)
+          VALUES (?, ?, 'Weekly Partner Report', 'weekly_report', 'failed', ?)
+        `, [pam.email, pam.owner_name, error.message]);
+      }
+    } catch (logError) {
+      console.error('Error logging failure:', logError);
+    }
+    
     res.status(500).json({ error: error.message });
   }
 });
