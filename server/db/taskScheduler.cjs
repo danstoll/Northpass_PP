@@ -899,6 +899,20 @@ async function runSyncToImpartner(config) {
       return results;
     }
     
+    // Build LMS user counts map (contacts with lms_user_id IS NOT NULL)
+    const partnerIds = partnersToSync.map(p => p.id).filter(Boolean);
+    const lmsUserCounts = {};
+    if (partnerIds.length > 0) {
+      const placeholders = partnerIds.map(() => '?').join(',');
+      const rows = await query(
+        `SELECT partner_id, COUNT(*) as lms_user_count FROM contacts WHERE partner_id IN (${placeholders}) AND lms_user_id IS NOT NULL GROUP BY partner_id`,
+        partnerIds
+      );
+      for (const r of rows) {
+        lmsUserCounts[r.partner_id] = r.lms_user_count || 0;
+      }
+    }
+
     // Build sync payload
     const syncPayload = partnersToSync.map(p => {
       // Build portal URL (base64 encoded)
@@ -919,7 +933,8 @@ async function runSyncToImpartner(config) {
         Total_NPCU__cf: p.total_npcu || 0,
         LMS_Account_ID__cf: String(p.id),
         LMS_Group_Name__cf: p.lms_group_name || '',
-        LMS_Training_Dashboard__cf: portalUrl
+        LMS_Training_Dashboard__cf: portalUrl,
+        LMS_User_Count: lmsUserCounts[p.id] || 0
       };
     });
     
@@ -977,7 +992,8 @@ async function runSyncToImpartner(config) {
         Total_NPCU__cf: p.Total_NPCU__cf,
         LMS_Account_ID__cf: p.LMS_Account_ID__cf,
         LMS_Group_Name__cf: p.LMS_Group_Name__cf,
-        LMS_Training_Dashboard__cf: p.LMS_Training_Dashboard__cf
+        LMS_Training_Dashboard__cf: p.LMS_Training_Dashboard__cf,
+        LMS_User_Count: p.LMS_User_Count
       }));
     
     const batchSize = 50;
