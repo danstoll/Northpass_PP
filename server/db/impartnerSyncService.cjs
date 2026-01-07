@@ -178,32 +178,63 @@ async function fetchAllRecords(objectType, fields, filter = null, sinceDate = nu
 
 /**
  * Filter accounts based on CRM export rules
+ * Returns { valid: [], filtered: [], filterReasons: {} }
  */
-function filterAccounts(accounts) {
-  return accounts.filter(account => {
+function filterAccounts(accounts, logDetails = false) {
+  const valid = [];
+  const filtered = [];
+  const filterReasons = {
+    noName: 0,
+    inactive: 0,
+    invalidTier: 0,
+    excludedName: 0
+  };
+  
+  for (const account of accounts) {
     // Skip if no name
-    if (!account.name) return false;
+    if (!account.name) {
+      filterReasons.noName++;
+      filtered.push({ account, reason: 'noName' });
+      continue;
+    }
     
     // Filter by account status (exclude Inactive)
     const status = account.account_Status__cf || '';
     if (FILTERS.excludeAccountStatus.some(s => s.toLowerCase() === status.toLowerCase())) {
-      return false;
+      filterReasons.inactive++;
+      filtered.push({ account, reason: 'inactive', status });
+      if (logDetails && filterReasons.inactive <= 5) {
+        console.log(`   ⏭️ Filtered (Inactive): ${account.name}`);
+      }
+      continue;
     }
     
     // Filter by partner tier (only include valid tiers)
     const tier = account.partner_Tier__cf || '';
     if (!FILTERS.validTiers.some(t => t.toLowerCase() === tier.toLowerCase())) {
-      return false;
+      filterReasons.invalidTier++;
+      filtered.push({ account, reason: 'invalidTier', tier });
+      if (logDetails && filterReasons.invalidTier <= 5) {
+        console.log(`   ⏭️ Filtered (Invalid tier '${tier}'): ${account.name}`);
+      }
+      continue;
     }
     
     // Exclude accounts with certain names (case-insensitive contains)
     const nameLower = account.name.toLowerCase();
     if (FILTERS.excludeAccountNames.some(n => nameLower.includes(n.toLowerCase()))) {
-      return false;
+      filterReasons.excludedName++;
+      filtered.push({ account, reason: 'excludedName' });
+      if (logDetails && filterReasons.excludedName <= 5) {
+        console.log(`   ⏭️ Filtered (Excluded name): ${account.name}`);
+      }
+      continue;
     }
     
-    return true;
-  });
+    valid.push(account);
+  }
+  
+  return { valid, filtered, filterReasons };
 }
 
 /**
@@ -256,23 +287,26 @@ async function getLastSyncTime(syncType) {
 }
 
 /**
- * Log sync operation
+ * Log sync operation with full stats
  */
 async function logSync(syncType, status, stats) {
   try {
     await query(
-      `INSERT INTO sync_logs (sync_type, status, records_processed, records_created, records_updated, records_failed, details, completed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ${status === 'completed' ? 'NOW()' : 'NULL'})`,
+      `INSERT INTO sync_logs (sync_type, status, records_processed, records_created, records_updated, records_deleted, records_skipped, records_failed, details, completed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ${status === 'completed' ? 'NOW()' : 'NULL'})`,
       [
         syncType,
         status,
         stats.processed || 0,
         stats.created || 0,
         stats.updated || 0,
+        stats.deleted || 0,
+        stats.skipped || 0,
         stats.failed || 0,
         JSON.stringify(stats)
       ]
     );
+    console.log(`📝 Logged sync: ${syncType} - ${status}`);
   } catch (err) {
     console.error('Error logging sync:', err.message);
   }
@@ -280,15 +314,21 @@ async function logSync(syncType, status, stats) {
 
 /**
  * Sync partner accounts from Impartner
+ * Handles create, update, and soft-delete (marks inactive if removed from Impartner)
  */
 async function syncPartners(mode = 'incremental') {
   const syncType = 'impartner_partners';
-  console.log(`\n🏢 Starting Impartner Partners Sync (${mode} mode)...`);
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`🏢 IMPARTNER PARTNERS SYNC - ${mode.toUpperCase()} MODE`);
+  console.log(`${'='.repeat(60)}`);
+  console.log(`Started at: ${new Date().toISOString()}`);
   
   const stats = {
     processed: 0,
     created: 0,
     updated: 0,
+    deleted: 0,
+    reactivated: 0,
     skipped: 0,
     failed: 0,
     errors: []
@@ -303,6 +343,7 @@ async function syncPartners(mode = 'incremental') {
         console.log(`📅 Incremental sync since: ${sinceDate}`);
       } else {
         console.log(`📅 No previous sync found, running full sync`);
+        mode = 'full'; // Fall back to full sync
       }
     }
     
@@ -316,21 +357,58 @@ async function syncPartners(mode = 'incremental') {
     ].join(',');
     
     const allAccounts = await fetchAllRecords('Account', fields, null, sinceDate);
+    console.log(`📥 Fetched ${allAccounts.length} accounts from Impartner`);
     
-    // Apply filters
-    const accounts = filterAccounts(allAccounts);
-    console.log(`📋 ${accounts.length} accounts after filtering (${allAccounts.length - accounts.length} filtered out)`);
+    // Apply filters with detailed logging
+    const filterResult = filterAccounts(allAccounts, true);
+    const accounts = filterResult.valid;
+    const filteredCount = filterResult.filtered.length;
+    
+    console.log(`\n📋 FILTER RESULTS:`);
+    console.log(`   ✅ Valid accounts: ${accounts.length}`);
+    console.log(`   ❌ Filtered out: ${filteredCount}`);
+    console.log(`      - No name: ${filterResult.filterReasons.noName}`);
+    console.log(`      - Inactive status: ${filterResult.filterReasons.inactive}`);
+    console.log(`      - Invalid tier: ${filterResult.filterReasons.invalidTier}`);
+    console.log(`      - Excluded name: ${filterResult.filterReasons.excludedName}`);
+    
+    // Build set of valid Impartner IDs for deletion detection (full sync only)
+    const validImpartnerIds = new Set();
+    // Also track accounts that were FILTERED (inactive, etc) - they should be soft-deleted too
+    const filteredImpartnerIds = new Set();
+    
+    if (mode === 'full') {
+      accounts.forEach(a => validImpartnerIds.add(a.id));
+      // Track filtered accounts so we can soft-delete them if they exist in our DB
+      filterResult.filtered.forEach(f => {
+        if (f.account?.id) filteredImpartnerIds.add(f.account.id);
+      });
+    }
     
     // Get existing partners for lookup
-    const existingPartners = await query('SELECT id, account_name, salesforce_id FROM partners');
+    const existingPartners = await query('SELECT id, account_name, salesforce_id, impartner_id, is_active FROM partners');
     const partnerByName = new Map();
     const partnerBySfId = new Map();
+    const partnerBySfId15 = new Map(); // For 15-char prefix matching
+    const partnerByImpartnerId = new Map();
+    
     existingPartners.forEach(p => {
       partnerByName.set(p.account_name.toLowerCase(), p);
       if (p.salesforce_id) {
         partnerBySfId.set(p.salesforce_id, p);
+        // Also index by first 15 chars for matching 18-char IDs
+        if (p.salesforce_id.length === 15) {
+          partnerBySfId15.set(p.salesforce_id, p);
+        } else if (p.salesforce_id.length === 18) {
+          partnerBySfId15.set(p.salesforce_id.substring(0, 15), p);
+        }
       }
+      if (p.impartner_id) partnerByImpartnerId.set(p.impartner_id, p);
     });
+    
+    console.log(`💾 Existing partners in DB: ${existingPartners.length}`);
+    console.log(`   - Active: ${existingPartners.filter(p => p.is_active !== 0).length}`);
+    console.log(`   - Inactive: ${existingPartners.filter(p => p.is_active === 0).length}`);
     
     // Process accounts
     for (const account of accounts) {
@@ -339,12 +417,18 @@ async function syncPartners(mode = 'incremental') {
       try {
         const accountName = account.name;
         const salesforceId = account.crmId || null;
+        const impartnerId = account.id;
         const impartnerParentId = account.parentAccountId || null;
         
-        // Look up existing partner by Salesforce ID first, then by name
-        let existing = null;
-        if (salesforceId) {
+        // Look up existing partner by Impartner ID first, then Salesforce ID, then by name
+        let existing = partnerByImpartnerId.get(impartnerId);
+        if (!existing && salesforceId) {
+          // Try exact match first
           existing = partnerBySfId.get(salesforceId);
+          // If no match and ID is 18 chars, try 15-char prefix match
+          if (!existing && salesforceId.length === 18) {
+            existing = partnerBySfId15.get(salesforceId.substring(0, 15));
+          }
         }
         if (!existing) {
           existing = partnerByName.get(accountName.toLowerCase());
@@ -354,60 +438,79 @@ async function syncPartners(mode = 'incremental') {
         const partnerData = {
           account_name: accountName,
           partner_tier: account.partner_Tier__cf || null,
-          account_region: account.mailingCountry || null, // Using country as region
+          account_status: account.account_Status__cf || 'Active',
+          account_region: account.mailingCountry || null,
           account_owner: account.account_Owner__cf || null,
           owner_email: account.account_Owner_Email__cf || null,
           partner_type: account.partner_Type__cf || null,
           salesforce_id: salesforceId,
           website: account.website || null,
+          impartner_id: impartnerId,
           impartner_parent_id: impartnerParentId
         };
         
         if (existing) {
+          // Check if previously deleted/inactive and reactivate
+          const wasInactive = existing.is_active === 0;
+          
           // Update existing partner
           await query(
             `UPDATE partners SET
                partner_tier = ?,
+               account_status = ?,
                account_region = ?,
                account_owner = ?,
                owner_email = ?,
                partner_type = ?,
                salesforce_id = ?,
                website = ?,
+               impartner_id = ?,
                impartner_parent_id = ?,
+               is_active = TRUE,
+               deleted_at = NULL,
                updated_at = NOW()
              WHERE id = ?`,
             [
               partnerData.partner_tier,
+              partnerData.account_status,
               partnerData.account_region,
               partnerData.account_owner,
               partnerData.owner_email,
               partnerData.partner_type,
               partnerData.salesforce_id,
               partnerData.website,
+              partnerData.impartner_id,
               partnerData.impartner_parent_id,
               existing.id
             ]
           );
+          
+          if (wasInactive) {
+            stats.reactivated++;
+            console.log(`   ♻️ Reactivated: ${accountName}`);
+          }
           stats.updated++;
         } else {
           // Insert new partner
           await query(
-            `INSERT INTO partners (account_name, partner_tier, account_region, account_owner, owner_email, partner_type, salesforce_id, website, impartner_parent_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO partners (account_name, partner_tier, account_status, account_region, account_owner, owner_email, partner_type, salesforce_id, website, impartner_id, impartner_parent_id, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)`,
             [
               partnerData.account_name,
               partnerData.partner_tier,
+              partnerData.account_status,
               partnerData.account_region,
               partnerData.account_owner,
               partnerData.owner_email,
               partnerData.partner_type,
               partnerData.salesforce_id,
               partnerData.website,
+              partnerData.impartner_id,
               partnerData.impartner_parent_id
             ]
           );
           stats.created++;
+          console.log(`   ➕ Created: ${accountName}`);
         }
         
         // Progress logging
@@ -417,39 +520,142 @@ async function syncPartners(mode = 'incremental') {
       } catch (err) {
         stats.failed++;
         stats.errors.push({ account: account.name, error: err.message });
-        console.error(`❌ Error processing partner ${account.name}:`, err.message);
+        console.error(`   ❌ Error processing ${account.name}: ${err.message}`);
+      }
+    }
+    
+    // DELETION DETECTION (full sync only)
+    // Mark partners as deleted if they:
+    // 1. Exist in our DB but not in Impartner anymore, OR
+    // 2. Exist in Impartner but were filtered out (inactive, invalid tier, etc)
+    if (mode === 'full' && (validImpartnerIds.size > 0 || filteredImpartnerIds.size > 0)) {
+      console.log(`\n🔍 Processing filtered accounts to link with existing partners...`);
+      
+      // First, process filtered accounts to set impartner_id on matching existing partners
+      // This allows us to detect them for soft-deletion
+      let linkedFiltered = 0;
+      for (const filtered of filterResult.filtered) {
+        const account = filtered.account;
+        if (!account || !account.id) continue;
+        
+        const salesforceId = account.crmId || null;
+        const accountName = account.name || '';
+        
+        // Look up existing partner
+        let existing = partnerByImpartnerId.get(account.id);
+        if (!existing && salesforceId) {
+          existing = partnerBySfId.get(salesforceId);
+          if (!existing && salesforceId.length === 18) {
+            existing = partnerBySfId15.get(salesforceId.substring(0, 15));
+          }
+        }
+        if (!existing && accountName) {
+          existing = partnerByName.get(accountName.toLowerCase());
+        }
+        
+        if (existing && !existing.impartner_id) {
+          // Link this filtered account to the existing partner
+          await query(
+            `UPDATE partners SET impartner_id = ?, salesforce_id = COALESCE(?, salesforce_id) WHERE id = ?`,
+            [account.id, salesforceId, existing.id]
+          );
+          linkedFiltered++;
+          if (linkedFiltered <= 5) {
+            console.log(`   🔗 Linked filtered account: ${accountName} (${filtered.reason})`);
+          }
+        }
+      }
+      if (linkedFiltered > 0) {
+        console.log(`   📊 Linked ${linkedFiltered} filtered accounts to existing partners`);
+      }
+      
+      console.log(`\n🔍 Checking for deleted/inactive partners...`);
+      console.log(`   📊 Valid Impartner IDs: ${validImpartnerIds.size}`);
+      console.log(`   📊 Filtered Impartner IDs: ${filteredImpartnerIds.size}`);
+      
+      // Get all active partners with impartner_id
+      const activePartners = await query(
+        `SELECT id, account_name, impartner_id FROM partners WHERE is_active = TRUE AND impartner_id IS NOT NULL`
+      );
+      console.log(`   📊 Active partners with impartner_id in DB: ${activePartners.length}`);
+      
+      let deletedCount = 0;
+      let inactiveCount = 0;
+      let checkedCount = 0;
+      
+      for (const partner of activePartners) {
+        checkedCount++;
+        // Check if partner is NOT in valid set
+        if (!validImpartnerIds.has(partner.impartner_id)) {
+          // Check WHY - is it filtered or completely gone?
+          const reason = filteredImpartnerIds.has(partner.impartner_id) 
+            ? 'filtered (inactive/invalid tier)' 
+            : 'removed from Impartner';
+          
+          // Soft delete the partner
+          await query(
+            `UPDATE partners SET is_active = FALSE, deleted_at = NOW(), account_status = 'Inactive' WHERE id = ?`,
+            [partner.id]
+          );
+          stats.deleted++;
+          
+          if (filteredImpartnerIds.has(partner.impartner_id)) {
+            inactiveCount++;
+            console.log(`   🚫 Deactivated: ${partner.account_name} (now ${reason})`);
+          } else {
+            deletedCount++;
+            console.log(`   🗑️ Soft-deleted: ${partner.account_name} (${reason})`);
+          }
+        }
+      }
+      
+      if (deletedCount > 0 || inactiveCount > 0) {
+        console.log(`   Summary: ${deletedCount} deleted, ${inactiveCount} deactivated`);
+      } else {
+        console.log(`   ✓ No deletions or deactivations needed`);
       }
     }
     
     // Log sync completion
     await logSync(syncType, 'completed', stats);
     
-    console.log(`\n✅ Partners Sync Complete:`);
-    console.log(`   Processed: ${stats.processed}`);
-    console.log(`   Created: ${stats.created}`);
-    console.log(`   Updated: ${stats.updated}`);
-    console.log(`   Failed: ${stats.failed}`);
+    console.log(`\n${'─'.repeat(60)}`);
+    console.log(`✅ PARTNERS SYNC COMPLETE`);
+    console.log(`   📊 Processed: ${stats.processed}`);
+    console.log(`   ➕ Created: ${stats.created}`);
+    console.log(`   📝 Updated: ${stats.updated}`);
+    console.log(`   ♻️ Reactivated: ${stats.reactivated}`);
+    console.log(`   🗑️ Soft-deleted: ${stats.deleted}`);
+    console.log(`   ❌ Failed: ${stats.failed}`);
+    console.log(`${'='.repeat(60)}\n`);
     
     return stats;
     
   } catch (err) {
     stats.errors.push({ error: err.message });
     await logSync(syncType, 'failed', stats);
+    console.error(`\n❌ PARTNERS SYNC FAILED: ${err.message}`);
     throw err;
   }
 }
 
 /**
  * Sync contacts/users from Impartner
+ * Handles create, update, and soft-delete (marks inactive if removed from Impartner)
  */
 async function syncContacts(mode = 'incremental') {
   const syncType = 'impartner_contacts';
-  console.log(`\n👥 Starting Impartner Contacts Sync (${mode} mode)...`);
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`👥 IMPARTNER CONTACTS SYNC - ${mode.toUpperCase()} MODE`);
+  console.log(`${'='.repeat(60)}`);
+  console.log(`Started at: ${new Date().toISOString()}`);
   
   const stats = {
     processed: 0,
     created: 0,
     updated: 0,
+    deleted: 0,
+    reactivated: 0,
     skipped: 0,
     failed: 0,
     lmsLinksPreserved: 0,
@@ -465,6 +671,7 @@ async function syncContacts(mode = 'incremental') {
         console.log(`📅 Incremental sync since: ${sinceDate}`);
       } else {
         console.log(`📅 No previous sync found, running full sync`);
+        mode = 'full'; // Fall back to full sync
       }
     }
     
@@ -476,25 +683,42 @@ async function syncContacts(mode = 'incremental') {
     ].join(',');
     
     const allUsers = await fetchAllRecords('User', fields, null, sinceDate);
+    console.log(`📥 Fetched ${allUsers.length} users from Impartner`);
     
     // Apply filters
     const users = filterUsers(allUsers);
-    console.log(`📋 ${users.length} contacts after filtering (${allUsers.length - users.length} filtered out)`);
+    const filteredCount = allUsers.length - users.length;
+    console.log(`📋 After filtering: ${users.length} valid, ${filteredCount} filtered out`);
+    
+    // Build set of valid Impartner IDs for deletion detection (full sync only)
+    const validImpartnerIds = new Set();
+    if (mode === 'full') {
+      users.forEach(u => validImpartnerIds.add(u.id));
+    }
     
     // Get existing contacts with LMS links (to preserve them)
-    const existingContacts = await query('SELECT id, email, lms_user_id FROM contacts');
+    const existingContacts = await query('SELECT id, email, lms_user_id, impartner_id, is_active FROM contacts');
     const contactByEmail = new Map();
+    const contactByImpartnerId = new Map();
+    
     existingContacts.forEach(c => {
       contactByEmail.set(c.email.toLowerCase(), c);
+      if (c.impartner_id) contactByImpartnerId.set(c.impartner_id, c);
     });
-    console.log(`🔗 Found ${existingContacts.filter(c => c.lms_user_id).length} existing LMS links to preserve`);
+    
+    const lmsLinkedCount = existingContacts.filter(c => c.lms_user_id).length;
+    console.log(`💾 Existing contacts in DB: ${existingContacts.length}`);
+    console.log(`   - Active: ${existingContacts.filter(c => c.is_active !== 0).length}`);
+    console.log(`   - Inactive: ${existingContacts.filter(c => c.is_active === 0).length}`);
+    console.log(`   - LMS Linked: ${lmsLinkedCount}`);
     
     // Get partners for lookup
-    const partners = await query('SELECT id, account_name FROM partners');
+    const partners = await query('SELECT id, account_name FROM partners WHERE is_active = TRUE');
     const partnerByName = new Map();
     partners.forEach(p => {
       partnerByName.set(p.account_name.toLowerCase(), p.id);
     });
+    console.log(`🏢 Active partners for linking: ${partners.length}`);
     
     // Process users in batches
     const BATCH_SIZE = 100;
@@ -507,7 +731,13 @@ async function syncContacts(mode = 'incremental') {
         
         try {
           const email = user.email.toLowerCase().trim();
-          const existing = contactByEmail.get(email);
+          const impartnerId = user.id;
+          
+          // Look up existing contact by Impartner ID first, then email
+          let existing = contactByImpartnerId.get(impartnerId);
+          if (!existing) {
+            existing = contactByEmail.get(email);
+          }
           
           // Look up partner by account name
           const accountName = user.accountName || '';
@@ -520,7 +750,8 @@ async function syncContacts(mode = 'incremental') {
             first_name: user.firstName || null,
             last_name: user.lastName || null,
             title: user.title || null,
-            phone: user.phone || null
+            phone: user.phone || null,
+            impartner_id: impartnerId
           };
           
           if (existing) {
@@ -528,6 +759,9 @@ async function syncContacts(mode = 'incremental') {
             if (existing.lms_user_id) {
               stats.lmsLinksPreserved++;
             }
+            
+            // Check if previously deleted/inactive and reactivate
+            const wasInactive = existing.is_active === 0;
             
             // Update existing contact
             await query(
@@ -537,6 +771,9 @@ async function syncContacts(mode = 'incremental') {
                  last_name = ?,
                  title = ?,
                  phone = ?,
+                 impartner_id = ?,
+                 is_active = TRUE,
+                 deleted_at = NULL,
                  updated_at = NOW()
                WHERE id = ?`,
               [
@@ -545,22 +782,28 @@ async function syncContacts(mode = 'incremental') {
                 contactData.last_name,
                 contactData.title,
                 contactData.phone,
+                contactData.impartner_id,
                 existing.id
               ]
             );
+            
+            if (wasInactive) {
+              stats.reactivated++;
+            }
             stats.updated++;
           } else {
             // Insert new contact
             await query(
-              `INSERT INTO contacts (partner_id, email, first_name, last_name, title, phone)
-               VALUES (?, ?, ?, ?, ?, ?)`,
+              `INSERT INTO contacts (partner_id, email, first_name, last_name, title, phone, impartner_id, is_active)
+               VALUES (?, ?, ?, ?, ?, ?, ?, TRUE)`,
               [
                 contactData.partner_id,
                 contactData.email,
                 contactData.first_name,
                 contactData.last_name,
                 contactData.title,
-                contactData.phone
+                contactData.phone,
+                contactData.impartner_id
               ]
             );
             stats.created++;
@@ -568,37 +811,76 @@ async function syncContacts(mode = 'incremental') {
         } catch (err) {
           stats.failed++;
           stats.errors.push({ email: user.email, error: err.message });
-          // Don't log every error, just count them
         }
       }
       
       // Progress logging
-      if (stats.processed % 500 === 0) {
-        console.log(`   📊 Processed ${stats.processed}/${users.length} contacts`);
+      if (stats.processed % 500 === 0 || stats.processed === users.length) {
+        console.log(`   📊 Processed ${stats.processed}/${users.length} contacts (${stats.created} new, ${stats.updated} updated)`);
+      }
+    }
+    
+    // DELETION DETECTION (full sync only)
+    // Mark contacts as deleted if they exist in our DB but not in Impartner
+    if (mode === 'full' && validImpartnerIds.size > 0) {
+      console.log(`\n🔍 Checking for deleted contacts...`);
+      
+      // Get all active contacts with impartner_id
+      const activeContacts = await query(
+        `SELECT id, email, impartner_id, lms_user_id FROM contacts WHERE is_active = TRUE AND impartner_id IS NOT NULL`
+      );
+      
+      let deleteCount = 0;
+      for (const contact of activeContacts) {
+        if (!validImpartnerIds.has(contact.impartner_id)) {
+          // Contact no longer in Impartner - soft delete
+          await query(
+            `UPDATE contacts SET is_active = FALSE, deleted_at = NOW() WHERE id = ?`,
+            [contact.id]
+          );
+          stats.deleted++;
+          deleteCount++;
+          
+          // Log if contact had LMS link (important info)
+          if (contact.lms_user_id) {
+            console.log(`   ⚠️ Soft-deleted with LMS link: ${contact.email}`);
+          }
+        }
+      }
+      
+      if (deleteCount > 0) {
+        console.log(`   🗑️ Soft-deleted ${deleteCount} contacts no longer in Impartner`);
+      } else {
+        console.log(`   ✓ No deletions needed`);
       }
     }
     
     // Log sync completion
     await logSync(syncType, 'completed', stats);
     
-    console.log(`\n✅ Contacts Sync Complete:`);
-    console.log(`   Processed: ${stats.processed}`);
-    console.log(`   Created: ${stats.created}`);
-    console.log(`   Updated: ${stats.updated}`);
-    console.log(`   Failed: ${stats.failed}`);
-    console.log(`   LMS Links Preserved: ${stats.lmsLinksPreserved}`);
+    console.log(`\n${'─'.repeat(60)}`);
+    console.log(`✅ CONTACTS SYNC COMPLETE`);
+    console.log(`   📊 Processed: ${stats.processed}`);
+    console.log(`   ➕ Created: ${stats.created}`);
+    console.log(`   📝 Updated: ${stats.updated}`);
+    console.log(`   ♻️ Reactivated: ${stats.reactivated}`);
+    console.log(`   🗑️ Soft-deleted: ${stats.deleted}`);
+    console.log(`   🔗 LMS Links Preserved: ${stats.lmsLinksPreserved}`);
+    console.log(`   ❌ Failed: ${stats.failed}`);
     
-    if (stats.errors.length > 0 && stats.errors.length <= 10) {
-      console.log(`   Errors:`, stats.errors);
-    } else if (stats.errors.length > 10) {
-      console.log(`   First 10 errors:`, stats.errors.slice(0, 10));
+    if (stats.errors.length > 0 && stats.errors.length <= 5) {
+      console.log(`   ⚠️ Errors:`, stats.errors);
+    } else if (stats.errors.length > 5) {
+      console.log(`   ⚠️ First 5 errors:`, stats.errors.slice(0, 5));
     }
+    console.log(`${'='.repeat(60)}\n`);
     
     return stats;
     
   } catch (err) {
     stats.errors.push({ error: err.message });
     await logSync(syncType, 'failed', stats);
+    console.error(`\n❌ CONTACTS SYNC FAILED: ${err.message}`);
     throw err;
   }
 }
@@ -607,16 +889,24 @@ async function syncContacts(mode = 'incremental') {
  * Run full sync (partners then contacts)
  */
 async function syncAll(mode = 'incremental') {
-  console.log(`\n${'='.repeat(60)}`);
-  console.log(`🔄 IMPARTNER FULL SYNC - ${mode.toUpperCase()} MODE`);
-  console.log(`${'='.repeat(60)}`);
-  console.log(`Started at: ${new Date().toISOString()}`);
+  console.log(`\n${'#'.repeat(70)}`);
+  console.log(`#  IMPARTNER FULL SYNC - ${mode.toUpperCase()} MODE`);
+  console.log(`#  Started: ${new Date().toISOString()}`);
+  console.log(`${'#'.repeat(70)}`);
   
   const results = {
     partners: null,
     contacts: null,
     success: false,
-    duration: 0
+    duration: 0,
+    totals: {
+      processed: 0,
+      created: 0,
+      updated: 0,
+      deleted: 0,
+      reactivated: 0,
+      failed: 0
+    }
   };
   
   const startTime = Date.now();
@@ -628,22 +918,45 @@ async function syncAll(mode = 'incremental') {
     // Then sync contacts
     results.contacts = await syncContacts(mode);
     
+    // Calculate totals
+    results.totals.processed = (results.partners?.processed || 0) + (results.contacts?.processed || 0);
+    results.totals.created = (results.partners?.created || 0) + (results.contacts?.created || 0);
+    results.totals.updated = (results.partners?.updated || 0) + (results.contacts?.updated || 0);
+    results.totals.deleted = (results.partners?.deleted || 0) + (results.contacts?.deleted || 0);
+    results.totals.reactivated = (results.partners?.reactivated || 0) + (results.contacts?.reactivated || 0);
+    results.totals.failed = (results.partners?.failed || 0) + (results.contacts?.failed || 0);
+    
     results.success = true;
     results.duration = Date.now() - startTime;
     
-    console.log(`\n${'='.repeat(60)}`);
-    console.log(`✅ IMPARTNER SYNC COMPLETE`);
-    console.log(`   Duration: ${(results.duration / 1000).toFixed(1)}s`);
-    console.log(`   Partners: ${results.partners.created} created, ${results.partners.updated} updated`);
-    console.log(`   Contacts: ${results.contacts.created} created, ${results.contacts.updated} updated`);
-    console.log(`${'='.repeat(60)}\n`);
+    console.log(`\n${'#'.repeat(70)}`);
+    console.log(`#  IMPARTNER SYNC COMPLETE`);
+    console.log(`#  Duration: ${(results.duration / 1000).toFixed(1)} seconds`);
+    console.log(`${'#'.repeat(70)}`);
+    console.log(`\n📊 SUMMARY:`);
+    console.log(`   ┌────────────────┬──────────┬──────────┐`);
+    console.log(`   │                │ Partners │ Contacts │`);
+    console.log(`   ├────────────────┼──────────┼──────────┤`);
+    console.log(`   │ Processed      │ ${String(results.partners?.processed || 0).padStart(8)} │ ${String(results.contacts?.processed || 0).padStart(8)} │`);
+    console.log(`   │ Created        │ ${String(results.partners?.created || 0).padStart(8)} │ ${String(results.contacts?.created || 0).padStart(8)} │`);
+    console.log(`   │ Updated        │ ${String(results.partners?.updated || 0).padStart(8)} │ ${String(results.contacts?.updated || 0).padStart(8)} │`);
+    console.log(`   │ Deleted        │ ${String(results.partners?.deleted || 0).padStart(8)} │ ${String(results.contacts?.deleted || 0).padStart(8)} │`);
+    console.log(`   │ Reactivated    │ ${String(results.partners?.reactivated || 0).padStart(8)} │ ${String(results.contacts?.reactivated || 0).padStart(8)} │`);
+    console.log(`   │ Failed         │ ${String(results.partners?.failed || 0).padStart(8)} │ ${String(results.contacts?.failed || 0).padStart(8)} │`);
+    console.log(`   └────────────────┴──────────┴──────────┘`);
+    console.log(`\n   LMS Links Preserved: ${results.contacts?.lmsLinksPreserved || 0}`);
+    console.log(`${'#'.repeat(70)}\n`);
     
     return results;
     
   } catch (err) {
     results.duration = Date.now() - startTime;
     results.error = err.message;
-    console.error(`\n❌ IMPARTNER SYNC FAILED: ${err.message}`);
+    console.error(`\n${'!'.repeat(70)}`);
+    console.error(`!  IMPARTNER SYNC FAILED`);
+    console.error(`!  Error: ${err.message}`);
+    console.error(`!  Duration: ${(results.duration / 1000).toFixed(1)} seconds`);
+    console.error(`${'!'.repeat(70)}\n`);
     throw err;
   }
 }
@@ -697,7 +1010,7 @@ async function previewSync() {
     // Fetch and filter accounts
     const accountFields = 'Id,Name,Partner_Tier__cf,Account_Status__cf';
     const allAccounts = await fetchAllRecords('Account', accountFields);
-    const filteredAccounts = filterAccounts(allAccounts);
+    const accountFilterResult = filterAccounts(allAccounts, false);
     
     // Fetch and filter users (sample)
     const userFields = 'Id,Email,Contact_Status__cf,AccountName';
@@ -707,13 +1020,18 @@ async function previewSync() {
     // Get current database counts
     const currentPartners = await query('SELECT COUNT(*) as count FROM partners');
     const currentContacts = await query('SELECT COUNT(*) as count FROM contacts');
+    const activePartners = await query('SELECT COUNT(*) as count FROM partners WHERE is_active = TRUE');
+    const inactivePartners = await query('SELECT COUNT(*) as count FROM partners WHERE is_active = FALSE');
     
     const preview = {
       accounts: {
         impartnerTotal: allAccounts.length,
-        afterFilters: filteredAccounts.length,
-        filtered: allAccounts.length - filteredAccounts.length,
-        currentInDb: currentPartners[0]?.count || 0
+        afterFilters: accountFilterResult.valid.length,
+        filtered: accountFilterResult.filtered.length,
+        filterReasons: accountFilterResult.filterReasons,
+        currentInDb: currentPartners[0]?.count || 0,
+        activeInDb: activePartners[0]?.count || 0,
+        inactiveInDb: inactivePartners[0]?.count || 0
       },
       users: {
         impartnerTotal: allUsers.length,
@@ -722,10 +1040,9 @@ async function previewSync() {
         currentInDb: currentContacts[0]?.count || 0
       },
       filters: FILTERS,
-      sampleFilteredAccounts: allAccounts
-        .filter(a => !filterAccounts([a]).length)
-        .slice(0, 5)
-        .map(a => ({ name: a.name, tier: a.partner_Tier__cf, status: a.account_Status__cf })),
+      sampleFilteredAccounts: accountFilterResult.filtered
+        .slice(0, 10)
+        .map(f => ({ name: f.account?.name, tier: f.account?.partner_Tier__cf, status: f.account?.account_Status__cf, reason: f.reason })),
       sampleFilteredUsers: allUsers
         .filter(u => !filterUsers([u]).length)
         .slice(0, 5)
@@ -736,7 +1053,10 @@ async function previewSync() {
     console.log(`   Impartner total: ${preview.accounts.impartnerTotal}`);
     console.log(`   After filters: ${preview.accounts.afterFilters}`);
     console.log(`   Would be filtered out: ${preview.accounts.filtered}`);
-    console.log(`   Current in database: ${preview.accounts.currentInDb}`);
+    console.log(`      - Inactive: ${preview.accounts.filterReasons.inactive}`);
+    console.log(`      - Invalid tier: ${preview.accounts.filterReasons.invalidTier}`);
+    console.log(`      - Excluded name: ${preview.accounts.filterReasons.excludedName}`);
+    console.log(`   Current in database: ${preview.accounts.currentInDb} (${preview.accounts.activeInDb} active, ${preview.accounts.inactiveInDb} inactive)`);
     
     console.log(`\n👥 USERS/CONTACTS:`);
     console.log(`   Impartner total: ${preview.users.impartnerTotal}`);

@@ -6,7 +6,7 @@
 const { query, transaction, getPool } = require('./connection.cjs');
 const crypto = require('crypto');
 
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 15;
 
 /**
  * Create all database tables
@@ -1034,6 +1034,7 @@ Get started by completing your certifications to help your team meet NPCU goals.
         { name: 'cert_count_go_to_market', type: 'INT DEFAULT 0 COMMENT "Count of Go To Market certifications"' },
         { name: 'has_gtm_certification', type: 'BOOLEAN DEFAULT FALSE COMMENT "Partner has at least one GTM certification"' },
         { name: 'cert_counts_updated_at', type: 'TIMESTAMP NULL COMMENT "Last time cert counts were calculated"' },
+        { name: 'total_npcu', type: 'INT DEFAULT 0 COMMENT "Total NPCU credits for the partner"' },
       ];
       
       for (const col of partnerCertColumns) {
@@ -1048,6 +1049,152 @@ Get started by completing your certifications to help your team meet NPCU goals.
       }
       
       console.log('  ✓ Certification categories migration complete');
+    }
+    
+    // Version 13: Add Sync to Impartner scheduled task
+    if (currentVersion < 13) {
+      console.log('📦 Running v13 migration: Add Sync to Impartner task...');
+      
+      try {
+        await query(`
+          INSERT INTO scheduled_tasks (task_type, task_name, enabled, interval_minutes, config)
+          VALUES ('sync_to_impartner', 'Push to Impartner', FALSE, 360, '{"mode": "full"}')
+          ON DUPLICATE KEY UPDATE 
+            task_name = VALUES(task_name),
+            interval_minutes = VALUES(interval_minutes),
+            config = VALUES(config)
+        `);
+        console.log('  ✓ Added Sync to Impartner task (6-hour interval, disabled by default)');
+      } catch (err) {
+        console.log(`  - Sync to Impartner task: ${err.message}`);
+      }
+    }
+    
+    // Version 14: Add deletion tracking for Impartner sync
+    if (currentVersion < 14) {
+      console.log('📦 Running v14 migration: Add deletion tracking...');
+      
+      // Add is_active and deleted_at to partners
+      const partnerDeleteColumns = [
+        { name: 'is_active', def: 'BOOLEAN DEFAULT TRUE' },
+        { name: 'deleted_at', def: 'TIMESTAMP NULL' },
+        { name: 'impartner_id', def: 'INT NULL COMMENT "Impartner Account ID"' }
+      ];
+      
+      for (const col of partnerDeleteColumns) {
+        try {
+          await query(`ALTER TABLE partners ADD COLUMN ${col.name} ${col.def}`);
+          console.log(`  ✓ Added partners.${col.name}`);
+        } catch (err) {
+          if (!err.message.includes('Duplicate column')) {
+            console.log(`  - partners.${col.name}: ${err.message}`);
+          }
+        }
+      }
+      
+      // Add is_active and deleted_at to contacts
+      const contactDeleteColumns = [
+        { name: 'is_active', def: 'BOOLEAN DEFAULT TRUE' },
+        { name: 'deleted_at', def: 'TIMESTAMP NULL' },
+        { name: 'impartner_id', def: 'INT NULL COMMENT "Impartner User ID"' }
+      ];
+      
+      for (const col of contactDeleteColumns) {
+        try {
+          await query(`ALTER TABLE contacts ADD COLUMN ${col.name} ${col.def}`);
+          console.log(`  ✓ Added contacts.${col.name}`);
+        } catch (err) {
+          if (!err.message.includes('Duplicate column')) {
+            console.log(`  - contacts.${col.name}: ${err.message}`);
+          }
+        }
+      }
+      
+      // Add records_deleted to sync_logs
+      try {
+        await query(`ALTER TABLE sync_logs ADD COLUMN records_deleted INT DEFAULT 0 AFTER records_updated`);
+        console.log('  ✓ Added sync_logs.records_deleted');
+      } catch (err) {
+        if (!err.message.includes('Duplicate column')) {
+          console.log(`  - sync_logs.records_deleted: ${err.message}`);
+        }
+      }
+      
+      // Add records_skipped to sync_logs
+      try {
+        await query(`ALTER TABLE sync_logs ADD COLUMN records_skipped INT DEFAULT 0 AFTER records_deleted`);
+        console.log('  ✓ Added sync_logs.records_skipped');
+      } catch (err) {
+        if (!err.message.includes('Duplicate column')) {
+          console.log(`  - sync_logs.records_skipped: ${err.message}`);
+        }
+      }
+      
+      // Add indexes for deletion tracking
+      try {
+        await query('ALTER TABLE partners ADD INDEX idx_is_active (is_active)');
+        console.log('  ✓ Added index partners.idx_is_active');
+      } catch (err) {
+        if (!err.message.includes('Duplicate key')) {
+          console.log(`  - partners.idx_is_active: ${err.message}`);
+        }
+      }
+      
+      try {
+        await query('ALTER TABLE contacts ADD INDEX idx_is_active (is_active)');
+        console.log('  ✓ Added index contacts.idx_is_active');
+      } catch (err) {
+        if (!err.message.includes('Duplicate key')) {
+          console.log(`  - contacts.idx_is_active: ${err.message}`);
+        }
+      }
+      
+      try {
+        await query('ALTER TABLE partners ADD INDEX idx_impartner_id (impartner_id)');
+        console.log('  ✓ Added index partners.idx_impartner_id');
+      } catch (err) {
+        if (!err.message.includes('Duplicate key')) {
+          console.log(`  - partners.idx_impartner_id: ${err.message}`);
+        }
+      }
+      
+      try {
+        await query('ALTER TABLE contacts ADD INDEX idx_impartner_id (impartner_id)');
+        console.log('  ✓ Added index contacts.idx_impartner_id');
+      } catch (err) {
+        if (!err.message.includes('Duplicate key')) {
+          console.log(`  - contacts.idx_impartner_id: ${err.message}`);
+        }
+      }
+      
+      console.log('  ✓ Deletion tracking migration complete');
+    }
+    
+    // Version 15: Add account_status column to track Impartner status
+    if (currentVersion < 15) {
+      console.log('📦 Running v15 migration: Add account_status tracking...');
+      
+      // Add account_status to partners table
+      try {
+        await query(`ALTER TABLE partners ADD COLUMN account_status VARCHAR(50) DEFAULT 'Active' AFTER partner_tier`);
+        console.log('  ✓ Added partners.account_status');
+      } catch (err) {
+        if (!err.message.includes('Duplicate column')) {
+          console.log(`  - partners.account_status: ${err.message}`);
+        }
+      }
+      
+      // Add index for account_status
+      try {
+        await query('ALTER TABLE partners ADD INDEX idx_account_status (account_status)');
+        console.log('  ✓ Added index partners.idx_account_status');
+      } catch (err) {
+        if (!err.message.includes('Duplicate key')) {
+          console.log(`  - partners.idx_account_status: ${err.message}`);
+        }
+      }
+      
+      console.log('  ✓ Account status tracking migration complete');
     }
     
     await query('UPDATE schema_info SET version = ? WHERE id = 1', [SCHEMA_VERSION]);

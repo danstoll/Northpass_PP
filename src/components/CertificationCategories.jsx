@@ -579,11 +579,17 @@ const CertificationCategories = () => {
 
         {/* Summary Cards */}
         {partnerSummary && (
-          <StatsRow columns={5} sx={{ mb: 3 }}>
+          <StatsRow columns={6} sx={{ mb: 3 }}>
             <StatCard
               title="Partners"
               value={partnerSummary.total_partners}
               icon={<BusinessIcon />}
+            />
+            <StatCard
+              title="Total NPCU"
+              value={partnerSummary.total_npcu || 0}
+              icon={<SchoolIcon />}
+              variant="primary"
             />
             <StatCard
               title="With GTM"
@@ -615,6 +621,7 @@ const CertificationCategories = () => {
               <TableRow>
                 <TableCell>Partner</TableCell>
                 <TableCell>Tier</TableCell>
+                <TableCell align="center">NPCU</TableCell>
                 <TableCell align="center">Nintex CE</TableCell>
                 <TableCell align="center">K2</TableCell>
                 <TableCell align="center">Salesforce</TableCell>
@@ -628,6 +635,13 @@ const CertificationCategories = () => {
                   <TableCell>{partner.account_name}</TableCell>
                   <TableCell>
                     <Chip label={partner.partner_tier} size="small" />
+                  </TableCell>
+                  <TableCell align="center">
+                    <Chip 
+                      label={partner.total_npcu || 0} 
+                      size="small"
+                      color={partner.total_npcu >= 20 ? 'success' : partner.total_npcu >= 10 ? 'primary' : 'default'}
+                    />
                   </TableCell>
                   <TableCell align="center">
                     <Chip 

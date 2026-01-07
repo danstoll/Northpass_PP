@@ -312,10 +312,17 @@ Contacts:
 | AccountName | partner_id (lookup) |
 
 **Sync Statistics (Full Sync Jan 2025):**
-- Impartner Accounts: 2,141 → 1,421 after filters (720 filtered)
+- Impartner Accounts: 2,137 → 1,421 after filters (716 filtered)
 - Impartner Users: 34,808 → 31,048 after filters (3,760 filtered)
 - Duration: ~26 minutes for full sync
 - LMS links preserved: 2,730 contacts
+
+**Soft-Delete Detection (January 2025):**
+- Partners/contacts have `impartner_id` column to track their Impartner ID
+- Full sync detects partners in DB whose Impartner account was deleted or filtered (inactive/invalid tier)
+- Soft-delete: Sets `is_active = FALSE`, `deleted_at = NOW()`, `account_status = 'Inactive'`
+- Salesforce ID matching: Handles both 15-char and 18-char SF IDs (prefix matching)
+- Filtered accounts are linked to existing partners before deletion detection
 
 **Sync Features:**
 - **Task Scheduler** (`server/db/taskScheduler.cjs`): Database-backed with mutex locks, retry logic, execution history

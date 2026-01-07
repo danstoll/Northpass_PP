@@ -34,6 +34,7 @@ const TASK_METADATA = {
   sync_enrollments: { icon: '📊', name: 'Enrollments', category: 'sync', description: 'User completions & progress', apiEndpoint: '/api/db/sync/enrollments' },
   lms_sync: { icon: '📦', name: 'LMS Bundle', category: 'sync', description: 'All syncs combined (Users, Groups, Courses, NPCU, Enrollments)', apiEndpoint: null },
   impartner_sync: { icon: '🔄', name: 'Impartner CRM', category: 'sync', description: 'Sync partners & contacts from Impartner PRM', apiEndpoint: '/api/impartner/sync/all' },
+  sync_to_impartner: { icon: '📤', name: 'Push to Impartner', category: 'sync', description: 'Push cert counts, NPCU & training URLs to Impartner', apiEndpoint: '/api/db/certifications/sync-to-impartner' },
   group_analysis: { icon: '🔍', name: 'Group Analysis', category: 'analysis', description: 'Find potential users by domain', apiEndpoint: null },
   group_members_sync: { icon: '👥', name: 'Member Sync', category: 'analysis', description: 'Confirm pending group members', apiEndpoint: null },
   cleanup: { icon: '🧹', name: 'Cleanup', category: 'maintenance', description: 'Remove old logs and data', apiEndpoint: null }

@@ -290,6 +290,10 @@ async function executeTask(taskType, config) {
     case 'impartner_sync':
       return await runImpartnerSync(config);
     
+    // Sync LMS data TO Impartner (certification counts, NPCU, training URLs)
+    case 'sync_to_impartner':
+      return await runSyncToImpartner(config);
+    
     default:
       throw new Error(`Unknown task type: ${taskType}`);
   }
@@ -716,6 +720,258 @@ async function runImpartnerSync(config) {
       (results.contacts?.processed || 0);
     
     updateTaskProgress('impartner_sync', 'Complete', 100, 100);
+    
+    return results;
+  } catch (err) {
+    results.error = err.message;
+    throw err;
+  }
+}
+
+/**
+ * Sync LMS Data TO Impartner
+ * 1. Recalculates partner certification counts and NPCU
+ * 2. Pushes data to Impartner (cert counts, NPCU, training dashboard URLs)
+ */
+async function runSyncToImpartner(config) {
+  const results = { 
+    recordsProcessed: 0, 
+    recalculated: 0,
+    synced: 0,
+    failed: 0,
+    notFound: 0
+  };
+  
+  // Impartner API Configuration
+  const IMPARTNER_CONFIG = {
+    host: 'https://prod.impartner.live',
+    apiKey: 'H4nFg5b!TGS5FpkN6koWTKWxN7wjZBwFN@w&CW*LT8@ed26CJfE$nfqemN$%X2RK2n9VGqB&8htCf@gyZ@7#J9WR$2B8go6Y1z@fVECzrkGj8XinsWD!4C%E^o2DKypw',
+    tenantId: '1'
+  };
+  
+  updateTaskProgress('sync_to_impartner', 'Step 1: Recalculating partner cert counts', 0, 100);
+  
+  try {
+    // Step 1: Recalculate partner certification counts and NPCU
+    const partners = await query(`
+      SELECT p.id, p.account_name, g.id as group_id
+      FROM partners p
+      LEFT JOIN lms_groups g ON g.partner_id = p.id
+      WHERE p.partner_tier IS NOT NULL
+    `);
+    
+    let recalcCount = 0;
+    for (const partner of partners) {
+      if (!partner.group_id) continue;
+      
+      try {
+        // Count certifications by category
+        const counts = await query(`
+          SELECT 
+            c.certification_category as category,
+            COUNT(*) as cert_count
+          FROM lms_enrollments e
+          JOIN lms_courses c ON c.id = e.course_id
+          JOIN lms_group_members gm ON gm.user_id = e.user_id
+          WHERE gm.group_id = ?
+            AND e.status = 'completed'
+            AND c.npcu_value > 0
+            AND c.certification_category IS NOT NULL
+            AND (e.expires_at IS NULL OR e.expires_at > NOW())
+          GROUP BY c.certification_category
+        `, [partner.group_id]);
+        
+        // Calculate total NPCU
+        const [npcuResult] = await query(`
+          SELECT COALESCE(SUM(c.npcu_value), 0) as total_npcu
+          FROM lms_enrollments e
+          JOIN lms_courses c ON c.id = e.course_id
+          JOIN lms_group_members gm ON gm.user_id = e.user_id
+          WHERE gm.group_id = ?
+            AND e.status = 'completed'
+            AND c.npcu_value > 0
+            AND (e.expires_at IS NULL OR e.expires_at > NOW())
+        `, [partner.group_id]);
+        
+        // Build counts object
+        const certCounts = { nintex_ce: 0, nintex_k2: 0, nintex_salesforce: 0, go_to_market: 0 };
+        for (const row of counts) {
+          if (row.category && certCounts.hasOwnProperty(row.category)) {
+            certCounts[row.category] = row.cert_count;
+          }
+        }
+        
+        // Update partner
+        await query(`
+          UPDATE partners SET
+            cert_count_nintex_ce = ?,
+            cert_count_nintex_k2 = ?,
+            cert_count_nintex_salesforce = ?,
+            cert_count_go_to_market = ?,
+            has_gtm_certification = ?,
+            total_npcu = ?,
+            cert_counts_updated_at = NOW()
+          WHERE id = ?
+        `, [
+          certCounts.nintex_ce, certCounts.nintex_k2, certCounts.nintex_salesforce,
+          certCounts.go_to_market, certCounts.go_to_market > 0, npcuResult?.total_npcu || 0,
+          partner.id
+        ]);
+        
+        recalcCount++;
+      } catch (err) {
+        console.error(`[Sync To Impartner] Error recalculating partner ${partner.id}:`, err.message);
+      }
+      
+      // Update progress
+      if (recalcCount % 50 === 0) {
+        updateTaskProgress('sync_to_impartner', `Recalculating: ${recalcCount}/${partners.length}`, 
+          Math.round((recalcCount / partners.length) * 30), 100);
+      }
+    }
+    
+    results.recalculated = recalcCount;
+    console.log(`[Sync To Impartner] Recalculated ${recalcCount} partners`);
+    
+    // Step 2: Get partners with Salesforce IDs for Impartner sync
+    updateTaskProgress('sync_to_impartner', 'Step 2: Fetching partners for Impartner sync', 30, 100);
+    
+    const partnersToSync = await query(`
+      SELECT 
+        p.id, p.account_name, p.salesforce_id, p.partner_tier,
+        p.cert_count_nintex_ce, p.cert_count_nintex_k2,
+        p.cert_count_nintex_salesforce, p.cert_count_go_to_market,
+        p.total_npcu,
+        g.name as lms_group_name
+      FROM partners p
+      LEFT JOIN lms_groups g ON g.partner_id = p.id
+      WHERE p.salesforce_id IS NOT NULL
+        AND p.cert_counts_updated_at IS NOT NULL
+    `);
+    
+    // Build sync payload
+    const syncPayload = partnersToSync.map(p => {
+      // Build portal URL (base64 encoded)
+      let portalUrl = '';
+      if (p.lms_group_name) {
+        const urlData = { company: p.lms_group_name, tier: p.partner_tier || 'Registered' };
+        const encodedData = Buffer.from(JSON.stringify(urlData)).toString('base64');
+        portalUrl = `https://ptrlrndb.prod.ntxgallery.com/?data=${encodedData}`;
+      }
+      
+      return {
+        CrmId: p.salesforce_id,
+        Name: p.account_name,
+        Nintex_CE_Certifications__cf: p.cert_count_nintex_ce || 0,
+        Nintex_K2_Certifications__cf: p.cert_count_nintex_k2 || 0,
+        Nintex_for_Salesforce_Certifications__cf: p.cert_count_nintex_salesforce || 0,
+        Nintex_GTM_Certifications__cf: p.cert_count_go_to_market || 0,
+        Total_NPCU__cf: p.total_npcu || 0,
+        LMS_Account_ID__cf: String(p.id),
+        LMS_Group_Name__cf: p.lms_group_name || '',
+        LMS_Training_Dashboard__cf: portalUrl
+      };
+    });
+    
+    // Step 3: Lookup Impartner Account IDs
+    updateTaskProgress('sync_to_impartner', 'Step 3: Looking up Impartner accounts', 40, 100);
+    
+    const crmIdToImpartnerId = new Map();
+    const lookupBatchSize = 100;
+    
+    for (let i = 0; i < syncPayload.length; i += lookupBatchSize) {
+      const batchCrmIds = syncPayload.slice(i, i + lookupBatchSize).map(p => p.CrmId);
+      const crmIdFilter = batchCrmIds.map(id => `CrmId eq '${id}'`).join(' or ');
+      
+      try {
+        const lookupUrl = `${IMPARTNER_CONFIG.host}/api/objects/v1/Account?fields=Id,CrmId&filter=${encodeURIComponent(crmIdFilter)}&take=${lookupBatchSize}`;
+        const lookupResp = await fetch(lookupUrl, {
+          headers: {
+            'Authorization': `prm-key ${IMPARTNER_CONFIG.apiKey}`,
+            'X-PRM-TenantId': IMPARTNER_CONFIG.tenantId,
+            'Accept': 'application/json'
+          }
+        });
+        
+        if (lookupResp.ok) {
+          const lookupData = await lookupResp.json();
+          if (lookupData.data?.results) {
+            for (const account of lookupData.data.results) {
+              if (account.CrmId) crmIdToImpartnerId.set(account.CrmId, account.Id);
+            }
+          }
+        }
+      } catch (err) {
+        console.error(`[Sync To Impartner] Lookup batch failed:`, err.message);
+      }
+      
+      updateTaskProgress('sync_to_impartner', `Looking up accounts: ${Math.min(i + lookupBatchSize, syncPayload.length)}/${syncPayload.length}`,
+        40 + Math.round((i / syncPayload.length) * 20), 100);
+    }
+    
+    console.log(`[Sync To Impartner] Found ${crmIdToImpartnerId.size} matching accounts`);
+    results.notFound = syncPayload.length - crmIdToImpartnerId.size;
+    
+    // Step 4: Push updates to Impartner
+    updateTaskProgress('sync_to_impartner', 'Step 4: Pushing updates to Impartner', 60, 100);
+    
+    const updatePayload = syncPayload
+      .filter(p => crmIdToImpartnerId.has(p.CrmId))
+      .map(p => ({
+        Id: crmIdToImpartnerId.get(p.CrmId),
+        Name: p.Name,
+        Nintex_CE_Certifications__cf: p.Nintex_CE_Certifications__cf,
+        Nintex_K2_Certifications__cf: p.Nintex_K2_Certifications__cf,
+        Nintex_for_Salesforce_Certifications__cf: p.Nintex_for_Salesforce_Certifications__cf,
+        Nintex_GTM_Certifications__cf: p.Nintex_GTM_Certifications__cf,
+        Total_NPCU__cf: p.Total_NPCU__cf,
+        LMS_Account_ID__cf: p.LMS_Account_ID__cf,
+        LMS_Group_Name__cf: p.LMS_Group_Name__cf,
+        LMS_Training_Dashboard__cf: p.LMS_Training_Dashboard__cf
+      }));
+    
+    const batchSize = 50;
+    for (let i = 0; i < updatePayload.length; i += batchSize) {
+      const batch = updatePayload.slice(i, i + batchSize);
+      
+      try {
+        const updateResp = await fetch(`${IMPARTNER_CONFIG.host}/api/objects/v1/Account`, {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `prm-key ${IMPARTNER_CONFIG.apiKey}`,
+            'X-PRM-TenantId': IMPARTNER_CONFIG.tenantId,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify(batch)
+        });
+        
+        if (updateResp.ok) {
+          const updateData = await updateResp.json();
+          if (updateData.results) {
+            for (const result of updateData.results) {
+              if (result.success) results.synced++;
+              else results.failed++;
+            }
+          } else {
+            results.synced += batch.length;
+          }
+        } else {
+          results.failed += batch.length;
+        }
+      } catch (err) {
+        results.failed += batch.length;
+        console.error(`[Sync To Impartner] Batch update failed:`, err.message);
+      }
+      
+      updateTaskProgress('sync_to_impartner', `Pushing updates: ${Math.min(i + batchSize, updatePayload.length)}/${updatePayload.length}`,
+        60 + Math.round((i / updatePayload.length) * 38), 100);
+    }
+    
+    results.recordsProcessed = results.synced;
+    updateTaskProgress('sync_to_impartner', 'Complete', 100, 100);
+    
+    console.log(`[Sync To Impartner] Complete: ${results.synced} synced, ${results.failed} failed, ${results.notFound} not found`);
     
     return results;
   } catch (err) {
