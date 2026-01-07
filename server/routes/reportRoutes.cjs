@@ -601,6 +601,7 @@ router.get('/owner-accounts', async (req, res) => {
         p.account_region,
         p.account_owner,
         (SELECT COUNT(*) FROM contacts c WHERE c.partner_id = p.id) as contact_count,
+        (SELECT COUNT(*) FROM contacts c WHERE c.partner_id = p.id AND c.lms_user_id IS NOT NULL) as contacts_in_lms,
         COALESCE(g.user_count, 0) as lms_users,
         COALESCE(nc.active_npcu, 0) as total_npcu,
         COALESCE(nc.total_certifications, 0) as active_certifications,
