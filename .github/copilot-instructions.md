@@ -164,12 +164,32 @@ MUI is split into separate chunks for optimal loading:
 ### Key Database Files
 - **Schema**: `server/db/schema.cjs` - Table definitions and indexes
 - **Connection**: `server/db/connection.cjs` - MariaDB connection pool
-- **Routes**: `server/dbRoutes.cjs` - API endpoints for database operations
+- **Routes**: `server/dbRoutes.cjs` - Core API endpoints (partners, contacts, users, enrollments, courses, dashboard)
 - **Services**:
   - `server/db/partnerService.cjs` - Partner and contact management
   - `server/db/lmsSyncService.cjs` - Sync LMS data from Northpass API
   - `server/db/partnerImportService.cjs` - Excel import processing
   - `server/db/scheduledSync.cjs` - Automatic sync scheduler (every 2 hours)
+  - `server/db/offboardingService.cjs` - LMS offboarding when partners/contacts deactivated
+
+### Modular Route Architecture (January 2025)
+Routes are split into modular files in `server/routes/` for maintainability:
+
+| File | Mount Path | Purpose |
+|------|------------|---------|
+| `syncRoutes.cjs` | `/api/db/sync/*` | LMS sync endpoints (users, groups, courses, NPCU, enrollments) |
+| `reportRoutes.cjs` | `/api/db/reports/*` | Database reports (partner-npcu, overview, leaderboard, etc.) |
+| `trendRoutes.cjs` | `/api/db/trends/*` | Trend analytics (KPI summary, YTD, monthly, activity) |
+| `analyticsRoutes.cjs` | `/api/db/analytics/*` | Deep analytics (engagement, cohort, segments, velocity) |
+| `groupRoutes.cjs` | `/api/db/group-analysis/*` | Group analysis & management |
+| `maintenanceRoutes.cjs` | `/api/db/maintenance/*` | Audit & maintenance endpoints |
+| `partnerFamilyRoutes.cjs` | `/api/db/families/*` | Partner family management |
+| `certificationRoutes.cjs` | `/api/db/certifications/*` | Certification categories & sync to Impartner |
+| `pamRoutes.cjs` | `/api/db/pams/*` | Partner Account Manager management |
+| `notificationRoutes.cjs` | `/api/db/notifications/*` | Email templates & notifications |
+| `index.cjs` | - | Module exports for all routes |
+
+**Route Loading**: Modular routes are loaded in `server-with-proxy.cjs` and mounted BEFORE the catch-all `dbRoutes.cjs`
 
 ### Database API Endpoints
 - **POST /api/db/partners/import** - Import partners from Excel
@@ -228,7 +248,7 @@ MUI is split into separate chunks for optimal loading:
 ### Database Sync Architecture
 **Schema Version**: 10 (January 2025)
 
-**scheduled_tasks table**: Full task scheduler with 10 task types:
+**scheduled_tasks table**: Full task scheduler with 11 task types:
 - **Data Sync Tasks**:
   - `sync_users` - Sync LMS users (2h interval)
   - `sync_groups` - Sync LMS groups (2h interval)
@@ -236,12 +256,37 @@ MUI is split into separate chunks for optimal loading:
   - `sync_npcu` - Sync NPCU values (6h interval)
   - `sync_enrollments` - Sync user enrollments (4h interval, partner users only)
   - `lms_sync` - LMS Bundle: All syncs combined (legacy composite task)
-  - `impartner_sync` - **NEW**: Sync partners/contacts from Impartner PRM (6h interval)
+  - `impartner_sync` - Sync partners/contacts FROM Impartner PRM (6h interval)
+  - `sync_to_impartner` - Push cert counts/NPCU TO Impartner (incremental, 6h interval)
 - **Analysis Tasks**:
   - `group_analysis` - Find potential users by domain (6h interval)
   - `group_members_sync` - Confirm pending group members (6h interval)
 - **Maintenance Tasks**:
   - `cleanup` - Remove old logs and data (daily)
+
+### Push to Impartner (sync_to_impartner)
+**Pushes certification counts and NPCU data back to Impartner CRM**
+
+**Features:**
+- **Incremental Mode** (default): Only syncs partners whose `cert_counts_updated_at` > last sync time
+- **Full Mode**: Forces sync of all partners with valid tiers
+- **Tier Filter**: Only syncs partners with tiers: Premier, Premier Plus, Certified, Registered, Aggregator
+- **Excludes**: Pending tier, blank tier, inactive partners
+
+**API Endpoints:**
+```powershell
+# Preview what would be synced (dry run, incremental)
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/db/certifications/sync-to-impartner?dryRun=true" -Method Post
+
+# Preview full sync
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/db/certifications/sync-to-impartner?dryRun=true&mode=full" -Method Post
+
+# Run incremental sync (default)
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/db/certifications/sync-to-impartner" -Method Post
+
+# Run full sync
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/db/certifications/sync-to-impartner?mode=full" -Method Post
+```
 
 ### Impartner CRM Sync (January 2025)
 **Replaces manual CRM Excel import** with automated API sync from Impartner PRM.
@@ -323,6 +368,33 @@ Contacts:
 - Soft-delete: Sets `is_active = FALSE`, `deleted_at = NOW()`, `account_status = 'Inactive'`
 - Salesforce ID matching: Handles both 15-char and 18-char SF IDs (prefix matching)
 - Filtered accounts are linked to existing partners before deletion detection
+
+**LMS Offboarding (January 2025):**
+When partners/contacts are deactivated from Impartner, the system automatically offboards them from the LMS:
+
+- **Contact Offboarding**: Removes user from their partner group AND the "All Partners" group
+- **Partner Offboarding**: Removes ALL users from "All Partners" group AND deletes the partner's LMS group
+- **Service**: `server/db/offboardingService.cjs`
+- **Automatic**: Triggered during Impartner sync when soft-deleting records
+- **Manual API**: Available for on-demand offboarding
+
+**Offboarding API Endpoints:**
+```powershell
+# Offboard a single partner (removes users from All Partners, deletes partner group)
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/impartner/offboard/partner/123" -Method Post
+
+# Offboard a single contact (removes from partner group and All Partners)
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/impartner/offboard/contact/456" -Method Post
+
+# Batch offboard partners
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/impartner/offboard/partners" -Method Post -Body '{"partnerIds":[1,2,3]}' -ContentType "application/json"
+
+# Batch offboard contacts
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/impartner/offboard/contacts" -Method Post -Body '{"contactIds":[1,2,3]}' -ContentType "application/json"
+
+# Remove specific user from specific group
+Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/impartner/offboard/remove-from-group" -Method Post -Body '{"userId":"lms_id","groupId":"group_id"}' -ContentType "application/json"
+```
 
 **Sync Features:**
 - **Task Scheduler** (`server/db/taskScheduler.cjs`): Database-backed with mutex locks, retry logic, execution history
@@ -529,6 +601,28 @@ border: 1px solid #ddd;
 - ✅ `buildFilterClauses()` helper in trendService.cjs for consistent SQL generation
 - ✅ Filter UI added to AnalyticsDashboard with dropdowns and active filter chips
 - ✅ Export includes filter information
+
+### Deep Analytics (January 2025)
+New advanced analytics endpoints for deeper business insights:
+
+**Partner Analytics:**
+- `GET /api/db/analytics/engagement-scores` - Composite engagement score (activation, completion, certification, activity)
+- `GET /api/db/analytics/tier-progression` - Partners close to upgrade, at-risk below tier threshold
+- `GET /api/db/analytics/regional-comparison` - Performance metrics across regions
+
+**User Analytics:**
+- `GET /api/db/analytics/cohort` - Cohort analysis by registration month (30d/90d activation, retention)
+- `GET /api/db/analytics/user-segments` - Activity segmentation (active/recent/lapsed/dormant/never)
+
+**Learning Analytics:**
+- `GET /api/db/analytics/learning-paths` - Common course sequences and certification paths
+- `GET /api/db/analytics/course-effectiveness` - Completion rates, time to complete, engagement
+- `GET /api/db/analytics/certification-velocity` - Monthly certification velocity with growth metrics
+
+**Performance Analytics:**
+- `GET /api/db/analytics/owner-performance` - Account owner portfolio metrics and LMS adoption
+
+All endpoints support `?region=&owner=&tier=` filter parameters.
 
 ### Unified Sync Dashboard (January 2025)
 - ✅ Complete SyncDashboard redesign with unified task cards

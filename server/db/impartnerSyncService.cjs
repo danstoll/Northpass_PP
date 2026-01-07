@@ -5,10 +5,13 @@
  * Replaces manual CRM Excel import with automated API sync
  * 
  * Supports both full and incremental sync modes
+ * 
+ * Includes LMS offboarding when partners/contacts are deactivated
  */
 
 const { query, transaction } = require('./connection.cjs');
 const https = require('https');
+const { offboardPartner, offboardContact } = require('./offboardingService.cjs');
 
 // Impartner API Configuration
 const IMPARTNER_CONFIG = {
@@ -582,6 +585,7 @@ async function syncPartners(mode = 'incremental') {
       let deletedCount = 0;
       let inactiveCount = 0;
       let checkedCount = 0;
+      let offboardedCount = 0;
       
       for (const partner of activePartners) {
         checkedCount++;
@@ -599,6 +603,24 @@ async function syncPartners(mode = 'incremental') {
           );
           stats.deleted++;
           
+          // LMS Offboarding: Remove users from All Partners group and delete partner's LMS group
+          try {
+            console.log(`   🚪 Offboarding partner from LMS: ${partner.account_name}...`);
+            const offboardResult = await offboardPartner(partner.id);
+            if (offboardResult.success) {
+              offboardedCount++;
+              stats.offboarded = (stats.offboarded || 0) + 1;
+              stats.usersRemovedFromAllPartners = (stats.usersRemovedFromAllPartners || 0) + offboardResult.usersRemovedFromAllPartners;
+              if (offboardResult.partnerGroupDeleted) {
+                stats.lmsGroupsDeleted = (stats.lmsGroupsDeleted || 0) + 1;
+              }
+            }
+          } catch (offboardErr) {
+            console.error(`   ⚠️ Offboarding failed for ${partner.account_name}:`, offboardErr.message);
+            stats.offboardErrors = stats.offboardErrors || [];
+            stats.offboardErrors.push({ partnerId: partner.id, error: offboardErr.message });
+          }
+          
           if (filteredImpartnerIds.has(partner.impartner_id)) {
             inactiveCount++;
             console.log(`   🚫 Deactivated: ${partner.account_name} (now ${reason})`);
@@ -610,7 +632,7 @@ async function syncPartners(mode = 'incremental') {
       }
       
       if (deletedCount > 0 || inactiveCount > 0) {
-        console.log(`   Summary: ${deletedCount} deleted, ${inactiveCount} deactivated`);
+        console.log(`   Summary: ${deletedCount} deleted, ${inactiveCount} deactivated, ${offboardedCount} offboarded from LMS`);
       } else {
         console.log(`   ✓ No deletions or deactivations needed`);
       }
@@ -626,6 +648,11 @@ async function syncPartners(mode = 'incremental') {
     console.log(`   📝 Updated: ${stats.updated}`);
     console.log(`   ♻️ Reactivated: ${stats.reactivated}`);
     console.log(`   🗑️ Soft-deleted: ${stats.deleted}`);
+    if (stats.offboarded) {
+      console.log(`   🚪 LMS Offboarded: ${stats.offboarded} partners`);
+      console.log(`      - Users removed from All Partners: ${stats.usersRemovedFromAllPartners || 0}`);
+      console.log(`      - LMS Groups deleted: ${stats.lmsGroupsDeleted || 0}`);
+    }
     console.log(`   ❌ Failed: ${stats.failed}`);
     console.log(`${'='.repeat(60)}\n`);
     
@@ -831,6 +858,7 @@ async function syncContacts(mode = 'incremental') {
       );
       
       let deleteCount = 0;
+      let offboardedCount = 0;
       for (const contact of activeContacts) {
         if (!validImpartnerIds.has(contact.impartner_id)) {
           // Contact no longer in Impartner - soft delete
@@ -841,15 +869,29 @@ async function syncContacts(mode = 'incremental') {
           stats.deleted++;
           deleteCount++;
           
-          // Log if contact had LMS link (important info)
+          // LMS Offboarding: Remove user from partner group and All Partners group
           if (contact.lms_user_id) {
-            console.log(`   ⚠️ Soft-deleted with LMS link: ${contact.email}`);
+            console.log(`   🚪 Offboarding user from LMS: ${contact.email}...`);
+            try {
+              const offboardResult = await offboardContact(contact.id);
+              if (offboardResult.success) {
+                offboardedCount++;
+                stats.offboarded = (stats.offboarded || 0) + 1;
+              }
+            } catch (offboardErr) {
+              console.error(`   ⚠️ Offboarding failed for ${contact.email}:`, offboardErr.message);
+              stats.offboardErrors = stats.offboardErrors || [];
+              stats.offboardErrors.push({ contactId: contact.id, error: offboardErr.message });
+            }
           }
         }
       }
       
       if (deleteCount > 0) {
         console.log(`   🗑️ Soft-deleted ${deleteCount} contacts no longer in Impartner`);
+        if (offboardedCount > 0) {
+          console.log(`   🚪 Offboarded ${offboardedCount} users from LMS groups`);
+        }
       } else {
         console.log(`   ✓ No deletions needed`);
       }
@@ -865,6 +907,9 @@ async function syncContacts(mode = 'incremental') {
     console.log(`   📝 Updated: ${stats.updated}`);
     console.log(`   ♻️ Reactivated: ${stats.reactivated}`);
     console.log(`   🗑️ Soft-deleted: ${stats.deleted}`);
+    if (stats.offboarded) {
+      console.log(`   🚪 LMS Offboarded: ${stats.offboarded} users`);
+    }
     console.log(`   🔗 LMS Links Preserved: ${stats.lmsLinksPreserved}`);
     console.log(`   ❌ Failed: ${stats.failed}`);
     

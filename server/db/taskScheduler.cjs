@@ -732,15 +732,22 @@ async function runImpartnerSync(config) {
  * Sync LMS Data TO Impartner
  * 1. Recalculates partner certification counts and NPCU
  * 2. Pushes data to Impartner (cert counts, NPCU, training dashboard URLs)
+ * 
+ * Supports incremental mode - only syncs partners that have changed since last sync
  */
 async function runSyncToImpartner(config) {
+  const mode = config?.mode || 'incremental';
   const results = { 
     recordsProcessed: 0, 
     recalculated: 0,
     synced: 0,
+    skipped: 0,
     failed: 0,
     notFound: 0
   };
+  
+  // Valid tiers to sync (exclude Pending, blank)
+  const VALID_TIERS = ['Premier', 'Premier Plus', 'Certified', 'Registered', 'Aggregator'];
   
   // Impartner API Configuration
   const IMPARTNER_CONFIG = {
@@ -749,15 +756,39 @@ async function runSyncToImpartner(config) {
     tenantId: '1'
   };
   
+  // Get last sync time for incremental mode
+  let lastSyncTime = null;
+  if (mode === 'incremental') {
+    const [lastSync] = await query(`
+      SELECT completed_at FROM sync_log 
+      WHERE sync_type = 'sync_to_impartner' AND status = 'completed'
+      ORDER BY completed_at DESC LIMIT 1
+    `);
+    lastSyncTime = lastSync?.completed_at;
+    if (lastSyncTime) {
+      console.log(`[Sync To Impartner] Incremental mode: Only syncing changes since ${lastSyncTime}`);
+    } else {
+      console.log(`[Sync To Impartner] No previous sync found, running full sync`);
+    }
+  } else {
+    console.log(`[Sync To Impartner] Full sync mode`);
+  }
+  
   updateTaskProgress('sync_to_impartner', 'Step 1: Recalculating partner cert counts', 0, 100);
   
   try {
     // Step 1: Recalculate partner certification counts and NPCU
+    // Only include partners with valid tiers
+    const tierList = VALID_TIERS.map(t => `'${t}'`).join(',');
     const partners = await query(`
-      SELECT p.id, p.account_name, g.id as group_id
+      SELECT p.id, p.account_name, g.id as group_id, p.cert_counts_updated_at,
+             p.cert_count_nintex_ce as prev_ce, p.cert_count_nintex_k2 as prev_k2,
+             p.cert_count_nintex_salesforce as prev_sf, p.cert_count_go_to_market as prev_gtm,
+             p.total_npcu as prev_npcu
       FROM partners p
       LEFT JOIN lms_groups g ON g.partner_id = p.id
-      WHERE p.partner_tier IS NOT NULL
+      WHERE p.partner_tier IN (${tierList})
+        AND p.is_active = TRUE
     `);
     
     let recalcCount = 0;
@@ -834,20 +865,39 @@ async function runSyncToImpartner(config) {
     console.log(`[Sync To Impartner] Recalculated ${recalcCount} partners`);
     
     // Step 2: Get partners with Salesforce IDs for Impartner sync
+    // Only sync partners with valid tiers and (in incremental mode) changed since last sync
     updateTaskProgress('sync_to_impartner', 'Step 2: Fetching partners for Impartner sync', 30, 100);
     
-    const partnersToSync = await query(`
+    let partnersQuery = `
       SELECT 
         p.id, p.account_name, p.salesforce_id, p.partner_tier,
         p.cert_count_nintex_ce, p.cert_count_nintex_k2,
         p.cert_count_nintex_salesforce, p.cert_count_go_to_market,
-        p.total_npcu,
+        p.total_npcu, p.cert_counts_updated_at,
         g.name as lms_group_name
       FROM partners p
       LEFT JOIN lms_groups g ON g.partner_id = p.id
       WHERE p.salesforce_id IS NOT NULL
         AND p.cert_counts_updated_at IS NOT NULL
-    `);
+        AND p.partner_tier IN (${tierList})
+        AND p.is_active = TRUE
+    `;
+    
+    const queryParams = [];
+    if (mode === 'incremental' && lastSyncTime) {
+      partnersQuery += ` AND p.cert_counts_updated_at > ?`;
+      queryParams.push(lastSyncTime);
+    }
+    
+    const partnersToSync = await query(partnersQuery, queryParams);
+    
+    console.log(`[Sync To Impartner] ${mode === 'incremental' ? 'Incremental' : 'Full'} sync: ${partnersToSync.length} partners to push to Impartner`);
+    
+    if (partnersToSync.length === 0) {
+      results.skipped = partners.length;
+      console.log(`[Sync To Impartner] No partners changed since last sync, skipping API calls`);
+      return results;
+    }
     
     // Build sync payload
     const syncPayload = partnersToSync.map(p => {

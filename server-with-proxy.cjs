@@ -197,7 +197,39 @@ app.get('/api/northpass/v2/properties/courses/:courseId', async (req, res) => {
 // Use the proxy for other /api/northpass routes
 app.use('/api/northpass', northpassProxy);
 
-// Database API routes (if available)
+// Load modular route modules
+let modularRoutes = null;
+try {
+  modularRoutes = require('./server/routes/index.cjs');
+  console.log('✅ Modular route modules loaded');
+} catch (err) {
+  console.warn('⚠️ Modular routes not loaded:', err.message);
+}
+
+// Mount modular routes BEFORE the catch-all dbRoutes (if database is available)
+// These routes take precedence for their specific paths
+if (modularRoutes) {
+  const mountModularRoutes = (req, res, next) => {
+    if (!dbInitialized) {
+      return res.status(503).json({ error: 'Database not available' });
+    }
+    next();
+  };
+  
+  app.use('/api/db/sync', mountModularRoutes, modularRoutes.syncRoutes);
+  app.use('/api/db/reports', mountModularRoutes, modularRoutes.reportRoutes);
+  app.use('/api/db/trends', mountModularRoutes, modularRoutes.trendRoutes);
+  app.use('/api/db/analytics', mountModularRoutes, modularRoutes.analyticsRoutes);
+  app.use('/api/db/group-analysis', mountModularRoutes, modularRoutes.groupRoutes);
+  app.use('/api/db/maintenance', mountModularRoutes, modularRoutes.maintenanceRoutes);
+  app.use('/api/db/families', mountModularRoutes, modularRoutes.partnerFamilyRoutes);
+  app.use('/api/db/certifications', mountModularRoutes, modularRoutes.certificationRoutes);
+  app.use('/api/db/pams', mountModularRoutes, modularRoutes.pamRoutes);
+  app.use('/api/db/notifications', mountModularRoutes, modularRoutes.notificationRoutes);
+  console.log('✅ Modular routes mounted at /api/db/*');
+}
+
+// Database API routes - catch-all for remaining endpoints
 app.use('/api/db', (req, res, next) => {
   if (dbRoutes && dbInitialized) {
     dbRoutes.router(req, res, next);

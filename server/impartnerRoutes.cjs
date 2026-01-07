@@ -21,11 +21,18 @@
  * - POST /api/impartner/sync/all - Sync everything (partners + contacts)
  * - GET /api/impartner/sync/status - Get sync status
  * - GET /api/impartner/sync/preview - Preview what would be synced
+ * 
+ * OFFBOARDING ENDPOINTS:
+ * - POST /api/impartner/offboard/partner/:id - Offboard a partner from LMS
+ * - POST /api/impartner/offboard/contact/:id - Offboard a contact from LMS
+ * - POST /api/impartner/offboard/partners - Batch offboard partners
+ * - POST /api/impartner/offboard/contacts - Batch offboard contacts
  */
 
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const impartnerSync = require('./db/impartnerSyncService.cjs');
+const offboarding = require('./db/offboardingService.cjs');
 
 const router = express.Router();
 
@@ -283,6 +290,132 @@ const impartnerProxy = createProxyMiddleware({
       message: err.message,
       target: IMPARTNER_CONFIG.host
     });
+  }
+});
+
+// ==========================================
+// OFFBOARDING ENDPOINTS
+// ==========================================
+
+/**
+ * Offboard a single partner from LMS
+ * Removes all users from All Partners group and deletes the partner's LMS group
+ */
+router.post('/offboard/partner/:id', async (req, res) => {
+  const partnerId = parseInt(req.params.id);
+  
+  if (!partnerId) {
+    return res.status(400).json({ error: 'Partner ID required' });
+  }
+
+  console.log(`[Offboarding] Manual partner offboard request: ${partnerId}`);
+  
+  try {
+    const result = await offboarding.offboardPartner(partnerId);
+    res.json({
+      success: result.success,
+      partnerId,
+      usersRemovedFromAllPartners: result.usersRemovedFromAllPartners,
+      partnerGroupDeleted: result.partnerGroupDeleted,
+      errors: result.errors
+    });
+  } catch (err) {
+    console.error('[Offboarding] Partner offboard failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Offboard a single contact from LMS
+ * Removes user from partner group and All Partners group
+ */
+router.post('/offboard/contact/:id', async (req, res) => {
+  const contactId = parseInt(req.params.id);
+  
+  if (!contactId) {
+    return res.status(400).json({ error: 'Contact ID required' });
+  }
+
+  console.log(`[Offboarding] Manual contact offboard request: ${contactId}`);
+  
+  try {
+    const result = await offboarding.offboardContact(contactId);
+    res.json({
+      success: result.success,
+      contactId,
+      removedFromPartnerGroup: result.removedFromPartnerGroup,
+      removedFromAllPartners: result.removedFromAllPartners,
+      errors: result.errors
+    });
+  } catch (err) {
+    console.error('[Offboarding] Contact offboard failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Batch offboard multiple partners
+ * Body: { partnerIds: [1, 2, 3] }
+ */
+router.post('/offboard/partners', async (req, res) => {
+  const { partnerIds } = req.body;
+  
+  if (!partnerIds || !Array.isArray(partnerIds) || partnerIds.length === 0) {
+    return res.status(400).json({ error: 'partnerIds array required' });
+  }
+
+  console.log(`[Offboarding] Batch partner offboard request: ${partnerIds.length} partners`);
+  
+  try {
+    const result = await offboarding.offboardPartners(partnerIds);
+    res.json(result);
+  } catch (err) {
+    console.error('[Offboarding] Batch partner offboard failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Batch offboard multiple contacts
+ * Body: { contactIds: [1, 2, 3] }
+ */
+router.post('/offboard/contacts', async (req, res) => {
+  const { contactIds } = req.body;
+  
+  if (!contactIds || !Array.isArray(contactIds) || contactIds.length === 0) {
+    return res.status(400).json({ error: 'contactIds array required' });
+  }
+
+  console.log(`[Offboarding] Batch contact offboard request: ${contactIds.length} contacts`);
+  
+  try {
+    const result = await offboarding.offboardContacts(contactIds);
+    res.json(result);
+  } catch (err) {
+    console.error('[Offboarding] Batch contact offboard failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Remove a specific user from a specific group
+ * Body: { userId: "lms_user_id", groupId: "lms_group_id" }
+ */
+router.post('/offboard/remove-from-group', async (req, res) => {
+  const { userId, groupId } = req.body;
+  
+  if (!userId || !groupId) {
+    return res.status(400).json({ error: 'userId and groupId required' });
+  }
+
+  console.log(`[Offboarding] Remove user ${userId} from group ${groupId}`);
+  
+  try {
+    const result = await offboarding.removeUserFromGroup(userId, groupId);
+    res.json(result);
+  } catch (err) {
+    console.error('[Offboarding] Remove from group failed:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
