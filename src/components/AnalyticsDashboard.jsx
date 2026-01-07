@@ -15,7 +15,8 @@ import {
 import {
   TrendingUp, TrendingDown, TrendingFlat, People, School, EmojiEvents,
   CalendarMonth, Refresh, Download, Timeline, Assessment, BarChart,
-  ArrowUpward, ArrowDownward, Remove, FilterList, Clear
+  ArrowUpward, ArrowDownward, Remove, FilterList, Clear, Speed,
+  Groups, Map, Person, Warning, CheckCircle, Star, TrendingUp as Rocket
 } from '@mui/icons-material';
 import { PageHeader, PageContent, StatCard, StatsRow, ActionButton } from './ui/NintexUI';
 import './AnalyticsDashboard.css';
@@ -135,6 +136,13 @@ export default function AnalyticsDashboard() {
   const [certificationTrends, setCertificationTrends] = useState([]);
   const [complianceData, setComplianceData] = useState([]);
   const [weeklySummary, setWeeklySummary] = useState([]);
+  
+  // Deep Analytics states
+  const [engagementScores, setEngagementScores] = useState([]);
+  const [tierProgression, setTierProgression] = useState(null);
+  const [userSegments, setUserSegments] = useState([]);
+  const [regionalComparison, setRegionalComparison] = useState([]);
+  const [ownerPerformance, setOwnerPerformance] = useState([]);
 
   // Build query string from filters
   const buildFilterParams = useCallback(() => {
@@ -170,14 +178,21 @@ export default function AnalyticsDashboard() {
     const filterSuffix = filterParams ? `&${filterParams}` : '';
     
     try {
-      const [kpi, ytd, users, enrollments, certs, compliance, weekly] = await Promise.all([
+      const [kpi, ytd, users, enrollments, certs, compliance, weekly,
+             engagement, tierProg, segments, regional, owners] = await Promise.all([
         fetch(`${API_BASE}/trends/kpi-summary?${filterParams}`).then(r => r.json()),
         fetch(`${API_BASE}/trends/ytd?${filterParams}`).then(r => r.json()),
         fetch(`${API_BASE}/trends/users?months=${monthRange}${filterSuffix}`).then(r => r.json()),
         fetch(`${API_BASE}/trends/enrollments?months=${monthRange}${filterSuffix}`).then(r => r.json()),
         fetch(`${API_BASE}/trends/certifications?months=${monthRange}${filterSuffix}`).then(r => r.json()),
         fetch(`${API_BASE}/trends/compliance?${filterParams}`).then(r => r.json()),
-        fetch(`${API_BASE}/trends/weekly?weeks=12${filterSuffix}`).then(r => r.json())
+        fetch(`${API_BASE}/trends/weekly?weeks=12${filterSuffix}`).then(r => r.json()),
+        // Deep Analytics
+        fetch(`${API_BASE}/analytics/engagement-scores?limit=25${filterSuffix}`).then(r => r.json()),
+        fetch(`${API_BASE}/analytics/tier-progression?${filterParams}`).then(r => r.json()),
+        fetch(`${API_BASE}/analytics/user-segments?${filterParams}`).then(r => r.json()),
+        fetch(`${API_BASE}/analytics/regional-comparison?${filterParams}`).then(r => r.json()),
+        fetch(`${API_BASE}/analytics/owner-performance?${filterParams}`).then(r => r.json())
       ]);
       
       setKpiSummary(kpi);
@@ -187,6 +202,13 @@ export default function AnalyticsDashboard() {
       setCertificationTrends(certs);
       setComplianceData(compliance);
       setWeeklySummary(weekly);
+      
+      // Deep Analytics
+      setEngagementScores(engagement?.data || []);
+      setTierProgression(tierProg?.data || null);
+      setUserSegments(segments?.data || []);
+      setRegionalComparison(regional?.data || []);
+      setOwnerPerformance(owners?.data || []);
     } catch (err) {
       console.error('Failed to fetch analytics:', err);
       setError(err.message);
@@ -492,10 +514,17 @@ export default function AnalyticsDashboard() {
             value={activeTab} 
             onChange={(e, v) => setActiveTab(v)}
             sx={{ borderBottom: 1, borderColor: 'divider' }}
+            variant="scrollable"
+            scrollButtons="auto"
           >
             <Tab label="Monthly Trends" icon={<CalendarMonth />} iconPosition="start" />
             <Tab label="Weekly Activity" icon={<BarChart />} iconPosition="start" />
             <Tab label="Compliance" icon={<Assessment />} iconPosition="start" />
+            <Tab label="Partner Engagement" icon={<Speed />} iconPosition="start" />
+            <Tab label="Tier Progression" icon={<Rocket />} iconPosition="start" />
+            <Tab label="User Segments" icon={<Groups />} iconPosition="start" />
+            <Tab label="Regional" icon={<Map />} iconPosition="start" />
+            <Tab label="Owner Performance" icon={<Person />} iconPosition="start" />
           </Tabs>
 
           {/* Monthly Trends Table */}
@@ -623,6 +652,375 @@ export default function AnalyticsDashboard() {
                   </Grid>
                 ))}
               </Grid>
+            </Box>
+          )}
+
+          {/* Partner Engagement */}
+          {activeTab === 3 && (
+            <Box sx={{ p: 3 }}>
+              <Grid container spacing={3}>
+                {/* Top Engaged Partners */}
+                <Grid item xs={12} md={6}>
+                  <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Star color="warning" /> Top Engaged Partners
+                  </Typography>
+                  <TableContainer>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Partner</TableCell>
+                          <TableCell align="center">Score</TableCell>
+                          <TableCell align="center">Activation</TableCell>
+                          <TableCell align="center">Completion</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {engagementScores.slice(0, 10).map((partner, idx) => (
+                          <TableRow key={partner.partner_id} sx={{ bgcolor: idx < 3 ? 'success.light' : 'inherit' }}>
+                            <TableCell>
+                              <Typography variant="body2" fontWeight={idx < 3 ? 'bold' : 'normal'}>
+                                {idx + 1}. {partner.account_name}
+                              </Typography>
+                              <Typography variant="caption" color="textSecondary">{partner.tier}</Typography>
+                            </TableCell>
+                            <TableCell align="center">
+                              <Chip 
+                                label={`${partner.engagement_score}/100`} 
+                                size="small" 
+                                color={partner.engagement_score >= 70 ? 'success' : partner.engagement_score >= 40 ? 'warning' : 'default'}
+                              />
+                            </TableCell>
+                            <TableCell align="center">{partner.activation_rate}%</TableCell>
+                            <TableCell align="center">{partner.completion_rate}%</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Grid>
+
+                {/* Lowest Engaged Partners */}
+                <Grid item xs={12} md={6}>
+                  <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Warning color="error" /> Needs Attention
+                  </Typography>
+                  <TableContainer>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Partner</TableCell>
+                          <TableCell align="center">Score</TableCell>
+                          <TableCell align="center">Users</TableCell>
+                          <TableCell align="center">Completions</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {engagementScores.slice(-10).reverse().map((partner) => (
+                          <TableRow key={partner.partner_id}>
+                            <TableCell>
+                              <Typography variant="body2">{partner.account_name}</Typography>
+                              <Typography variant="caption" color="textSecondary">{partner.tier}</Typography>
+                            </TableCell>
+                            <TableCell align="center">
+                              <Chip 
+                                label={`${partner.engagement_score}/100`} 
+                                size="small" 
+                                color="error"
+                                variant="outlined"
+                              />
+                            </TableCell>
+                            <TableCell align="center">{partner.total_users}</TableCell>
+                            <TableCell align="center">{partner.completions}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Grid>
+              </Grid>
+            </Box>
+          )}
+
+          {/* Tier Progression */}
+          {activeTab === 4 && (
+            <Box sx={{ p: 3 }}>
+              <Grid container spacing={3}>
+                {/* Close to Upgrade */}
+                <Grid item xs={12} md={6}>
+                  <Card variant="outlined" sx={{ borderColor: 'success.main' }}>
+                    <CardContent>
+                      <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <CheckCircle color="success" /> Close to Upgrade ({tierProgression.closeToUpgrade?.length || 0})
+                      </Typography>
+                      <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
+                        Partners within 80% of next tier threshold
+                      </Typography>
+                      <TableContainer sx={{ maxHeight: 400 }}>
+                        <Table size="small" stickyHeader>
+                          <TableHead>
+                            <TableRow>
+                              <TableCell>Partner</TableCell>
+                              <TableCell>Current Tier</TableCell>
+                              <TableCell align="right">NPCU</TableCell>
+                              <TableCell align="right">To Upgrade</TableCell>
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {tierProgression.closeToUpgrade?.map((partner) => (
+                              <TableRow key={partner.partner_id}>
+                                <TableCell>{partner.account_name}</TableCell>
+                                <TableCell>
+                                  <Chip label={partner.current_tier} size="small" />
+                                </TableCell>
+                                <TableCell align="right">{partner.current_npcu}</TableCell>
+                                <TableCell align="right">
+                                  <Typography color="success.main" fontWeight="bold">
+                                    +{partner.npcu_needed}
+                                  </Typography>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </TableContainer>
+                    </CardContent>
+                  </Card>
+                </Grid>
+
+                {/* At Risk */}
+                <Grid item xs={12} md={6}>
+                  <Card variant="outlined" sx={{ borderColor: 'error.main' }}>
+                    <CardContent>
+                      <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Warning color="error" /> At Risk ({tierProgression.atRiskPartners?.length || 0})
+                      </Typography>
+                      <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
+                        Partners below minimum threshold for their tier
+                      </Typography>
+                      <TableContainer sx={{ maxHeight: 400 }}>
+                        <Table size="small" stickyHeader>
+                          <TableHead>
+                            <TableRow>
+                              <TableCell>Partner</TableCell>
+                              <TableCell>Tier</TableCell>
+                              <TableCell align="right">NPCU</TableCell>
+                              <TableCell align="right">Required</TableCell>
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {tierProgression.atRiskPartners?.map((partner) => (
+                              <TableRow key={partner.partner_id}>
+                                <TableCell>{partner.account_name}</TableCell>
+                                <TableCell>
+                                  <Chip label={partner.tier} size="small" color="error" />
+                                </TableCell>
+                                <TableCell align="right">{partner.current_npcu}</TableCell>
+                                <TableCell align="right">
+                                  <Typography color="error.main">
+                                    {partner.required_npcu}
+                                  </Typography>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </TableContainer>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              </Grid>
+            </Box>
+          )}
+
+          {/* User Segments */}
+          {activeTab === 5 && (
+            <Box sx={{ p: 3 }}>
+              <Grid container spacing={3}>
+                {userSegments.map((segment) => {
+                  const segmentColors = {
+                    'Active': 'success',
+                    'Recent': 'info',
+                    'Lapsed': 'warning',
+                    'Dormant': 'error',
+                    'Never Active': 'default'
+                  };
+                  const segmentIcons = {
+                    'Active': <CheckCircle />,
+                    'Recent': <Speed />,
+                    'Lapsed': <Warning />,
+                    'Dormant': <Groups />,
+                    'Never Active': <Person />
+                  };
+                  return (
+                    <Grid item xs={12} sm={6} md={2.4} key={segment.segment}>
+                      <Card variant="outlined">
+                        <CardContent sx={{ textAlign: 'center' }}>
+                          <Box sx={{ color: `${segmentColors[segment.segment]}.main`, mb: 1 }}>
+                            {segmentIcons[segment.segment]}
+                          </Box>
+                          <Typography variant="h4" fontWeight="bold">
+                            {segment.user_count?.toLocaleString()}
+                          </Typography>
+                          <Typography variant="body2" color="textSecondary">
+                            {segment.segment}
+                          </Typography>
+                          <Typography variant="h6" color={`${segmentColors[segment.segment]}.main`}>
+                            {segment.percentage}%
+                          </Typography>
+                          <LinearProgress 
+                            variant="determinate" 
+                            value={parseFloat(segment.percentage)} 
+                            color={segmentColors[segment.segment]}
+                            sx={{ mt: 1, height: 8, borderRadius: 4 }}
+                          />
+                        </CardContent>
+                      </Card>
+                    </Grid>
+                  );
+                })}
+              </Grid>
+              <Box sx={{ mt: 3, p: 2, bgcolor: 'background.default', borderRadius: 1 }}>
+                <Typography variant="subtitle2" gutterBottom>Segment Definitions:</Typography>
+                <Grid container spacing={2}>
+                  <Grid item xs={12} sm={6} md={2.4}>
+                    <Typography variant="caption"><strong>Active:</strong> Activity in last 30 days</Typography>
+                  </Grid>
+                  <Grid item xs={12} sm={6} md={2.4}>
+                    <Typography variant="caption"><strong>Recent:</strong> Activity 31-90 days ago</Typography>
+                  </Grid>
+                  <Grid item xs={12} sm={6} md={2.4}>
+                    <Typography variant="caption"><strong>Lapsed:</strong> Activity 91-180 days ago</Typography>
+                  </Grid>
+                  <Grid item xs={12} sm={6} md={2.4}>
+                    <Typography variant="caption"><strong>Dormant:</strong> No activity 180+ days</Typography>
+                  </Grid>
+                  <Grid item xs={12} sm={6} md={2.4}>
+                    <Typography variant="caption"><strong>Never Active:</strong> Registered, no enrollments</Typography>
+                  </Grid>
+                </Grid>
+              </Box>
+            </Box>
+          )}
+
+          {/* Regional Comparison */}
+          {activeTab === 6 && (
+            <Box sx={{ p: 3 }}>
+              <TableContainer>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Region</TableCell>
+                      <TableCell align="center">Partners</TableCell>
+                      <TableCell align="center">Users</TableCell>
+                      <TableCell align="center">Avg NPCU</TableCell>
+                      <TableCell align="center">Completions</TableCell>
+                      <TableCell align="center">Completion Rate</TableCell>
+                      <TableCell align="center">Compliance</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {regionalComparison.map((region) => (
+                      <TableRow key={region.region || 'Unknown'}>
+                        <TableCell>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Map color="primary" fontSize="small" />
+                            <Typography fontWeight="bold">{region.region || 'Unknown'}</Typography>
+                          </Box>
+                        </TableCell>
+                        <TableCell align="center">{region.partner_count?.toLocaleString()}</TableCell>
+                        <TableCell align="center">{region.total_users?.toLocaleString()}</TableCell>
+                        <TableCell align="center">
+                          <Chip 
+                            label={region.avg_npcu || 0} 
+                            size="small"
+                            color={region.avg_npcu >= 15 ? 'success' : region.avg_npcu >= 8 ? 'warning' : 'default'}
+                          />
+                        </TableCell>
+                        <TableCell align="center">{region.total_completions?.toLocaleString()}</TableCell>
+                        <TableCell align="center">
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <LinearProgress 
+                              variant="determinate" 
+                              value={parseFloat(region.completion_rate) || 0} 
+                              sx={{ flex: 1, height: 8, borderRadius: 4 }}
+                              color={region.completion_rate >= 50 ? 'success' : 'warning'}
+                            />
+                            <Typography variant="body2">{region.completion_rate}%</Typography>
+                          </Box>
+                        </TableCell>
+                        <TableCell align="center">
+                          <Chip 
+                            label={`${region.compliance_rate || 0}%`}
+                            size="small"
+                            color={region.compliance_rate >= 70 ? 'success' : region.compliance_rate >= 50 ? 'warning' : 'error'}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Box>
+          )}
+
+          {/* Owner Performance */}
+          {activeTab === 7 && (
+            <Box sx={{ p: 3 }}>
+              <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Person color="primary" /> Partner Account Manager Performance
+              </Typography>
+              <TableContainer>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Account Owner</TableCell>
+                      <TableCell align="center">Partners</TableCell>
+                      <TableCell align="center">Total Users</TableCell>
+                      <TableCell align="center">Active Users</TableCell>
+                      <TableCell align="center">Avg NPCU</TableCell>
+                      <TableCell align="center">Total NPCU</TableCell>
+                      <TableCell align="center">Compliance</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {ownerPerformance.map((owner, idx) => (
+                      <TableRow key={owner.account_owner} sx={{ bgcolor: idx < 3 ? 'success.light' : 'inherit' }}>
+                        <TableCell>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            {idx < 3 && <Star color="warning" fontSize="small" />}
+                            <Typography fontWeight={idx < 3 ? 'bold' : 'normal'}>
+                              {owner.account_owner || 'Unassigned'}
+                            </Typography>
+                          </Box>
+                        </TableCell>
+                        <TableCell align="center">{owner.partner_count}</TableCell>
+                        <TableCell align="center">{owner.total_users?.toLocaleString()}</TableCell>
+                        <TableCell align="center">
+                          <Chip 
+                            label={owner.active_users?.toLocaleString()} 
+                            size="small"
+                            color="success"
+                            variant="outlined"
+                          />
+                        </TableCell>
+                        <TableCell align="center">{owner.avg_npcu || 0}</TableCell>
+                        <TableCell align="center">
+                          <Typography fontWeight="bold" color="primary.main">
+                            {owner.total_npcu?.toLocaleString()}
+                          </Typography>
+                        </TableCell>
+                        <TableCell align="center">
+                          <Chip 
+                            label={`${owner.compliance_rate || 0}%`}
+                            size="small"
+                            color={owner.compliance_rate >= 70 ? 'success' : owner.compliance_rate >= 50 ? 'warning' : 'error'}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
             </Box>
           )}
         </Paper>
