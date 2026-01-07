@@ -26,6 +26,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TableSortLabel,
   Select,
   MenuItem,
   FormControl,
@@ -581,18 +582,28 @@ export const LoadingState = ({ message = 'Loading...' }) => {
 
 // ============ TABLE COMPONENTS ============
 
-// Data Table wrapper
+// Data Table wrapper with optional sorting
 export const DataTable = ({ 
-  columns, // [{ id, label, align, width, render }]
+  columns, // [{ id, label, align, width, render, sortable }]
   data,
   onRowClick,
   emptyMessage = 'No data found',
   stickyHeader = true,
   maxHeight,
+  sortable = false, // Enable sorting on all columns
+  orderBy = null, // Current sort column
+  order = 'asc', // 'asc' or 'desc'
+  onSort = null, // (columnId) => void
 }) => {
   if (!data || data.length === 0) {
     return <EmptyState icon="📋" title={emptyMessage} />;
   }
+
+  const handleSort = (columnId) => {
+    if (onSort) {
+      onSort(columnId);
+    }
+  };
 
   return (
     <TableContainer 
@@ -605,19 +616,33 @@ export const DataTable = ({
       <Table stickyHeader={stickyHeader} size="small">
         <TableHead>
           <TableRow>
-            {columns.map((col) => (
-              <TableCell 
-                key={col.id} 
-                align={col.align || 'left'}
-                sx={{ 
-                  fontWeight: 600,
-                  width: col.width,
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {col.label}
-              </TableCell>
-            ))}
+            {columns.map((col) => {
+              const isSortable = sortable && col.sortable !== false && col.id !== 'actions';
+              return (
+                <TableCell 
+                  key={col.id} 
+                  align={col.align || 'left'}
+                  sortDirection={orderBy === col.id ? order : false}
+                  sx={{ 
+                    fontWeight: 600,
+                    width: col.width,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {isSortable ? (
+                    <TableSortLabel
+                      active={orderBy === col.id}
+                      direction={orderBy === col.id ? order : 'asc'}
+                      onClick={() => handleSort(col.id)}
+                    >
+                      {col.label}
+                    </TableSortLabel>
+                  ) : (
+                    col.label
+                  )}
+                </TableCell>
+              );
+            })}
           </TableRow>
         </TableHead>
         <TableBody>

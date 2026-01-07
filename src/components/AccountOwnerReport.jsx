@@ -29,6 +29,8 @@ export default function AccountOwnerReport() {
   const [tierFilter, setTierFilter] = useState('');
   const [regionFilter, setRegionFilter] = useState('');
   const [copiedLink, setCopiedLink] = useState(null);
+  const [orderBy, setOrderBy] = useState('account_name');
+  const [order, setOrder] = useState('asc');
 
   // Load account owners from MariaDB on mount
   const loadAccountOwners = useCallback(async () => {
@@ -121,15 +123,40 @@ export default function AccountOwnerReport() {
       result = result.filter(account => account.account_region === regionFilter);
     }
 
-    // Sort by account name
+    // Sort by selected column
     result.sort((a, b) => {
-      const aVal = (a.account_name || '').toLowerCase();
-      const bVal = (b.account_name || '').toLowerCase();
-      return aVal.localeCompare(bVal);
+      let aVal = a[orderBy];
+      let bVal = b[orderBy];
+      
+      // Handle numeric columns
+      if (['contact_count', 'contacts_in_lms', 'total_npcu'].includes(orderBy)) {
+        aVal = parseInt(aVal, 10) || 0;
+        bVal = parseInt(bVal, 10) || 0;
+      } else {
+        // String comparison
+        aVal = (aVal || '').toString().toLowerCase();
+        bVal = (bVal || '').toString().toLowerCase();
+      }
+      
+      if (aVal < bVal) return order === 'asc' ? -1 : 1;
+      if (aVal > bVal) return order === 'asc' ? 1 : -1;
+      return 0;
     });
 
     return result;
-  }, [accounts, searchTerm, tierFilter, regionFilter]);
+  }, [accounts, searchTerm, tierFilter, regionFilter, orderBy, order]);
+
+  // Handle sort click
+  const handleSort = (columnId) => {
+    if (orderBy === columnId) {
+      // Toggle direction
+      setOrder(order === 'asc' ? 'desc' : 'asc');
+    } else {
+      // New column, default to asc
+      setOrderBy(columnId);
+      setOrder('asc');
+    }
+  };
 
   function generateDashboardLink(account) {
     // Use company name and tier to generate the encoded URL
@@ -339,6 +366,10 @@ export default function AccountOwnerReport() {
                 columns={tableColumns}
                 data={filteredAccounts}
                 emptyMessage="No partners found matching your criteria"
+                sortable={true}
+                orderBy={orderBy}
+                order={order}
+                onSort={handleSort}
               />
             )}
           </SectionCard>
