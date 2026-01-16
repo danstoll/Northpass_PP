@@ -623,6 +623,23 @@ const GroupManagement = () => {
         </Alert>
       )}
 
+      {/* Quick Link to Create Groups */}
+      <Alert severity="info" sx={{ mb: 2 }} icon={<GroupWorkIcon />}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+          <Typography variant="body2">
+            <strong>Need to create LMS groups for partners?</strong> Use the User Management tool.
+          </Typography>
+          <Button 
+            size="small" 
+            variant="outlined" 
+            onClick={() => window.location.href = '/admin/users?tab=2'}
+            startIcon={<GroupWorkIcon />}
+          >
+            Create Partner Groups
+          </Button>
+        </Box>
+      </Alert>
+
       {/* Tabs */}
       <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
         <Tabs value={tabIndex} onChange={(e, v) => setTabIndex(v)}>

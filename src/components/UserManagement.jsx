@@ -606,8 +606,12 @@ const DomainRow = ({
 // Main Component
 // ============================================
 const UserManagement = () => {
+  // Read initial tab from URL params (e.g., /admin/users?tab=2)
+  const urlParams = new URLSearchParams(window.location.search);
+  const initialTab = parseInt(urlParams.get('tab')) || 0;
+  
   // Tab state
-  const [activeTab, setActiveTab] = useState(0);
+  const [activeTab, setActiveTab] = useState(initialTab);
   
   // Common state
   const [loading, setLoading] = useState(true);
@@ -2757,47 +2761,55 @@ const UserManagement = () => {
       <PageHeader 
         icon={<PersonSearch />}
         title="User Management"
-        subtitle="Manage LMS users - find missing CRM contacts or analyze users by domain"
+        subtitle="Manage LMS users - onboarding, group membership, and offboarding"
       />
 
-      {/* Tabs */}
+      {/* Tabs - Grouped by workflow: Onboard → Match → Search → Groups → Offboard */}
       <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
         <Tabs value={activeTab} onChange={(e, v) => setActiveTab(v)} variant="scrollable" scrollButtons="auto">
+          {/* ONBOARDING: Add CRM contacts to LMS */}
           <Tab 
-            icon={<SearchIcon />} 
+            icon={<PersonAddIcon />} 
             iconPosition="start" 
-            label="Missing CRM Users" 
+            label="Add to LMS" 
           />
+          {/* MATCHING: Link orphaned users to partners */}
           <Tab 
             icon={<DomainIcon />} 
             iconPosition="start" 
-            label="Domain Analysis" 
+            label="Domain Matching" 
           />
+          {/* GROUP CREATION: Partners missing LMS groups */}
           <Tab 
             icon={<GroupWorkIcon />} 
             iconPosition="start" 
-            label={`Partners Without Groups${partnersWithoutGroups.length > 0 ? ` (${partnersWithoutGroups.length})` : ''}`}
+            label={`Create Groups${partnersWithoutGroups.length > 0 ? ` (${partnersWithoutGroups.length})` : ''}`}
           />
+          {/* GROUP AUDIT: Ensure users are in correct groups */}
           <Tab 
             icon={<BuildIcon />} 
             iconPosition="start" 
-            label="Contact Group Audit" 
+            label="Group Audit" 
           />
+          {/* ALL PARTNERS: Sync to All Partners group */}
           <Tab 
             icon={<PublicIcon />} 
             iconPosition="start" 
-            label="All Partners Sync" 
+            label="All Partners Group" 
           />
+          {/* ORPHANS: Unlinked users needing partner assignment */}
           <Tab 
             icon={<PersonOffIcon />} 
             iconPosition="start" 
-            label={`Orphan Discovery${orphanSummary?.totalOrphans > 0 ? ` (${orphanSummary.totalOrphans})` : ''}`}
+            label={`Orphans${orphanSummary?.totalOrphans > 0 ? ` (${orphanSummary.totalOrphans})` : ''}`}
           />
+          {/* SEARCH: Find specific users */}
           <Tab 
             icon={<PersonSearch />} 
             iconPosition="start" 
             label="User Search" 
           />
+          {/* OFFBOARDING: Remove deactivated users */}
           <Tab 
             icon={<RemoveCircleOutlineIcon />} 
             iconPosition="start" 
@@ -2806,7 +2818,7 @@ const UserManagement = () => {
         </Tabs>
       </Box>
 
-      {/* Tab 0: Missing CRM Users */}
+      {/* Tab 0: Add to LMS - Find CRM contacts missing from LMS and add them */}
       {activeTab === 0 && (
         <>
           <Box sx={{ mb: 3 }}>
@@ -3296,7 +3308,7 @@ const UserManagement = () => {
         </>
       )}
 
-      {/* Tab 2: Partners Without Groups */}
+      {/* Tab 2: Create Groups - Partners without LMS groups */}
       {activeTab === 2 && (
         <>
           <Box sx={{ mb: 3, display: 'flex', gap: 2, alignItems: 'center' }}>
@@ -3687,7 +3699,7 @@ const UserManagement = () => {
         </>
       )}
 
-      {/* Tab 3: Contact Group Audit */}
+      {/* Tab 3: Group Audit - Ensure users are in correct partner groups */}
       {activeTab === 3 && (
         <>
           <Box sx={{ mb: 3, display: 'flex', justifyContent: 'flex-end' }}>
@@ -4019,7 +4031,7 @@ const UserManagement = () => {
         </>
       )}
 
-      {/* Tab 4: All Partners Sync */}
+      {/* Tab 4: All Partners Group - Sync users to the All Partners group */}
       {activeTab === 4 && (
         <>
           <Box sx={{ mb: 3, display: 'flex', justifyContent: 'flex-end' }}>
@@ -4632,7 +4644,7 @@ const UserManagement = () => {
         </>
       )}
 
-      {/* Tab 5: Orphan Discovery */}
+      {/* Tab 5: Orphans - LMS users not linked to any partner */}
       {activeTab === 5 && (
         <>
           <Alert severity="info" sx={{ mb: 3 }}>
@@ -4972,7 +4984,7 @@ const UserManagement = () => {
         </>
       )}
 
-      {/* Tab 6: User Search */}
+      {/* Tab 6: User Search - Find specific users */}
       {activeTab === 6 && (
         <>
           {/* Search Input */}
@@ -5414,7 +5426,7 @@ const UserManagement = () => {
         </>
       )}
 
-      {/* Tab 7: Offboarding */}
+      {/* Tab 7: Offboarding - Remove deactivated users */}
       {activeTab === 7 && (
         <>
           {/* Action Bar */}
