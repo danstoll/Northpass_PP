@@ -70,6 +70,16 @@ const METRIC_DEFINITIONS = {
       'Potential future NPCU points'
     ]
   },
+  expiredCerts: {
+    title: 'Expired Certifications',
+    description: 'Team members whose certifications have expired and need renewal.',
+    details: [
+      'Certifications expire 24 months after completion (12 months for GTM)',
+      'Expired certifications do NOT count towards NPCU totals',
+      'Users must retake the certification to restore NPCU',
+      'Shows users with ONLY expired certs (no active ones)'
+    ]
+  },
   completed: {
     title: 'Completed',
     description: 'Total course completions across all team members.',
@@ -427,6 +437,7 @@ const CompanyWidget = ({ groupName, tier }) => {
   const [groupData, setGroupData] = useState(null);
   const [users, setUsers] = useState([]);
   const [inProgressUsers, setInProgressUsers] = useState([]);  // Users with in-progress courses (no certs yet)
+  const [expiredUsers, setExpiredUsers] = useState([]);  // Users with only expired certifications
   const [totalNPCU, setTotalNPCU] = useState(0);
   const [certifiedUsers, setCertifiedUsers] = useState(0);
   const [tierRequirement, setTierRequirement] = useState(20);
@@ -439,6 +450,7 @@ const CompanyWidget = ({ groupName, tier }) => {
   const [sortBy, setSortBy] = useState('npcu');
   const [expandedUserId, setExpandedUserId] = useState(null);
   const [expandedInProgressUserId, setExpandedInProgressUserId] = useState(null);  // For in-progress section
+  const [expandedExpiredUserId, setExpandedExpiredUserId] = useState(null);  // For expired section
   const [totalLmsUsers, setTotalLmsUsers] = useState(0);
   
   // Learning activity summary
@@ -619,6 +631,7 @@ const CompanyWidget = ({ groupName, tier }) => {
       // Set all state from database response
       setUsers(processedUsers);
       setInProgressUsers(data.inProgressUsers || []);  // Users with in-progress courses (no certs yet)
+      setExpiredUsers(data.expiredUsers || []);  // Users with only expired certifications
       setTotalNPCU(data.totals.totalNPCU);
       setCertifiedUsers(data.totals.certifiedUsers);
       setCertificationBreakdown(data.certificationBreakdown || {});
@@ -628,7 +641,8 @@ const CompanyWidget = ({ groupName, tier }) => {
         totalEnrolled: data.totals.totalEnrolled,
         totalInProgress: data.totals.totalInProgress,
         totalCompleted: data.totals.totalCompleted,
-        totalCertifications: data.totals.totalCertifications
+        totalCertifications: data.totals.totalCertifications,
+        totalExpiredCertifications: data.totals.totalExpiredCertifications || 0
       });
       
       // Final step
@@ -1072,8 +1086,79 @@ const CompanyWidget = ({ groupName, tier }) => {
         </div>
       )}
 
+      {/* Expired Certifications Section */}
+      {expiredUsers.length > 0 && (
+        <div className="users-list expired-section">
+          <div className="users-list-header">
+            <h3>
+              ⏰ Expired Certifications ({expiredUsers.length})
+              <InfoTooltip metricKey="expiredCerts" />
+            </h3>
+          </div>
+          <p className="section-description">
+            Team members whose certifications have expired and need to be renewed. Expired certifications do not count towards the partner's NPCU total.
+          </p>
+          <div className="user-cards-grid">
+            {expiredUsers.map(user => {
+              const isExpanded = expandedExpiredUserId === user.id;
+              const totalExpiredNPCU = (user.expiredCertifications || []).reduce((sum, c) => sum + (c.npcu || 0), 0);
+              return (
+                <div 
+                  key={user.id} 
+                  className={`user-card-compact expired-card ${isExpanded ? 'expanded' : ''}`}
+                  onClick={() => setExpandedExpiredUserId(isExpanded ? null : user.id)}
+                >
+                  <div className="user-card-top">
+                    <div className="user-name-email">
+                      <h4>{user.name}</h4>
+                      <p className="user-email">{user.email}</p>
+                    </div>
+                    <div className="npcu-badge expired-badge" title="Expired certifications">
+                      {user.expiredCertificationCount}
+                    </div>
+                  </div>
+                  
+                  <div className="user-mini-stats">
+                    <span className="mini-stat expired" title="Expired Certifications">⏰ {user.expiredCertificationCount} expired</span>
+                    <span className="mini-stat" title="Lost NPCU (needs renewal)">
+                      ⚠️ -{totalExpiredNPCU} NPCU
+                    </span>
+                    <span className="mini-stat last-login" title={`Last login: ${formatLastLogin(user.lastLoginAt)}`}>
+                      🕐 {formatLastLogin(user.lastLoginAt)}
+                    </span>
+                    <span className="expand-icon">{isExpanded ? '▲' : '▼'}</span>
+                  </div>
+                  
+                  {user.expiredCertifications && user.expiredCertifications.length > 0 && (
+                    <div className={`user-certs-mini ${isExpanded ? 'expanded' : ''}`}>
+                      {(isExpanded ? user.expiredCertifications : user.expiredCertifications.slice(0, 2)).map((cert, index) => (
+                        <div key={index} className={`cert-tag expired-tag ${isExpanded ? 'cert-tag-full' : ''}`}>
+                          <span className="cert-tag-name">
+                            {isExpanded ? cert.name : (cert.name.length > 30 ? cert.name.substring(0, 30) + '...' : cert.name)}
+                          </span>
+                          <span className="cert-tag-expiry">
+                            Expired {new Date(cert.expiredAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                      ))}
+                      {!isExpanded && user.expiredCertifications.length > 2 && (
+                        <div className="cert-more">+{user.expiredCertifications.length - 2} more</div>
+                      )}
+                    </div>
+                  )}
+                  
+                  <div className="renewal-cta">
+                    🔄 Renewal required to restore NPCU
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* No Activity Message - shown when no certified or in-progress users */}
-      {users.length === 0 && inProgressUsers.length === 0 && (
+      {users.length === 0 && inProgressUsers.length === 0 && expiredUsers.length === 0 && (
         <div className="no-activity-section">
           <div className="no-activity-content">
             <div className="no-activity-icon">📭</div>

@@ -1130,4 +1130,368 @@ router.get('/partners-for-selection', async (req, res) => {
   }
 });
 
+// ============================================
+// Sync Failures & Soft-Delete Management
+// ============================================
+
+// Get recent sync failures
+router.get('/sync-failures', async (req, res) => {
+  try {
+    const { limit = 100, entityType, syncType, unresolvedOnly = 'false' } = req.query;
+    
+    let sql = `
+      SELECT * FROM sync_failures
+      WHERE 1=1
+    `;
+    const params = [];
+    
+    if (entityType) {
+      sql += ' AND entity_type = ?';
+      params.push(entityType);
+    }
+    
+    if (syncType) {
+      sql += ' AND sync_type = ?';
+      params.push(syncType);
+    }
+    
+    if (unresolvedOnly === 'true') {
+      sql += ' AND resolved_at IS NULL';
+    }
+    
+    sql += ' ORDER BY occurred_at DESC LIMIT ?';
+    params.push(parseInt(limit));
+    
+    const failures = await query(sql, params);
+    
+    // Get summary stats
+    const summary = await query(`
+      SELECT 
+        entity_type,
+        failure_reason,
+        COUNT(*) as count,
+        MAX(occurred_at) as last_occurred
+      FROM sync_failures
+      WHERE resolved_at IS NULL
+      GROUP BY entity_type, failure_reason
+      ORDER BY count DESC
+    `);
+    
+    res.json({ failures, summary, total: failures.length });
+  } catch (error) {
+    console.error('Get sync failures error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get soft-deleted (inactive) groups
+router.get('/deleted-groups', async (req, res) => {
+  try {
+    const deletedGroups = await query(`
+      SELECT 
+        g.id,
+        g.name,
+        g.is_active,
+        g.deleted_at,
+        g.deletion_reason,
+        g.last_api_check,
+        g.partner_id,
+        p.account_name as partner_name,
+        p.partner_tier,
+        p.is_active as partner_is_active,
+        (SELECT COUNT(*) FROM lms_group_members WHERE group_id = g.id) as member_count
+      FROM lms_groups g
+      LEFT JOIN partners p ON p.id = g.partner_id
+      WHERE g.is_active = FALSE
+      ORDER BY g.deleted_at DESC
+    `);
+    
+    res.json({ 
+      deletedGroups,
+      total: deletedGroups.length
+    });
+  } catch (error) {
+    console.error('Get deleted groups error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get users who need to be removed from "All Partners" group
+// (users in soft-deleted groups or deactivated partners)
+router.get('/users-needing-offboard', async (req, res) => {
+  try {
+    // Get "All Partners" group ID
+    const [allPartnersGroup] = await query(`
+      SELECT id FROM lms_groups WHERE LOWER(name) = 'all partners' LIMIT 1
+    `);
+    
+    if (!allPartnersGroup) {
+      return res.status(404).json({ error: '"All Partners" group not found' });
+    }
+    
+    // Find users who are in All Partners but their partner group is deleted or partner is inactive
+    const usersToOffboard = await query(`
+      SELECT 
+        u.id as user_id,
+        u.email,
+        CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')) as name,
+        u.is_active as user_is_active,
+        u.removed_from_all_partners,
+        gm.group_id as current_partner_group_id,
+        g.name as partner_group_name,
+        g.is_active as group_is_active,
+        g.deleted_at as group_deleted_at,
+        g.deletion_reason,
+        p.id as partner_id,
+        p.account_name,
+        p.is_active as partner_is_active,
+        p.deleted_at as partner_deleted_at
+      FROM lms_group_members apm
+      JOIN lms_users u ON u.id = apm.user_id
+      LEFT JOIN lms_group_members gm ON gm.user_id = u.id AND gm.group_id != ?
+      LEFT JOIN lms_groups g ON g.id = gm.group_id AND g.partner_id IS NOT NULL
+      LEFT JOIN partners p ON p.id = g.partner_id
+      WHERE apm.group_id = ?
+        AND (
+          g.is_active = FALSE 
+          OR p.is_active = FALSE
+          OR u.is_active = FALSE
+        )
+        AND (u.removed_from_all_partners IS NULL OR u.removed_from_all_partners = FALSE)
+      ORDER BY p.account_name, u.first_name
+    `, [allPartnersGroup.id, allPartnersGroup.id]);
+    
+    // Group by reason
+    const byReason = {
+      groupDeleted: usersToOffboard.filter(u => u.group_is_active === 0),
+      partnerInactive: usersToOffboard.filter(u => u.partner_is_active === 0 && u.group_is_active !== 0),
+      userInactive: usersToOffboard.filter(u => u.user_is_active === 0 && u.partner_is_active !== 0 && u.group_is_active !== 0)
+    };
+    
+    res.json({
+      usersToOffboard,
+      total: usersToOffboard.length,
+      allPartnersGroupId: allPartnersGroup.id,
+      byReason: {
+        groupDeleted: byReason.groupDeleted.length,
+        partnerInactive: byReason.partnerInactive.length,
+        userInactive: byReason.userInactive.length
+      }
+    });
+  } catch (error) {
+    console.error('Get users needing offboard error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Resolve/dismiss sync failures
+router.post('/sync-failures/resolve', async (req, res) => {
+  try {
+    const { failureIds, resolutionAction } = req.body;
+    
+    if (!failureIds || !Array.isArray(failureIds) || failureIds.length === 0) {
+      return res.status(400).json({ error: 'failureIds array is required' });
+    }
+    
+    await query(`
+      UPDATE sync_failures 
+      SET resolved_at = NOW(), resolution_action = ?
+      WHERE id IN (?)
+    `, [resolutionAction || 'manually_resolved', failureIds]);
+    
+    res.json({ success: true, resolved: failureIds.length });
+  } catch (error) {
+    console.error('Resolve sync failures error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Reactivate a soft-deleted group (if it was deleted in error)
+router.post('/groups/:groupId/reactivate', async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    
+    const [group] = await query('SELECT * FROM lms_groups WHERE id = ?', [groupId]);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+    
+    await query(`
+      UPDATE lms_groups 
+      SET is_active = TRUE, deleted_at = NULL, deletion_reason = NULL
+      WHERE id = ?
+    `, [groupId]);
+    
+    res.json({ success: true, group: { ...group, is_active: true, deleted_at: null } });
+  } catch (error) {
+    console.error('Reactivate group error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Hard delete a soft-deleted group (remove from database completely)
+router.delete('/groups/:groupId/purge', async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    
+    const [group] = await query('SELECT * FROM lms_groups WHERE id = ?', [groupId]);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+    
+    if (group.is_active !== false && group.is_active !== 0) {
+      return res.status(400).json({ error: 'Cannot purge an active group - soft-delete it first' });
+    }
+    
+    // Remove memberships first
+    const memberCount = await query('SELECT COUNT(*) as count FROM lms_group_members WHERE group_id = ?', [groupId]);
+    await query('DELETE FROM lms_group_members WHERE group_id = ?', [groupId]);
+    await query('DELETE FROM lms_groups WHERE id = ?', [groupId]);
+    
+    res.json({ 
+      success: true, 
+      purged: { 
+        groupId, 
+        groupName: group.name, 
+        membersRemoved: memberCount[0]?.count || 0 
+      }
+    });
+  } catch (error) {
+    console.error('Purge group error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Deactivate a user and remove from All Partners group
+router.post('/users/:userId/deactivate', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { reason = 'manual_deactivation' } = req.body;
+    
+    const [user] = await query('SELECT * FROM lms_users WHERE id = ?', [userId]);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Mark user as inactive
+    await query(`
+      UPDATE lms_users 
+      SET is_active = FALSE, deactivated_at = NOW(), deactivation_reason = ?
+      WHERE id = ?
+    `, [reason, userId]);
+    
+    // Get "All Partners" group
+    const [allPartnersGroup] = await query(`
+      SELECT id FROM lms_groups WHERE LOWER(name) = 'all partners' LIMIT 1
+    `);
+    
+    let removedFromAllPartners = false;
+    if (allPartnersGroup) {
+      // Check if user is in All Partners
+      const [membership] = await query(
+        'SELECT * FROM lms_group_members WHERE group_id = ? AND user_id = ?',
+        [allPartnersGroup.id, userId]
+      );
+      
+      if (membership) {
+        // Remove from All Partners group via Northpass API
+        try {
+          const response = await fetch(`https://api.northpass.com/v2/groups/${allPartnersGroup.id}/relationships/people`, {
+            method: 'DELETE',
+            headers: {
+              'X-Api-Key': API_KEY,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              data: [{ type: 'people', id: userId }]
+            })
+          });
+          
+          if (response.ok || response.status === 404) {
+            // Remove from local DB
+            await query('DELETE FROM lms_group_members WHERE group_id = ? AND user_id = ?', 
+              [allPartnersGroup.id, userId]);
+            await query('UPDATE lms_users SET removed_from_all_partners = TRUE WHERE id = ?', [userId]);
+            removedFromAllPartners = true;
+          }
+        } catch (e) {
+          console.error(`Failed to remove user from All Partners via API: ${e.message}`);
+        }
+      }
+    }
+    
+    res.json({ 
+      success: true, 
+      user: { id: userId, email: user.email },
+      removedFromAllPartners
+    });
+  } catch (error) {
+    console.error('Deactivate user error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Batch offboard users from All Partners group
+router.post('/offboard-users', async (req, res) => {
+  try {
+    const { userIds } = req.body;
+    
+    if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({ error: 'userIds array is required' });
+    }
+    
+    // Get "All Partners" group
+    const [allPartnersGroup] = await query(`
+      SELECT id FROM lms_groups WHERE LOWER(name) = 'all partners' LIMIT 1
+    `);
+    
+    if (!allPartnersGroup) {
+      return res.status(404).json({ error: '"All Partners" group not found' });
+    }
+    
+    const results = { removed: 0, failed: 0, errors: [] };
+    
+    // Process in batches of 20
+    for (let i = 0; i < userIds.length; i += 20) {
+      const batch = userIds.slice(i, i + 20);
+      
+      try {
+        const response = await fetch(`https://api.northpass.com/v2/groups/${allPartnersGroup.id}/relationships/people`, {
+          method: 'DELETE',
+          headers: {
+            'X-Api-Key': API_KEY,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            data: batch.map(id => ({ type: 'people', id: String(id) }))
+          })
+        });
+        
+        if (response.ok || response.status === 404) {
+          // Remove from local DB - need to properly handle array in IN clause
+          const placeholders = batch.map(() => '?').join(',');
+          await query(`DELETE FROM lms_group_members WHERE group_id = ? AND user_id IN (${placeholders})`, 
+            [allPartnersGroup.id, ...batch]);
+          await query(`UPDATE lms_users SET removed_from_all_partners = TRUE WHERE id IN (${placeholders})`, batch);
+          results.removed += batch.length;
+        } else {
+          results.failed += batch.length;
+          results.errors.push({ batch: `${i}-${i + batch.length}`, status: response.status });
+        }
+      } catch (e) {
+        results.failed += batch.length;
+        results.errors.push({ batch: `${i}-${i + batch.length}`, error: e.message });
+      }
+      
+      // Rate limit
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    
+    res.json({ success: true, results });
+  } catch (error) {
+    console.error('Batch offboard users error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;

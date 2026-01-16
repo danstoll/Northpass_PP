@@ -932,22 +932,69 @@ async function syncGroupsIncremental(logId, onProgress) {
 }
 
 /**
+ * Log a sync failure to the database for tracking
+ */
+async function logSyncFailure(syncType, entityType, entityId, entityName, reason, httpStatus = null, errorDetails = null) {
+  try {
+    await query(`
+      INSERT INTO sync_failures (sync_type, entity_type, entity_id, entity_name, failure_reason, http_status, error_details)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [syncType, entityType, entityId, entityName, reason, httpStatus, errorDetails]);
+  } catch (err) {
+    // Table might not exist yet, just log to console
+    console.error(`  Could not log sync failure: ${err.message}`);
+  }
+}
+
+/**
+ * Mark a group as deleted/inactive (soft delete)
+ */
+async function softDeleteGroup(groupId, groupName, reason) {
+  try {
+    await query(`
+      UPDATE lms_groups 
+      SET is_active = FALSE, 
+          deleted_at = NOW(), 
+          deletion_reason = ?,
+          last_api_check = NOW()
+      WHERE id = ?
+    `, [reason, groupId]);
+    console.log(`  ⚠️ Soft-deleted group "${groupName}" (${groupId}): ${reason}`);
+    return true;
+  } catch (err) {
+    console.error(`  Failed to soft-delete group ${groupId}: ${err.message}`);
+    return false;
+  }
+}
+
+/**
  * Sync group memberships (optimized with count comparison)
  * Only syncs groups where member count has changed
+ * Now tracks which groups fail and why, with soft-delete support
  */
 async function syncGroupMembers(logId, onProgress) {
   console.log('👥 Syncing group memberships (smart mode)...');
-  const stats = { processed: 0, created: 0, updated: 0, failed: 0, skipped: 0, unchanged: 0 };
+  const stats = { 
+    processed: 0, 
+    created: 0, 
+    updated: 0, 
+    failed: 0, 
+    skipped: 0, 
+    unchanged: 0,
+    softDeleted: 0,
+    failedGroups: [] // Track which groups failed and why
+  };
 
   try {
-    // Only sync partner groups (those linked to partners) + the special "All Partners" group
+    // Only sync ACTIVE partner groups (those linked to partners) + the special "All Partners" group
     const groups = await query(`
-      SELECT g.id, g.name, g.user_count as stored_count FROM lms_groups g
-      WHERE g.partner_id IS NOT NULL 
-         OR LOWER(g.name) = 'all partners'
+      SELECT g.id, g.name, g.user_count as stored_count, g.partner_id 
+      FROM lms_groups g
+      WHERE (g.partner_id IS NOT NULL OR LOWER(g.name) = 'all partners')
+        AND (g.is_active = TRUE OR g.is_active IS NULL)
       ORDER BY g.name
     `);
-    console.log(`📥 Checking ${groups.length} partner groups for membership changes...`);
+    console.log(`📥 Checking ${groups.length} active partner groups for membership changes...`);
 
     // Fetch current counts from Northpass API to compare
     // We do this in batches to be more efficient
@@ -968,7 +1015,29 @@ async function syncGroupMembers(logId, onProgress) {
             }
           });
           
+          // Update last_api_check timestamp
+          await query('UPDATE lms_groups SET last_api_check = NOW() WHERE id = ?', [group.id]);
+          
           if (!response.ok) {
+            const statusCode = response.status;
+            let reason;
+            
+            if (statusCode === 404) {
+              reason = 'Group not found in LMS (deleted)';
+              // Soft-delete the group instead of hard fail
+              await softDeleteGroup(group.id, group.name, reason);
+              stats.softDeleted++;
+            } else if (statusCode === 403) {
+              reason = 'Access denied (permissions issue)';
+            } else if (statusCode === 429) {
+              reason = 'Rate limited';
+            } else {
+              reason = `HTTP ${statusCode}`;
+            }
+            
+            // Log the failure
+            await logSyncFailure('group_members', 'group', group.id, group.name, reason, statusCode);
+            stats.failedGroups.push({ id: group.id, name: group.name, reason, status: statusCode });
             stats.failed++;
             continue;
           }
@@ -987,8 +1056,10 @@ async function syncGroupMembers(logId, onProgress) {
           // Small delay to avoid rate limits
           await new Promise(resolve => setTimeout(resolve, 50));
         } catch (e) {
-          // If we can't check, sync it to be safe
-          groupsToSync.push(group);
+          // Network error or other exception - log but still try to sync
+          await logSyncFailure('group_members', 'group', group.id, group.name, `Exception: ${e.message}`);
+          stats.failedGroups.push({ id: group.id, name: group.name, reason: e.message, status: null });
+          groupsToSync.push(group); // Try to sync anyway
         }
       }
       
@@ -997,7 +1068,19 @@ async function syncGroupMembers(logId, onProgress) {
       }
     }
     
-    console.log(`📊 Found ${groupsToSync.length} groups with membership changes (${stats.unchanged} unchanged)`);
+    console.log(`📊 Found ${groupsToSync.length} groups with membership changes (${stats.unchanged} unchanged, ${stats.softDeleted} soft-deleted)`);
+    
+    // Log summary of failures if any
+    if (stats.failedGroups.length > 0) {
+      console.log(`⚠️ ${stats.failedGroups.length} groups had API errors:`);
+      // Show first 10 failures
+      stats.failedGroups.slice(0, 10).forEach(g => {
+        console.log(`   - ${g.name}: ${g.reason}`);
+      });
+      if (stats.failedGroups.length > 10) {
+        console.log(`   ... and ${stats.failedGroups.length - 10} more (see sync_failures table)`);
+      }
+    }
     
     // Now sync only the groups that need updating
     for (let i = 0; i < groupsToSync.length; i++) {
@@ -1043,9 +1126,9 @@ async function syncGroupMembers(logId, onProgress) {
           }
         }
 
-        // Update user count
+        // Update user count and mark as active (in case it was previously soft-deleted)
         await query(
-          'UPDATE lms_groups SET user_count = ? WHERE id = ?',
+          'UPDATE lms_groups SET user_count = ?, is_active = TRUE, deleted_at = NULL, deletion_reason = NULL WHERE id = ?',
           [memberCount, group.id]
         );
         stats.updated++;
@@ -1840,5 +1923,8 @@ module.exports = {
   getApiHealthStatus,
   NorthpassApiError,
   // Low-level API function for external use
-  northpassRequest
+  northpassRequest,
+  // Sync failure tracking
+  logSyncFailure,
+  softDeleteGroup
 };

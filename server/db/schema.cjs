@@ -6,7 +6,7 @@
 const { query, transaction, getPool } = require('./connection.cjs');
 const crypto = require('crypto');
 
-const SCHEMA_VERSION = 23;
+const SCHEMA_VERSION = 24;
 
 /**
  * Create all database tables
@@ -1522,6 +1522,131 @@ Get started by completing your certifications to help your team meet NPCU goals.
       }
     }
     
+    // Version 24: Add soft-delete and activity tracking for LMS groups and users
+    if (currentVersion < 24) {
+      console.log('📦 Running v24 migration: Add soft-delete and activity tracking...');
+      
+      // Add is_active and deleted tracking to lms_groups
+      try {
+        await query(`ALTER TABLE lms_groups ADD COLUMN is_active BOOLEAN DEFAULT TRUE AFTER user_count`);
+        console.log('  ✓ Added lms_groups.is_active column');
+      } catch (err) {
+        if (!err.message.includes('Duplicate column')) {
+          console.log(`  - lms_groups.is_active: ${err.message}`);
+        }
+      }
+      
+      try {
+        await query(`ALTER TABLE lms_groups ADD COLUMN deleted_at TIMESTAMP NULL AFTER is_active`);
+        console.log('  ✓ Added lms_groups.deleted_at column');
+      } catch (err) {
+        if (!err.message.includes('Duplicate column')) {
+          console.log(`  - lms_groups.deleted_at: ${err.message}`);
+        }
+      }
+      
+      try {
+        await query(`ALTER TABLE lms_groups ADD COLUMN deletion_reason VARCHAR(255) NULL AFTER deleted_at`);
+        console.log('  ✓ Added lms_groups.deletion_reason column');
+      } catch (err) {
+        if (!err.message.includes('Duplicate column')) {
+          console.log(`  - lms_groups.deletion_reason: ${err.message}`);
+        }
+      }
+      
+      try {
+        await query(`ALTER TABLE lms_groups ADD COLUMN last_api_check TIMESTAMP NULL AFTER deletion_reason`);
+        console.log('  ✓ Added lms_groups.last_api_check column');
+      } catch (err) {
+        if (!err.message.includes('Duplicate column')) {
+          console.log(`  - lms_groups.last_api_check: ${err.message}`);
+        }
+      }
+      
+      try {
+        await query(`ALTER TABLE lms_groups ADD INDEX idx_is_active (is_active)`);
+        console.log('  ✓ Added lms_groups.is_active index');
+      } catch (err) {
+        if (!err.message.includes('Duplicate key name')) {
+          console.log(`  - lms_groups index: ${err.message}`);
+        }
+      }
+      
+      // Add is_active and status tracking to lms_users
+      try {
+        await query(`ALTER TABLE lms_users ADD COLUMN is_active BOOLEAN DEFAULT TRUE AFTER synced_at`);
+        console.log('  ✓ Added lms_users.is_active column');
+      } catch (err) {
+        if (!err.message.includes('Duplicate column')) {
+          console.log(`  - lms_users.is_active: ${err.message}`);
+        }
+      }
+      
+      try {
+        await query(`ALTER TABLE lms_users ADD COLUMN deactivated_at TIMESTAMP NULL AFTER is_active`);
+        console.log('  ✓ Added lms_users.deactivated_at column');
+      } catch (err) {
+        if (!err.message.includes('Duplicate column')) {
+          console.log(`  - lms_users.deactivated_at: ${err.message}`);
+        }
+      }
+      
+      try {
+        await query(`ALTER TABLE lms_users ADD COLUMN deactivation_reason VARCHAR(255) NULL AFTER deactivated_at`);
+        console.log('  ✓ Added lms_users.deactivation_reason column');
+      } catch (err) {
+        if (!err.message.includes('Duplicate column')) {
+          console.log(`  - lms_users.deactivation_reason: ${err.message}`);
+        }
+      }
+      
+      try {
+        await query(`ALTER TABLE lms_users ADD COLUMN removed_from_all_partners BOOLEAN DEFAULT FALSE AFTER deactivation_reason`);
+        console.log('  ✓ Added lms_users.removed_from_all_partners column');
+      } catch (err) {
+        if (!err.message.includes('Duplicate column')) {
+          console.log(`  - lms_users.removed_from_all_partners: ${err.message}`);
+        }
+      }
+      
+      try {
+        await query(`ALTER TABLE lms_users ADD INDEX idx_is_active (is_active)`);
+        console.log('  ✓ Added lms_users.is_active index');
+      } catch (err) {
+        if (!err.message.includes('Duplicate key name')) {
+          console.log(`  - lms_users index: ${err.message}`);
+        }
+      }
+      
+      // Create sync_failures table to track API failures
+      try {
+        await query(`
+          CREATE TABLE IF NOT EXISTS sync_failures (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            sync_type VARCHAR(50) NOT NULL,
+            entity_type VARCHAR(50) NOT NULL,
+            entity_id VARCHAR(100) NOT NULL,
+            entity_name VARCHAR(255),
+            failure_reason VARCHAR(255) NOT NULL,
+            http_status INT,
+            error_details TEXT,
+            occurred_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            resolved_at TIMESTAMP NULL,
+            resolution_action VARCHAR(100),
+            INDEX idx_sync_type (sync_type),
+            INDEX idx_entity (entity_type, entity_id),
+            INDEX idx_occurred (occurred_at),
+            INDEX idx_unresolved (resolved_at)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        console.log('  ✓ Created sync_failures table');
+      } catch (err) {
+        console.log(`  - sync_failures table: ${err.message}`);
+      }
+      
+      console.log('  ✓ Soft-delete and activity tracking migration complete');
+    }
+
     await query('UPDATE schema_info SET version = ? WHERE id = 1', [SCHEMA_VERSION]);
     console.log(`✅ Migrations complete, now at v${SCHEMA_VERSION}`);
   }

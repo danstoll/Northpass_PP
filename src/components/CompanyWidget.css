@@ -1874,3 +1874,55 @@
   border-top: 1px dashed rgba(255, 107, 53, 0.3);
   text-align: center;
 }
+
+/* ====== Expired Certifications Section Styles ====== */
+.expired-section {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 2px dashed rgba(220, 53, 69, 0.2);
+}
+
+.expired-section h3 {
+  color: #dc3545;
+}
+
+.expired-card {
+  border-left: 3px solid #dc3545 !important;
+  background: linear-gradient(135deg, rgba(220, 53, 69, 0.03) 0%, rgba(255, 255, 255, 1) 100%) !important;
+}
+
+.expired-badge {
+  background: linear-gradient(135deg, #dc3545 0%, #c82333 100%) !important;
+  color: white !important;
+}
+
+.expired-tag {
+  background: linear-gradient(135deg, rgba(220, 53, 69, 0.08) 0%, rgba(220, 53, 69, 0.12) 100%) !important;
+  border: 1px solid rgba(220, 53, 69, 0.2);
+  color: #721c24;
+}
+
+.cert-tag-expiry {
+  font-size: 0.6rem;
+  color: #dc3545;
+  font-weight: 500;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.mini-stat.expired {
+  color: #dc3545;
+  font-weight: 600;
+}
+
+.renewal-cta {
+  font-size: 0.7rem;
+  color: #856404;
+  font-weight: 600;
+  margin-top: 8px;
+  padding: 6px 8px;
+  background: linear-gradient(135deg, rgba(255, 193, 7, 0.15) 0%, rgba(255, 193, 7, 0.25) 100%);
+  border-radius: 4px;
+  text-align: center;
+  border: 1px solid rgba(255, 193, 7, 0.3);
+}

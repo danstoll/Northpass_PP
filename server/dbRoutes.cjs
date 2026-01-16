@@ -2231,7 +2231,9 @@ router.get('/dashboard/group', async (req, res) => {
       
       let userNPCU = 0;
       let userCertCount = 0;
+      let userExpiredCertCount = 0;
       const userCertifications = [];
+      const userExpiredCertifications = [];  // Track expired certifications
       const userInProgressCourses = [];  // Track in-progress courses
       
       // Count all enrollments (total courses user is enrolled in, regardless of status)
@@ -2263,45 +2265,64 @@ router.get('/dashboard/group', async (req, res) => {
           const calculatedExpiry = calculateExpiry(e.completed_at, category);
           const isExpired = isExpiredCert(e.completed_at, category);
           
-          if (e.is_certification && e.npcu_value > 0 && !isExpired) {
+          if (e.is_certification && e.npcu_value > 0) {
             // Use course_id + user_id as unique key to avoid counting duplicates
             const certKey = `${user.id}-${e.course_id}`;
             if (!countedCertifications.has(certKey)) {
               countedCertifications.add(certKey);
               
-              userNPCU += e.npcu_value;
-              userCertCount++;
-              
-              // Add to certification breakdown using certification_category from DB
-              if (certificationBreakdown[category]) {
-                certificationBreakdown[category].count++;
-                certificationBreakdown[category].npcu += e.npcu_value;
-                certificationBreakdown[category].courses.push({
-                  id: e.course_id,
+              if (!isExpired) {
+                // Active certification - counts towards NPCU
+                userNPCU += e.npcu_value;
+                userCertCount++;
+                
+                // Add to certification breakdown using certification_category from DB
+                if (certificationBreakdown[category]) {
+                  certificationBreakdown[category].count++;
+                  certificationBreakdown[category].npcu += e.npcu_value;
+                  certificationBreakdown[category].courses.push({
+                    id: e.course_id,
+                    name: e.course_name,
+                    npcu: e.npcu_value,
+                    completedAt: e.completed_at,
+                    expiresAt: calculatedExpiry,
+                    expiryDate: calculatedExpiry, // alias for frontend compatibility
+                    userId: user.id,
+                    userName: `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.email,
+                    category: category,
+                    categoryLabel: CERT_CATEGORY_LABELS[category] || category
+                  });
+                }
+                
+                userCertifications.push({
+                  id: e.enrollment_id,
+                  courseId: e.course_id,
                   name: e.course_name,
                   npcu: e.npcu_value,
                   completedAt: e.completed_at,
                   expiresAt: calculatedExpiry,
-                  expiryDate: calculatedExpiry, // alias for frontend compatibility
-                  userId: user.id,
-                  userName: `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.email,
+                  status: 'completed',
+                  isValidCourse: true,
+                  category: category,
+                  categoryLabel: CERT_CATEGORY_LABELS[category] || category
+                });
+              } else {
+                // Expired certification - track separately
+                userExpiredCertCount++;
+                userExpiredCertifications.push({
+                  id: e.enrollment_id,
+                  courseId: e.course_id,
+                  name: e.course_name,
+                  npcu: e.npcu_value,
+                  completedAt: e.completed_at,
+                  expiresAt: calculatedExpiry,
+                  expiredAt: calculatedExpiry,
+                  status: 'expired',
+                  isValidCourse: true,
                   category: category,
                   categoryLabel: CERT_CATEGORY_LABELS[category] || category
                 });
               }
-              
-              userCertifications.push({
-                id: e.enrollment_id,
-                courseId: e.course_id,
-                name: e.course_name,
-                npcu: e.npcu_value,
-                completedAt: e.completed_at,
-                expiresAt: calculatedExpiry,
-                status: 'completed',
-                isValidCourse: true,
-                category: category,
-                categoryLabel: CERT_CATEGORY_LABELS[category] || category
-              });
             }
           }
         }
@@ -2324,6 +2345,8 @@ router.get('/dashboard/group', async (req, res) => {
         totalNPCU: userNPCU,
         certificationCount: userCertCount,
         certifications: userCertifications,
+        expiredCertificationCount: userExpiredCertCount,
+        expiredCertifications: userExpiredCertifications,
         inProgressList: userInProgressCourses,  // List of in-progress courses
         enrolledCourses: totalEnrollments,  // Total courses this user is enrolled in
         inProgressCourses: inProgress,
@@ -2335,13 +2358,24 @@ router.get('/dashboard/group', async (req, res) => {
       };
     });
     
-    // Filter to only users with certifications (NPCU > 0)
+    // Filter to only users with active certifications (NPCU > 0)
     const certifiedUsersOnly = processedUsers.filter(u => u.certificationCount > 0);
     
-    // Filter users who have in-progress courses but NO certifications yet
+    // Filter users who have in-progress courses but NO active certifications
     const inProgressUsersOnly = processedUsers.filter(u => 
       u.inProgressCourses > 0 && u.certificationCount === 0
     );
+    
+    // Filter users who ONLY have expired certifications (no active certs, not in other lists)
+    const expiredUsersOnly = processedUsers.filter(u => 
+      u.expiredCertificationCount > 0 && u.certificationCount === 0 && u.inProgressCourses === 0
+    );
+    
+    // Also include users with active certs who ALSO have expired ones (for reference)
+    const usersWithExpiredCerts = processedUsers.filter(u => u.expiredCertificationCount > 0);
+    
+    // Calculate total expired certifications
+    const totalExpiredCertifications = processedUsers.reduce((sum, u) => sum + u.expiredCertificationCount, 0);
     
     // Sort certified users by NPCU descending
     certifiedUsersOnly.sort((a, b) => b.totalNPCU - a.totalNPCU);
@@ -2349,16 +2383,29 @@ router.get('/dashboard/group', async (req, res) => {
     // Sort in-progress users by number of in-progress courses descending
     inProgressUsersOnly.sort((a, b) => b.inProgressCourses - a.inProgressCourses);
     
+    // Sort expired users by number of expired certs descending, then by most recent expiry
+    expiredUsersOnly.sort((a, b) => {
+      if (b.expiredCertificationCount !== a.expiredCertificationCount) {
+        return b.expiredCertificationCount - a.expiredCertificationCount;
+      }
+      // Sort by most recent expiry date
+      const aLatest = a.expiredCertifications[0]?.expiredAt || '';
+      const bLatest = b.expiredCertifications[0]?.expiredAt || '';
+      return new Date(bLatest) - new Date(aLatest);
+    });
+    
     res.json({
       group: {
         id: group.id,
         name: displayName,
         memberCount: users.length,        // Total LMS users in group
-        certifiedCount: certifiedUsersOnly.length,  // Users with certifications
-        inProgressCount: inProgressUsersOnly.length  // Users with in-progress but no certs
+        certifiedCount: certifiedUsersOnly.length,  // Users with active certifications
+        inProgressCount: inProgressUsersOnly.length,  // Users with in-progress but no certs
+        expiredOnlyCount: expiredUsersOnly.length  // Users with ONLY expired certifications
       },
-      users: certifiedUsersOnly,  // Only return users with certifications
+      users: certifiedUsersOnly,  // Only return users with active certifications
       inProgressUsers: inProgressUsersOnly,  // Users with in-progress courses (no certs yet)
+      expiredUsers: expiredUsersOnly,  // Users with ONLY expired certifications
       totals: {
         totalNPCU,
         certifiedUsers,
@@ -2366,6 +2413,7 @@ router.get('/dashboard/group', async (req, res) => {
         totalInProgress,
         totalCompleted,
         totalCertifications,
+        totalExpiredCertifications,
         totalLmsUsers: users.length  // Keep track of total for reference
       },
       certificationBreakdown,  // Use new certification category breakdown

@@ -49,6 +49,7 @@ import {
   Build as BuildIcon,
   Public as PublicIcon,
   PersonOff as PersonOffIcon,
+  RemoveCircleOutline as RemoveCircleOutlineIcon,
   School as SchoolIcon,
   Badge as BadgeIcon,
   Email as EmailIcon,
@@ -654,6 +655,7 @@ const UserManagement = () => {
   const [partnersLoading, setPartnersLoading] = useState(false);
   const [partnerSearchTerm, setPartnerSearchTerm] = useState('');
   const [partnerTierFilter, setPartnerTierFilter] = useState('all');
+  const [partnerStatusFilter, setPartnerStatusFilter] = useState('all'); // 'all', 'active', 'inactive'
   const [selectedPartnersForGroup, setSelectedPartnersForGroup] = useState(new Set());
   const [bulkCreating, setBulkCreating] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0, currentPartner: '' });
@@ -725,6 +727,17 @@ const UserManagement = () => {
   const [addToGroupUserId, setAddToGroupUserId] = useState(null);
   const [selectedGroupToAdd, setSelectedGroupToAdd] = useState(null);
   const [addingToGroup, setAddingToGroup] = useState(false);
+
+  // Tab 7: Offboarding state
+  const [offboardLoading, setOffboardLoading] = useState(false);
+  const [offboardError, setOffboardError] = useState(null);
+  const [offboardData, setOffboardData] = useState(null);
+  const [selectedOffboardUsers, setSelectedOffboardUsers] = useState(new Set());
+  const [offboarding, setOffboarding] = useState(false);
+  const [offboardProgress, setOffboardProgress] = useState({ current: 0, total: 0 });
+  const [offboardResults, setOffboardResults] = useState(null);
+  const [offboardSearchTerm, setOffboardSearchTerm] = useState('');
+  const [offboardReasonFilter, setOffboardReasonFilter] = useState('all');
 
   // Load CRM contacts on mount
   useEffect(() => {
@@ -935,6 +948,19 @@ const UserManagement = () => {
   const createGroupForPartner = async (partner, skipRefresh = false) => {
     const groupName = `ptr_${partner.account_name}`;
     
+    // Warn about inactive partners
+    const isInactive = partner.is_active === false || partner.account_status === 'Inactive';
+    if (isInactive && !skipRefresh) {
+      const confirmed = window.confirm(
+        `⚠️ Warning: "${partner.account_name}" is INACTIVE in Impartner.\n\n` +
+        `Creating an LMS group for an inactive partner is not recommended.\n\n` +
+        `Do you want to proceed anyway?`
+      );
+      if (!confirmed) {
+        return { success: false, error: 'User cancelled - partner is inactive' };
+      }
+    }
+    
     try {
       if (!skipRefresh) {
         setCreatingGroupFor({ partnerId: partner.id, partnerName: partner.account_name });
@@ -984,15 +1010,42 @@ const UserManagement = () => {
     const selectedPartners = filteredPartnersWithoutGroups.filter(p => selectedPartnersForGroup.has(p.id));
     if (selectedPartners.length === 0) return;
     
+    // Check for inactive partners in selection
+    const inactivePartners = selectedPartners.filter(p => p.is_active === false || p.account_status === 'Inactive');
+    if (inactivePartners.length > 0) {
+      const confirmed = window.confirm(
+        `⚠️ Warning: ${inactivePartners.length} of the ${selectedPartners.length} selected partners are INACTIVE in Impartner.\n\n` +
+        `Inactive partners:\n${inactivePartners.slice(0, 5).map(p => `• ${p.account_name}`).join('\n')}` +
+        (inactivePartners.length > 5 ? `\n...and ${inactivePartners.length - 5} more` : '') +
+        `\n\nDo you want to:\n• OK = Skip inactive partners, create only for active\n• Cancel = Abort operation`
+      );
+      if (!confirmed) {
+        return;
+      }
+      // Filter out inactive partners
+      const activePartners = selectedPartners.filter(p => p.is_active !== false && p.account_status !== 'Inactive');
+      if (activePartners.length === 0) {
+        alert('No active partners selected. Operation cancelled.');
+        return;
+      }
+      // Update selection to only active partners
+      setSelectedPartnersForGroup(new Set(activePartners.map(p => p.id)));
+    }
+    
+    // Re-filter after potential selection change
+    const partnersToCreate = filteredPartnersWithoutGroups.filter(p => 
+      selectedPartnersForGroup.has(p.id) && p.is_active !== false && p.account_status !== 'Inactive'
+    );
+    
     setBulkCreating(true);
-    setBulkProgress({ current: 0, total: selectedPartners.length, currentPartner: '' });
+    setBulkProgress({ current: 0, total: partnersToCreate.length, currentPartner: '' });
     setBulkResults(null);
     
     const results = { created: 0, failed: 0, errors: [] };
     
-    for (let i = 0; i < selectedPartners.length; i++) {
-      const partner = selectedPartners[i];
-      setBulkProgress({ current: i + 1, total: selectedPartners.length, currentPartner: partner.account_name });
+    for (let i = 0; i < partnersToCreate.length; i++) {
+      const partner = partnersToCreate[i];
+      setBulkProgress({ current: i + 1, total: partnersToCreate.length, currentPartner: partner.account_name });
       
       const result = await createGroupForPartner(partner, true);
       
@@ -1264,8 +1317,15 @@ const UserManagement = () => {
       filtered = filtered.filter(p => p.partner_tier === partnerTierFilter);
     }
     
+    if (partnerStatusFilter !== 'all') {
+      filtered = filtered.filter(p => {
+        const isActive = p.is_active !== false && p.account_status !== 'Inactive';
+        return partnerStatusFilter === 'active' ? isActive : !isActive;
+      });
+    }
+    
     return filtered;
-  }, [partnersWithoutGroups, partnerSearchTerm, partnerTierFilter]);
+  }, [partnersWithoutGroups, partnerSearchTerm, partnerTierFilter, partnerStatusFilter]);
 
   // Get unique partner tiers for filter
   const partnerTierOptions = useMemo(() => {
@@ -2519,6 +2579,108 @@ const UserManagement = () => {
     setShowCreateCrmDialog(true);
   };
 
+  // ============================================
+  // Tab 7: Offboarding Functions
+  // ============================================
+
+  // Load users that need offboarding
+  const loadOffboardData = async () => {
+    setOffboardLoading(true);
+    setOffboardError(null);
+    setOffboardResults(null);
+    setSelectedOffboardUsers(new Set());
+    
+    try {
+      const response = await fetch('/api/db/maintenance/users-needing-offboard');
+      if (!response.ok) throw new Error('Failed to load offboard data');
+      const data = await response.json();
+      setOffboardData(data);
+    } catch (err) {
+      console.error('Error loading offboard data:', err);
+      setOffboardError(err.message);
+    } finally {
+      setOffboardLoading(false);
+    }
+  };
+
+  // Perform offboarding - remove users from All Partners group
+  const offboardSelectedUsers = async () => {
+    if (selectedOffboardUsers.size === 0) return;
+    
+    const userIds = Array.from(selectedOffboardUsers);
+    
+    setOffboarding(true);
+    setOffboardProgress({ current: 0, total: userIds.length });
+    setOffboardResults(null);
+    
+    try {
+      const response = await fetch('/api/db/maintenance/offboard-users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userIds })
+      });
+      
+      if (!response.ok) throw new Error('Offboard operation failed');
+      const result = await response.json();
+      
+      setOffboardResults(result);
+      setSelectedOffboardUsers(new Set());
+      
+      // Reload data to show updated list
+      await loadOffboardData();
+    } catch (err) {
+      console.error('Offboard error:', err);
+      setOffboardResults({ success: false, error: err.message });
+    } finally {
+      setOffboarding(false);
+    }
+  };
+
+  // Toggle user selection for offboarding
+  const toggleOffboardUser = (userId) => {
+    setSelectedOffboardUsers(prev => {
+      const next = new Set(prev);
+      if (next.has(userId)) {
+        next.delete(userId);
+      } else {
+        next.add(userId);
+      }
+      return next;
+    });
+  };
+
+  // Select all visible offboard users
+  const selectAllOffboardUsers = () => {
+    const visibleUserIds = filteredOffboardUsers.map(u => u.user_id);
+    setSelectedOffboardUsers(new Set(visibleUserIds));
+  };
+
+  // Filter offboard users
+  const filteredOffboardUsers = useMemo(() => {
+    if (!offboardData?.usersToOffboard) return [];
+    let filtered = offboardData.usersToOffboard;
+    
+    if (offboardSearchTerm) {
+      const term = offboardSearchTerm.toLowerCase();
+      filtered = filtered.filter(u => 
+        u.email?.toLowerCase().includes(term) ||
+        u.name?.toLowerCase().includes(term) ||
+        u.account_name?.toLowerCase().includes(term)
+      );
+    }
+    
+    if (offboardReasonFilter !== 'all') {
+      filtered = filtered.filter(u => {
+        if (offboardReasonFilter === 'partnerInactive') return !u.partner_is_active;
+        if (offboardReasonFilter === 'groupDeleted') return !u.group_is_active;
+        if (offboardReasonFilter === 'userInactive') return !u.user_is_active;
+        return true;
+      });
+    }
+    
+    return filtered;
+  }, [offboardData, offboardSearchTerm, offboardReasonFilter]);
+
   // Filter orphan partners
   const filteredOrphanPartners = useMemo(() => {
     if (!orphanSummary?.partners) return [];
@@ -2635,6 +2797,11 @@ const UserManagement = () => {
             icon={<PersonSearch />} 
             iconPosition="start" 
             label="User Search" 
+          />
+          <Tab 
+            icon={<RemoveCircleOutlineIcon />} 
+            iconPosition="start" 
+            label={`Offboarding${offboardData?.total > 0 ? ` (${offboardData.total})` : ''}`}
           />
         </Tabs>
       </Box>
@@ -3153,21 +3320,21 @@ const UserManagement = () => {
               variant={partnersWithoutGroups.length > 0 ? 'warning' : 'success'} 
             />
             <StatCard 
+              icon="✅" 
+              value={partnersWithoutGroups.filter(p => p.is_active !== false && p.account_status !== 'Inactive').length} 
+              label="Active Partners" 
+              variant="success" 
+            />
+            <StatCard 
+              icon="⚠️" 
+              value={partnersWithoutGroups.filter(p => p.is_active === false || p.account_status === 'Inactive').length} 
+              label="Inactive Partners" 
+              variant="error" 
+            />
+            <StatCard 
               icon="⭐" 
               value={partnersWithoutGroups.filter(p => p.partner_tier?.includes('Premier')).length} 
               label="Premier Partners" 
-              variant="default" 
-            />
-            <StatCard 
-              icon="✓" 
-              value={partnersWithoutGroups.filter(p => p.partner_tier?.includes('Select')).length} 
-              label="Select Partners" 
-              variant="default" 
-            />
-            <StatCard 
-              icon="📋" 
-              value={partnersWithoutGroups.filter(p => !p.partner_tier?.includes('Premier') && !p.partner_tier?.includes('Select')).length} 
-              label="Other Tiers" 
               variant="default" 
             />
           </StatsRow>
@@ -3239,6 +3406,17 @@ const UserManagement = () => {
                     onClear={() => setPartnerSearchTerm('')}
                   />
                 </Box>
+                
+                <FilterSelect
+                  label="Status"
+                  value={partnerStatusFilter === 'all' ? '' : partnerStatusFilter}
+                  onChange={(val) => setPartnerStatusFilter(val || 'all')}
+                  options={[
+                    { value: 'active', label: '✅ Active Only' },
+                    { value: 'inactive', label: '⚠️ Inactive Only' }
+                  ]}
+                  minWidth={150}
+                />
                 
                 <FilterSelect
                   label="Tier"
@@ -3389,12 +3567,14 @@ const UserManagement = () => {
                             </Tooltip>
                           </td>
                           <td style={{ textAlign: 'center' }}>
-                            {partner.is_active === false ? (
-                              <Chip label="Inactive" size="small" color="error" variant="outlined" />
-                            ) : partner.impartner_id ? (
-                              <Chip label="Impartner" size="small" color="success" variant="outlined" />
+                            {(partner.is_active === false || partner.account_status === 'Inactive') ? (
+                              <Tooltip title={`Account Status: ${partner.account_status || 'Inactive'}, is_active: ${partner.is_active}`}>
+                                <Chip label="Inactive" size="small" color="error" />
+                              </Tooltip>
                             ) : (
-                              <Chip label="Local Only" size="small" variant="outlined" />
+                              <Tooltip title={`Account Status: ${partner.account_status || 'Active'}`}>
+                                <Chip label="Active" size="small" color="success" variant="outlined" />
+                              </Tooltip>
                             )}
                           </td>
                           <td style={{ textAlign: 'center' }}>
@@ -5231,6 +5411,259 @@ const UserManagement = () => {
               )}
             </Box>
           </Box>
+        </>
+      )}
+
+      {/* Tab 7: Offboarding */}
+      {activeTab === 7 && (
+        <>
+          {/* Action Bar */}
+          <Box sx={{ display: 'flex', gap: 2, mb: 3, alignItems: 'center', flexWrap: 'wrap' }}>
+            <ActionButton 
+              variant="contained"
+              color="primary"
+              onClick={loadOffboardData}
+              loading={offboardLoading}
+              icon={<SearchIcon />}
+            >
+              {offboardLoading ? 'Scanning...' : 'Scan for Offboarding'}
+            </ActionButton>
+            
+            {selectedOffboardUsers.size > 0 && (
+              <ActionButton 
+                variant="contained"
+                color="error"
+                onClick={offboardSelectedUsers}
+                loading={offboarding}
+                icon={<RemoveCircleOutlineIcon />}
+              >
+                {offboarding ? 'Offboarding...' : `Offboard ${selectedOffboardUsers.size} User${selectedOffboardUsers.size > 1 ? 's' : ''}`}
+              </ActionButton>
+            )}
+          </Box>
+
+          {/* Results Alert */}
+          {offboardResults && (
+            <Alert 
+              severity={offboardResults.success !== false ? 'success' : 'error'} 
+              sx={{ mb: 3 }}
+              onClose={() => setOffboardResults(null)}
+            >
+              {offboardResults.success !== false ? (
+                <>
+                  <Typography variant="subtitle2">Offboarding Complete</Typography>
+                  <Typography variant="body2">
+                    Removed {offboardResults.removed || 0} users from All Partners group.
+                    {offboardResults.failed > 0 && ` ${offboardResults.failed} failed.`}
+                  </Typography>
+                </>
+              ) : (
+                <Typography variant="body2">{offboardResults.error || 'Operation failed'}</Typography>
+              )}
+            </Alert>
+          )}
+
+          {/* Error Alert */}
+          {offboardError && (
+            <Alert severity="error" sx={{ mb: 3 }}>
+              {offboardError}
+            </Alert>
+          )}
+
+          {/* Loading State */}
+          {offboardLoading && (
+            <LoadingState message="Scanning for users that need offboarding..." />
+          )}
+
+          {/* Summary Cards */}
+          {offboardData && !offboardLoading && (
+            <>
+              <StatsRow columns={4}>
+                <StatCard 
+                  title="Total Users" 
+                  value={offboardData.total || 0}
+                  subtitle="Users needing offboard"
+                  variant={offboardData.total > 0 ? 'warning' : 'success'}
+                />
+                <StatCard 
+                  title="Inactive Partners" 
+                  value={offboardData.byReason?.partnerInactive || 0}
+                  subtitle="Partner deactivated in CRM"
+                  variant={offboardData.byReason?.partnerInactive > 0 ? 'warning' : 'default'}
+                />
+                <StatCard 
+                  title="Deleted Groups" 
+                  value={offboardData.byReason?.groupDeleted || 0}
+                  subtitle="Group removed from LMS"
+                  variant={offboardData.byReason?.groupDeleted > 0 ? 'warning' : 'default'}
+                />
+                <StatCard 
+                  title="Inactive Users" 
+                  value={offboardData.byReason?.userInactive || 0}
+                  subtitle="User marked inactive"
+                  variant={offboardData.byReason?.userInactive > 0 ? 'warning' : 'default'}
+                />
+              </StatsRow>
+
+              {/* Filters */}
+              {offboardData.total > 0 && (
+                <Card sx={{ p: 2, mb: 3 }}>
+                  <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <SearchInput 
+                      value={offboardSearchTerm}
+                      onChange={setOffboardSearchTerm}
+                      placeholder="Search users..."
+                      sx={{ flex: '1 1 250px', maxWidth: 300 }}
+                    />
+                    <FilterSelect
+                      value={offboardReasonFilter}
+                      onChange={setOffboardReasonFilter}
+                      label="Reason"
+                      options={[
+                        { value: 'all', label: 'All Reasons' },
+                        { value: 'partnerInactive', label: 'Inactive Partner' },
+                        { value: 'groupDeleted', label: 'Deleted Group' },
+                        { value: 'userInactive', label: 'Inactive User' }
+                      ]}
+                    />
+                    <Box sx={{ flex: 1 }} />
+                    <Button 
+                      variant="outlined" 
+                      size="small"
+                      onClick={selectAllOffboardUsers}
+                      disabled={filteredOffboardUsers.length === 0}
+                    >
+                      Select All ({filteredOffboardUsers.length})
+                    </Button>
+                    {selectedOffboardUsers.size > 0 && (
+                      <Button 
+                        variant="outlined" 
+                        size="small"
+                        onClick={() => setSelectedOffboardUsers(new Set())}
+                      >
+                        Clear Selection
+                      </Button>
+                    )}
+                  </Box>
+                </Card>
+              )}
+
+              {/* Users Table */}
+              {filteredOffboardUsers.length > 0 ? (
+                <SectionCard 
+                  title={`Users to Offboard (${filteredOffboardUsers.length})`} 
+                  icon="🚪"
+                >
+                  <Box sx={{ maxHeight: 600, overflowY: 'auto' }}>
+                    {filteredOffboardUsers.map((user) => {
+                      const reason = !user.partner_is_active ? 'Partner Inactive' 
+                        : !user.group_is_active ? 'Group Deleted' 
+                        : !user.user_is_active ? 'User Inactive' 
+                        : 'Unknown';
+                      const reasonColor = !user.partner_is_active ? 'warning' 
+                        : !user.group_is_active ? 'error' 
+                        : 'default';
+                      
+                      return (
+                        <Card 
+                          key={user.user_id} 
+                          sx={{ 
+                            p: 2, 
+                            mb: 1, 
+                            bgcolor: selectedOffboardUsers.has(user.user_id) ? 'action.selected' : 'background.paper',
+                            cursor: 'pointer',
+                            '&:hover': { bgcolor: 'action.hover' }
+                          }}
+                          onClick={() => toggleOffboardUser(user.user_id)}
+                        >
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                            <Checkbox 
+                              checked={selectedOffboardUsers.has(user.user_id)}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={() => toggleOffboardUser(user.user_id)}
+                            />
+                            <Box sx={{ flex: 1 }}>
+                              <Typography variant="subtitle2">{user.name || 'Unknown'}</Typography>
+                              <Typography variant="body2" color="text.secondary">
+                                {user.email}
+                              </Typography>
+                            </Box>
+                            <Box sx={{ textAlign: 'right' }}>
+                              <Typography variant="body2">{user.account_name}</Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                {user.partner_group_name}
+                              </Typography>
+                            </Box>
+                            <Chip 
+                              size="small" 
+                              label={reason}
+                              color={reasonColor}
+                              variant="outlined"
+                            />
+                          </Box>
+                          {user.partner_deleted_at && (
+                            <Typography variant="caption" color="text.secondary" sx={{ ml: 6 }}>
+                              Deactivated: {new Date(user.partner_deleted_at).toLocaleDateString()}
+                            </Typography>
+                          )}
+                        </Card>
+                      );
+                    })}
+                  </Box>
+                </SectionCard>
+              ) : offboardData.total === 0 ? (
+                <SectionCard title="All Clear" icon="✅">
+                  <Box sx={{ textAlign: 'center', py: 4 }}>
+                    <CheckCircleIcon sx={{ fontSize: 60, color: 'success.main', mb: 2 }} />
+                    <Typography variant="h6">No Users Need Offboarding</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      All partner users are properly configured in the LMS.
+                    </Typography>
+                  </Box>
+                </SectionCard>
+              ) : (
+                <Alert severity="info">
+                  No users match the current filters. Try adjusting your search criteria.
+                </Alert>
+              )}
+
+              {/* Info Section */}
+              <Alert severity="info" sx={{ mt: 3 }}>
+                <Typography variant="subtitle2">What is Offboarding?</Typography>
+                <Typography variant="body2" sx={{ mt: 1 }}>
+                  When a partner is deactivated in the CRM or their LMS group is deleted, their users should be 
+                  removed from the <strong>"All Partners"</strong> group. This revokes access to partner-only 
+                  training content while keeping their LMS account and progress intact.
+                </Typography>
+                <Typography variant="body2" sx={{ mt: 1 }}>
+                  Users will still have access to non-partner content in the LMS.
+                </Typography>
+              </Alert>
+            </>
+          )}
+
+          {/* Empty State - No scan yet */}
+          {!offboardData && !offboardLoading && !offboardError && (
+            <SectionCard title="Offboarding Management" icon="🚪">
+              <Box sx={{ textAlign: 'center', py: 4 }}>
+                <RemoveCircleOutlineIcon sx={{ fontSize: 60, color: 'text.secondary', mb: 2 }} />
+                <Typography variant="h6" color="text.secondary" sx={{ mb: 2 }}>
+                  Manage User Offboarding
+                </Typography>
+                <Alert severity="info" sx={{ textAlign: 'left', maxWidth: 600, mx: 'auto' }}>
+                  <Typography variant="body2">
+                    Click <strong>"Scan for Offboarding"</strong> to find users who need to be removed 
+                    from the "All Partners" group because:
+                  </Typography>
+                  <ul style={{ margin: '8px 0', paddingLeft: 20 }}>
+                    <li>Their partner was deactivated in the CRM</li>
+                    <li>Their LMS group was deleted</li>
+                    <li>They were marked as inactive</li>
+                  </ul>
+                </Alert>
+              </Box>
+            </SectionCard>
+          )}
         </>
       )}
 
