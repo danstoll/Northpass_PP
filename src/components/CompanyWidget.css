@@ -1926,3 +1926,33 @@
   text-align: center;
   border: 1px solid rgba(255, 193, 7, 0.3);
 }
+
+/* ====== Empty Section Message Styles ====== */
+.empty-section-message {
+  background: linear-gradient(135deg, rgba(0, 0, 0, 0.02) 0%, rgba(0, 0, 0, 0.04) 100%);
+  border: 1px dashed var(--admin-border-default, #ddd);
+  border-radius: var(--radius-md, 8px);
+  padding: var(--space-4, 16px) var(--space-6, 24px);
+  text-align: center;
+  margin: var(--space-2, 8px) 0;
+}
+
+.empty-section-message p {
+  margin: 0;
+  font-size: var(--font-size-sm, 0.875rem);
+  color: var(--nintex-gray-600, #666);
+}
+
+.in-progress-section .empty-section-message {
+  border-color: rgba(107, 76, 154, 0.3);
+  background: linear-gradient(135deg, rgba(107, 76, 154, 0.03) 0%, rgba(107, 76, 154, 0.06) 100%);
+}
+
+.expired-section .empty-section-message {
+  border-color: rgba(40, 167, 69, 0.3);
+  background: linear-gradient(135deg, rgba(40, 167, 69, 0.03) 0%, rgba(40, 167, 69, 0.06) 100%);
+}
+
+.expired-section .empty-section-message p {
+  color: #155724;
+}

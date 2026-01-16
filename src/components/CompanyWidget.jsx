@@ -1013,17 +1013,21 @@ const CompanyWidget = ({ groupName, tier }) => {
       </div>
 
       {/* In-Progress Team Members Section */}
-      {inProgressUsers.length > 0 && (
-        <div className="users-list in-progress-section">
-          <div className="users-list-header">
-            <h3>
-              📚 Learning In Progress ({inProgressUsers.length})
-              <InfoTooltip metricKey="inProgress" />
-            </h3>
+      <div className="users-list in-progress-section">
+        <div className="users-list-header">
+          <h3>
+            📚 Learning In Progress ({inProgressUsers.length})
+            <InfoTooltip metricKey="inProgress" />
+          </h3>
+        </div>
+        <p className="section-description">
+          Team members actively working on courses who haven't earned certifications yet.
+        </p>
+        {inProgressUsers.length === 0 ? (
+          <div className="empty-section-message">
+            <p>📭 No team members currently have courses in progress.</p>
           </div>
-          <p className="section-description">
-            Team members actively working on courses who haven't earned certifications yet.
-          </p>
+        ) : (
           <div className="user-cards-grid">
             {inProgressUsers.map(user => {
               const isExpanded = expandedInProgressUserId === user.id;
@@ -1083,21 +1087,25 @@ const CompanyWidget = ({ groupName, tier }) => {
               );
             })}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Expired Certifications Section */}
-      {expiredUsers.length > 0 && (
-        <div className="users-list expired-section">
-          <div className="users-list-header">
-            <h3>
-              ⏰ Expired Certifications ({expiredUsers.length})
-              <InfoTooltip metricKey="expiredCerts" />
-            </h3>
+      <div className="users-list expired-section">
+        <div className="users-list-header">
+          <h3>
+            ⏰ Expired Certifications ({expiredUsers.length})
+            <InfoTooltip metricKey="expiredCerts" />
+          </h3>
+        </div>
+        <p className="section-description">
+          Team members whose certifications have expired and need to be renewed. Expired certifications do not count towards the partner's NPCU total.
+        </p>
+        {expiredUsers.length === 0 ? (
+          <div className="empty-section-message">
+            <p>✅ No expired certifications. All certifications are current!</p>
           </div>
-          <p className="section-description">
-            Team members whose certifications have expired and need to be renewed. Expired certifications do not count towards the partner's NPCU total.
-          </p>
+        ) : (
           <div className="user-cards-grid">
             {expiredUsers.map(user => {
               const isExpanded = expandedExpiredUserId === user.id;
@@ -1154,8 +1162,8 @@ const CompanyWidget = ({ groupName, tier }) => {
               );
             })}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* No Activity Message - shown when no certified or in-progress users */}
       {users.length === 0 && inProgressUsers.length === 0 && expiredUsers.length === 0 && (
