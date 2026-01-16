@@ -1,6 +1,9 @@
 /**
  * Trend Routes
  * Time-series analytics and trend data endpoints
+ * 
+ * CACHING: All endpoints use server-side caching (2-5 min TTL)
+ * to improve response times for expensive queries.
  */
 
 const express = require('express');
@@ -21,6 +24,9 @@ const {
   getFullTrendReport
 } = require('../db/trendService.cjs');
 
+// Import caching
+const { analyticsCache, CACHE_TTL } = require('../db/analyticsCache.cjs');
+
 // Helper to extract filters from query params
 function extractFilters(query) {
   const filters = {};
@@ -36,11 +42,18 @@ function extractFilters(query) {
 // Example: /api/db/trends/kpi-summary?region=Americas&tier=Premier&owner=John%20Doe
 // ============================================
 
-// KPI Summary - current period with MoM/YoY comparisons
+// KPI Summary - current period with MoM/YoY comparisons (CACHED 2 min)
 router.get('/kpi-summary', async (req, res) => {
   try {
     const filters = extractFilters(req.query);
-    const summary = await getKpiSummary(filters);
+    
+    const summary = await analyticsCache.withCache(
+      'kpi-summary',
+      filters,
+      () => getKpiSummary(filters),
+      CACHE_TTL.SHORT // 2 minutes - relatively fresh data needed
+    );
+    
     res.json(summary);
   } catch (error) {
     console.error('KPI Summary error:', error);
@@ -48,11 +61,18 @@ router.get('/kpi-summary', async (req, res) => {
   }
 });
 
-// Year-to-Date comparison
+// Year-to-Date comparison (CACHED 5 min)
 router.get('/ytd', async (req, res) => {
   try {
     const filters = extractFilters(req.query);
-    const ytd = await getYtdComparison(filters);
+    
+    const ytd = await analyticsCache.withCache(
+      'ytd',
+      filters,
+      () => getYtdComparison(filters),
+      CACHE_TTL.MEDIUM // 5 minutes
+    );
+    
     res.json(ytd);
   } catch (error) {
     console.error('YTD comparison error:', error);
@@ -60,12 +80,19 @@ router.get('/ytd', async (req, res) => {
   }
 });
 
-// User registration trends by month
+// User registration trends by month (CACHED 5 min)
 router.get('/users', async (req, res) => {
   try {
     const { months = 24 } = req.query;
     const filters = extractFilters(req.query);
-    const trends = await getUserRegistrationTrends(parseInt(months), filters);
+    
+    const trends = await analyticsCache.withCache(
+      'users',
+      { ...filters, months },
+      () => getUserRegistrationTrends(parseInt(months), filters),
+      CACHE_TTL.MEDIUM // 5 minutes
+    );
+    
     res.json(trends);
   } catch (error) {
     console.error('User trends error:', error);
@@ -73,12 +100,19 @@ router.get('/users', async (req, res) => {
   }
 });
 
-// Enrollment trends by month
+// Enrollment trends by month (CACHED 5 min)
 router.get('/enrollments', async (req, res) => {
   try {
     const { months = 24 } = req.query;
     const filters = extractFilters(req.query);
-    const trends = await getEnrollmentTrends(parseInt(months), filters);
+    
+    const trends = await analyticsCache.withCache(
+      'enrollments',
+      { ...filters, months },
+      () => getEnrollmentTrends(parseInt(months), filters),
+      CACHE_TTL.MEDIUM // 5 minutes
+    );
+    
     res.json(trends);
   } catch (error) {
     console.error('Enrollment trends error:', error);
@@ -86,12 +120,19 @@ router.get('/enrollments', async (req, res) => {
   }
 });
 
-// Certification trends (NPCU courses) by month
+// Certification trends (NPCU courses) by month (CACHED 5 min)
 router.get('/certifications', async (req, res) => {
   try {
     const { months = 24 } = req.query;
     const filters = extractFilters(req.query);
-    const trends = await getCertificationTrends(parseInt(months), filters);
+    
+    const trends = await analyticsCache.withCache(
+      'certifications',
+      { ...filters, months },
+      () => getCertificationTrends(parseInt(months), filters),
+      CACHE_TTL.MEDIUM // 5 minutes
+    );
+    
     res.json(trends);
   } catch (error) {
     console.error('Certification trends error:', error);
@@ -112,11 +153,18 @@ router.get('/courses', async (req, res) => {
   }
 });
 
-// Compliance by tier (current snapshot)
+// Compliance by tier (current snapshot) (CACHED 5 min)
 router.get('/compliance', async (req, res) => {
   try {
     const filters = extractFilters(req.query);
-    const compliance = await getComplianceTrends(12, filters);
+    
+    const compliance = await analyticsCache.withCache(
+      'compliance',
+      filters,
+      () => getComplianceTrends(12, filters),
+      CACHE_TTL.MEDIUM // 5 minutes
+    );
+    
     res.json(compliance);
   } catch (error) {
     console.error('Compliance trends error:', error);
@@ -137,12 +185,19 @@ router.get('/regional', async (req, res) => {
   }
 });
 
-// Weekly summary
+// Weekly summary (CACHED 2 min - more real-time)
 router.get('/weekly', async (req, res) => {
   try {
     const { weeks = 12 } = req.query;
     const filters = extractFilters(req.query);
-    const summary = await getWeeklySummary(parseInt(weeks), filters);
+    
+    const summary = await analyticsCache.withCache(
+      'weekly',
+      { ...filters, weeks },
+      () => getWeeklySummary(parseInt(weeks), filters),
+      CACHE_TTL.SHORT // 2 minutes
+    );
+    
     res.json(summary);
   } catch (error) {
     console.error('Weekly summary error:', error);

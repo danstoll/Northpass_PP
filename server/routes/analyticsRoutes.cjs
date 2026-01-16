@@ -1,6 +1,9 @@
 /**
  * Analytics Routes (Deep Analytics)
  * Advanced analytics endpoints for engagement, cohorts, learning paths, etc.
+ * 
+ * CACHING: All endpoints use server-side caching (5-10 min TTL)
+ * to improve response times for expensive queries.
  */
 
 const express = require('express');
@@ -19,6 +22,9 @@ const {
   getCertificationVelocity
 } = require('../db/trendService.cjs');
 
+// Import caching
+const { analyticsCache, CACHE_TTL } = require('../db/analyticsCache.cjs');
+
 // Helper to extract filters from query params
 function extractFilters(query) {
   const filters = {};
@@ -33,16 +39,24 @@ function extractFilters(query) {
 // All endpoints support stacked filters: region, owner, tier
 // ============================================
 
-// Partner Engagement Scores - Composite engagement metrics
+// Partner Engagement Scores - Composite engagement metrics (CACHED 10 min - expensive query)
 router.get('/engagement-scores', async (req, res) => {
   try {
     const { limit = 50 } = req.query;
     const filters = extractFilters(req.query);
-    const scores = await getPartnerEngagementScores(parseInt(limit), filters);
+    
+    const scores = await analyticsCache.withCache(
+      'engagement-scores',
+      { ...filters, limit },
+      () => getPartnerEngagementScores(parseInt(limit), filters),
+      CACHE_TTL.LONG // 10 minutes - expensive query with multiple subqueries
+    );
+    
     res.json({
       success: true,
       count: scores.length,
       data: scores,
+      cached: analyticsCache.get(analyticsCache.generateKey('engagement-scores', { ...filters, limit })) !== null,
       description: 'Engagement score based on activation rate, completion rate, certification density, and recent activity'
     });
   } catch (error) {
@@ -85,11 +99,18 @@ router.get('/learning-paths', async (req, res) => {
   }
 });
 
-// Tier Progression Insights - Partner tier movement and at-risk partners
+// Tier Progression Insights - Partner tier movement and at-risk partners (CACHED 5 min)
 router.get('/tier-progression', async (req, res) => {
   try {
     const filters = extractFilters(req.query);
-    const insights = await getTierProgressionInsights(filters);
+    
+    const insights = await analyticsCache.withCache(
+      'tier-progression',
+      filters,
+      () => getTierProgressionInsights(filters),
+      CACHE_TTL.MEDIUM // 5 minutes
+    );
+    
     res.json({
       success: true,
       data: insights,
@@ -101,11 +122,18 @@ router.get('/tier-progression', async (req, res) => {
   }
 });
 
-// Account Owner Performance Dashboard
+// Account Owner Performance Dashboard (CACHED 10 min - expensive query)
 router.get('/owner-performance', async (req, res) => {
   try {
     const filters = extractFilters(req.query);
-    const performance = await getOwnerPerformanceDashboard(filters);
+    
+    const performance = await analyticsCache.withCache(
+      'owner-performance',
+      filters,
+      () => getOwnerPerformanceDashboard(filters),
+      CACHE_TTL.LONG // 10 minutes
+    );
+    
     res.json({
       success: true,
       count: performance.length,
@@ -134,11 +162,18 @@ router.get('/course-effectiveness', async (req, res) => {
   }
 });
 
-// Regional Comparison
+// Regional Comparison (CACHED 5 min)
 router.get('/regional-comparison', async (req, res) => {
   try {
     const filters = extractFilters(req.query);
-    const comparison = await getRegionalComparison(filters);
+    
+    const comparison = await analyticsCache.withCache(
+      'regional-comparison',
+      filters,
+      () => getRegionalComparison(filters),
+      CACHE_TTL.MEDIUM // 5 minutes
+    );
+    
     res.json({
       success: true,
       count: comparison.length,
@@ -151,11 +186,18 @@ router.get('/regional-comparison', async (req, res) => {
   }
 });
 
-// User Activity Segments
+// User Activity Segments (CACHED 5 min)
 router.get('/user-segments', async (req, res) => {
   try {
     const filters = extractFilters(req.query);
-    const segments = await getUserActivitySegments(filters);
+    
+    const segments = await analyticsCache.withCache(
+      'user-segments',
+      filters,
+      () => getUserActivitySegments(filters),
+      CACHE_TTL.MEDIUM // 5 minutes
+    );
+    
     res.json({
       success: true,
       count: segments.length,

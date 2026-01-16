@@ -284,6 +284,150 @@ router.post('/calculate-partner-counts', async (req, res) => {
   }
 });
 
+// Get partners NOT FOUND in Impartner
+// This compares our partners table against Impartner's CrmId lookup
+router.get('/impartner-comparison', async (req, res) => {
+  try {
+    // Impartner API config (same as dbRoutes.cjs)
+    const IMPARTNER_CONFIG = {
+      host: 'https://prod.impartner.live',
+      apiKey: 'H4nFg5b!TGS5FpkN6koWTKWxN7wjZBwFN@w&CW*LT8@ed26CJfE$nfqemN$%X2RK2n9VGqB&8htCf@gyZ@7#J9WR$2B8go6Y1z@fVECzrkGj8XinsWD!4C%E^o2DKypw',
+      tenantId: '1'
+    };
+    
+    // Valid tiers to sync (same as sync-to-impartner)
+    const VALID_TIERS = ['Premier', 'Premier Plus', 'Certified', 'Registered', 'Aggregator'];
+    
+    // Get our partners with valid tiers
+    const tierPlaceholders = VALID_TIERS.map(() => '?').join(',');
+    const partners = await query(`
+      SELECT 
+        p.id,
+        p.account_name,
+        p.salesforce_id,
+        p.partner_tier,
+        p.account_region,
+        p.total_npcu,
+        g.name as lms_group_name
+      FROM partners p
+      LEFT JOIN lms_groups g ON g.partner_id = p.id
+      WHERE p.is_active = TRUE
+        AND p.partner_tier IN (${tierPlaceholders})
+        AND p.salesforce_id IS NOT NULL
+      ORDER BY p.account_name
+    `, VALID_TIERS);
+    
+    console.log(`[Impartner Comparison] Checking ${partners.length} partners against Impartner...`);
+    
+    // Build Impartner CrmId maps
+    const crmIdToImpartner = new Map();      // Exact CrmId -> name
+    const crmId15ToImpartner = new Map();    // 15-char prefix -> name
+    
+    const pageSize = 500;
+    let skip = 0;
+    let hasMore = true;
+    let totalFetched = 0;
+    
+    while (hasMore) {
+      const lookupUrl = `${IMPARTNER_CONFIG.host}/api/objects/v1/Account?fields=Id,CrmId,Name&take=${pageSize}&skip=${skip}`;
+      
+      try {
+        const lookupResp = await fetch(lookupUrl, {
+          headers: {
+            'Authorization': `prm-key ${IMPARTNER_CONFIG.apiKey}`,
+            'X-PRM-TenantId': IMPARTNER_CONFIG.tenantId,
+            'Accept': 'application/json'
+          }
+        });
+        
+        if (lookupResp.ok) {
+          const lookupData = await lookupResp.json();
+          const results = lookupData.data?.results || [];
+          totalFetched += results.length;
+          
+          for (const account of results) {
+            if (account.crmId && account.id) {
+              crmIdToImpartner.set(account.crmId, account.name);
+              
+              if (account.crmId.length === 15) {
+                crmId15ToImpartner.set(account.crmId, account.name);
+              } else if (account.crmId.length === 18) {
+                crmId15ToImpartner.set(account.crmId.substring(0, 15), account.name);
+              }
+            }
+          }
+          
+          hasMore = results.length === pageSize;
+          skip += pageSize;
+        } else {
+          console.error(`[Impartner Comparison] Lookup failed: ${lookupResp.status}`);
+          hasMore = false;
+        }
+      } catch (err) {
+        console.error(`[Impartner Comparison] Fetch error:`, err.message);
+        hasMore = false;
+      }
+    }
+    
+    console.log(`[Impartner Comparison] Fetched ${totalFetched} Impartner accounts, ${crmIdToImpartner.size} have CrmIds`);
+    
+    // Compare and find not-found partners
+    const notFound = [];
+    const found = [];
+    
+    for (const p of partners) {
+      let match = null;
+      
+      // Try exact match
+      if (crmIdToImpartner.has(p.salesforce_id)) {
+        match = crmIdToImpartner.get(p.salesforce_id);
+      }
+      // Try 15-char prefix (18 -> 15)
+      else if (p.salesforce_id && p.salesforce_id.length === 18) {
+        const prefix15 = p.salesforce_id.substring(0, 15);
+        if (crmId15ToImpartner.has(prefix15)) {
+          match = crmId15ToImpartner.get(prefix15);
+        }
+      }
+      // Try 15-char direct match
+      else if (p.salesforce_id && p.salesforce_id.length === 15) {
+        if (crmId15ToImpartner.has(p.salesforce_id)) {
+          match = crmId15ToImpartner.get(p.salesforce_id);
+        }
+      }
+      
+      if (match) {
+        found.push({ ...p, impartnerName: match });
+      } else {
+        notFound.push(p);
+      }
+    }
+    
+    console.log(`[Impartner Comparison] Found: ${found.length}, Not Found: ${notFound.length}`);
+    
+    res.json({
+      success: true,
+      totalPartners: partners.length,
+      impartnerAccounts: totalFetched,
+      impartnerWithCrmId: crmIdToImpartner.size,
+      foundCount: found.length,
+      notFoundCount: notFound.length,
+      notFoundPartners: notFound.map(p => ({
+        id: p.id,
+        name: p.account_name,
+        crmId: p.salesforce_id,
+        tier: p.partner_tier,
+        region: p.account_region,
+        npcu: p.total_npcu,
+        lmsGroup: p.lms_group_name
+      }))
+    });
+  } catch (error) {
+    console.error('Error comparing with Impartner:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get certification stats by partner
 router.get('/partner-stats', async (req, res) => {
   try {
@@ -302,9 +446,11 @@ router.get('/partner-stats', async (req, res) => {
     }
     if (hasGtm === 'true') {
       whereClause += ' AND has_gtm_certification = TRUE';
+    } else if (hasGtm === 'false') {
+      whereClause += ' AND (has_gtm_certification = FALSE OR has_gtm_certification IS NULL)';
     }
     
-    const stats = await query(`
+    const partners = await query(`
       SELECT 
         id,
         account_name,
@@ -323,7 +469,21 @@ router.get('/partner-stats', async (req, res) => {
       LIMIT ?
     `, [...params, parseInt(limit)]);
     
-    res.json(stats);
+    // Calculate summary stats
+    const [summary] = await query(`
+      SELECT 
+        COUNT(*) as total_partners,
+        SUM(CASE WHEN has_gtm_certification = TRUE THEN 1 ELSE 0 END) as with_gtm,
+        SUM(total_npcu) as total_npcu,
+        SUM(cert_count_nintex_ce) as total_ce,
+        SUM(cert_count_nintex_k2) as total_k2,
+        SUM(cert_count_nintex_salesforce) as total_salesforce,
+        SUM(cert_count_go_to_market) as total_gtm
+      FROM partners
+      ${whereClause}
+    `, params);
+    
+    res.json({ partners, summary });
   } catch (error) {
     console.error('Error fetching partner stats:', error);
     res.status(500).json({ error: error.message });

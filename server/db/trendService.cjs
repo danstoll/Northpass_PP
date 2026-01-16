@@ -900,6 +900,8 @@ async function getOwnerTrends(ownerName, months = 12, filters = {}) {
 async function getPartnerEngagementScores(limit = 50, filters = {}) {
   const { whereClause, params } = buildFilterClauses(filters);
   
+  // OPTIMIZED: Single query with LEFT JOINs instead of correlated subqueries
+  // This significantly improves performance by eliminating N+1 query patterns
   const results = await query(`
     SELECT 
       p.id,
@@ -908,30 +910,50 @@ async function getPartnerEngagementScores(limit = 50, filters = {}) {
       p.account_region,
       p.account_owner,
       p.total_npcu,
-      -- Contact metrics
-      (SELECT COUNT(*) FROM contacts c WHERE c.partner_id = p.id AND c.is_active = TRUE) as total_contacts,
-      (SELECT COUNT(*) FROM contacts c WHERE c.partner_id = p.id AND c.is_active = TRUE AND c.lms_user_id IS NOT NULL) as contacts_with_lms,
-      -- Group metrics  
       g.id as group_id,
-      (SELECT COUNT(*) FROM lms_group_members gm WHERE gm.group_id = g.id) as group_members,
-      -- Enrollment metrics
-      (SELECT COUNT(*) FROM lms_enrollments e 
-       JOIN lms_group_members gm ON gm.user_id = e.user_id 
-       WHERE gm.group_id = g.id) as total_enrollments,
-      (SELECT COUNT(*) FROM lms_enrollments e 
-       JOIN lms_group_members gm ON gm.user_id = e.user_id 
-       WHERE gm.group_id = g.id AND e.status = 'completed') as completed_enrollments,
-      -- Certification metrics (NPCU courses)
-      (SELECT COUNT(*) FROM lms_enrollments e 
-       JOIN lms_group_members gm ON gm.user_id = e.user_id 
-       JOIN lms_courses c ON c.id = e.course_id
-       WHERE gm.group_id = g.id AND e.status = 'completed' AND c.npcu_value > 0) as certifications,
-      -- Recent activity (30 days)
-      (SELECT COUNT(*) FROM lms_enrollments e 
-       JOIN lms_group_members gm ON gm.user_id = e.user_id 
-       WHERE gm.group_id = g.id AND e.completed_at > DATE_SUB(NOW(), INTERVAL 30 DAY)) as recent_completions
+      -- Pre-aggregated contact metrics
+      COALESCE(contact_stats.total_contacts, 0) as total_contacts,
+      COALESCE(contact_stats.contacts_with_lms, 0) as contacts_with_lms,
+      -- Pre-aggregated group metrics
+      COALESCE(member_stats.group_members, 0) as group_members,
+      -- Pre-aggregated enrollment metrics
+      COALESCE(enroll_stats.total_enrollments, 0) as total_enrollments,
+      COALESCE(enroll_stats.completed_enrollments, 0) as completed_enrollments,
+      COALESCE(enroll_stats.certifications, 0) as certifications,
+      COALESCE(enroll_stats.recent_completions, 0) as recent_completions
     FROM partners p
     LEFT JOIN lms_groups g ON g.partner_id = p.id
+    -- Contact stats aggregation
+    LEFT JOIN (
+      SELECT 
+        partner_id,
+        COUNT(*) as total_contacts,
+        SUM(CASE WHEN lms_user_id IS NOT NULL THEN 1 ELSE 0 END) as contacts_with_lms
+      FROM contacts 
+      WHERE is_active = TRUE
+      GROUP BY partner_id
+    ) contact_stats ON contact_stats.partner_id = p.id
+    -- Group member count
+    LEFT JOIN (
+      SELECT 
+        gm.group_id,
+        COUNT(*) as group_members
+      FROM lms_group_members gm
+      GROUP BY gm.group_id
+    ) member_stats ON member_stats.group_id = g.id
+    -- Enrollment stats aggregation (all in one subquery)
+    LEFT JOIN (
+      SELECT 
+        gm.group_id,
+        COUNT(e.id) as total_enrollments,
+        SUM(CASE WHEN e.status = 'completed' THEN 1 ELSE 0 END) as completed_enrollments,
+        SUM(CASE WHEN e.status = 'completed' AND c.npcu_value > 0 THEN 1 ELSE 0 END) as certifications,
+        SUM(CASE WHEN e.completed_at > DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 ELSE 0 END) as recent_completions
+      FROM lms_group_members gm
+      INNER JOIN lms_enrollments e ON e.user_id = gm.user_id
+      LEFT JOIN lms_courses c ON c.id = e.course_id
+      GROUP BY gm.group_id
+    ) enroll_stats ON enroll_stats.group_id = g.id
     WHERE p.is_active = TRUE
       ${whereClause}
     ORDER BY p.total_npcu DESC
@@ -957,12 +979,26 @@ async function getPartnerEngagementScores(limit = 50, filters = {}) {
     );
 
     return {
-      ...r,
-      activationRate: activationRate.toFixed(1),
-      completionRate: completionRate.toFixed(1),
-      certificationDensity: certificationDensity.toFixed(2),
-      activityScore,
-      engagementScore: Math.min(engagementScore, 100)
+      partner_id: r.id,
+      account_name: r.account_name,
+      tier: r.partner_tier,
+      account_region: r.account_region,
+      account_owner: r.account_owner,
+      total_npcu: r.total_npcu || 0,
+      total_contacts: r.total_contacts || 0,
+      contacts_with_lms: r.contacts_with_lms || 0,
+      group_members: r.group_members || 0,
+      total_enrollments: r.total_enrollments || 0,
+      total_users: r.group_members || 0,
+      completions: r.completed_enrollments || 0,
+      certifications: r.certifications || 0,
+      recent_completions: r.recent_completions || 0,
+      // Use snake_case for frontend compatibility
+      activation_rate: activationRate.toFixed(1),
+      completion_rate: completionRate.toFixed(1),
+      certification_density: certificationDensity.toFixed(2),
+      activity_score: activityScore,
+      engagement_score: Math.min(engagementScore, 100)
     };
   });
 }
@@ -1135,19 +1171,20 @@ async function getTierProgressionInsights(filters = {}) {
     ORDER BY FIELD(partner_tier, 'Premier Plus', 'Premier', 'Certified', 'Registered', 'Aggregator')
   `, params);
 
-  // Partners close to next tier
-  const closeToUpgrade = await query(`
+  // Partners close to next tier (within 5 NPCU of upgrade)
+  const closeToUpgradeRaw = await query(`
     SELECT 
+      p.id as partner_id,
       p.account_name,
       p.partner_tier as current_tier,
-      p.total_npcu,
+      COALESCE(p.total_npcu, 0) as current_npcu,
       p.account_owner,
       CASE 
-        WHEN p.partner_tier = 'Registered' THEN 10 - p.total_npcu
-        WHEN p.partner_tier = 'Certified' THEN 20 - p.total_npcu
-        WHEN p.partner_tier = 'Premier' THEN 30 - p.total_npcu
+        WHEN p.partner_tier = 'Registered' THEN 10
+        WHEN p.partner_tier = 'Certified' THEN 20
+        WHEN p.partner_tier = 'Premier' THEN 30
         ELSE 999
-      END as npcu_to_next_tier,
+      END as next_tier_threshold,
       CASE 
         WHEN p.partner_tier = 'Registered' THEN 'Certified'
         WHEN p.partner_tier = 'Certified' THEN 'Premier'
@@ -1158,31 +1195,58 @@ async function getTierProgressionInsights(filters = {}) {
     WHERE p.is_active = TRUE
       AND p.partner_tier IN ('Registered', 'Certified', 'Premier')
       ${whereClause}
-    HAVING npcu_to_next_tier > 0 AND npcu_to_next_tier <= 5
-    ORDER BY npcu_to_next_tier ASC
-    LIMIT 25
+    ORDER BY (CASE 
+        WHEN p.partner_tier = 'Registered' THEN 10 - COALESCE(p.total_npcu, 0)
+        WHEN p.partner_tier = 'Certified' THEN 20 - COALESCE(p.total_npcu, 0)
+        WHEN p.partner_tier = 'Premier' THEN 30 - COALESCE(p.total_npcu, 0)
+        ELSE 999
+      END) ASC
+    LIMIT 50
   `, params);
+  
+  // Filter to those within 5 NPCU of upgrade
+  const closeToUpgrade = closeToUpgradeRaw
+    .map(p => ({
+      ...p,
+      npcu_needed: p.next_tier_threshold - p.current_npcu
+    }))
+    .filter(p => p.npcu_needed > 0 && p.npcu_needed <= 5);
 
-  // Partners at risk (below tier threshold)
-  const atRiskPartners = await query(`
+  // Partners at risk (below tier threshold) - only include partners with some LMS activity
+  // Partners with 0 NPCU and no LMS group are likely data quality issues in CRM
+  const atRiskRaw = await query(`
     SELECT 
+      p.id as partner_id,
       p.account_name,
-      p.partner_tier,
-      p.total_npcu,
+      p.partner_tier as tier,
+      COALESCE(p.total_npcu, 0) as current_npcu,
       p.account_owner,
       CASE 
-        WHEN p.partner_tier = 'Certified' AND p.total_npcu < 10 THEN 10 - p.total_npcu
-        WHEN p.partner_tier = 'Premier' AND p.total_npcu < 20 THEN 20 - p.total_npcu
-        WHEN p.partner_tier = 'Premier Plus' AND p.total_npcu < 30 THEN 30 - p.total_npcu
+        WHEN p.partner_tier = 'Certified' THEN 10
+        WHEN p.partner_tier = 'Premier' THEN 20
+        WHEN p.partner_tier = 'Premier Plus' THEN 30
+        WHEN p.partner_tier = 'Aggregator' THEN 5
         ELSE 0
-      END as npcu_deficit
+      END as required_npcu,
+      (SELECT COUNT(*) FROM lms_groups g WHERE g.partner_id = p.id) as has_lms_group
     FROM partners p
     WHERE p.is_active = TRUE
+      AND p.partner_tier IN ('Certified', 'Premier', 'Premier Plus', 'Aggregator')
+      AND COALESCE(p.total_npcu, 0) < CASE 
+        WHEN p.partner_tier = 'Certified' THEN 10
+        WHEN p.partner_tier = 'Premier' THEN 20
+        WHEN p.partner_tier = 'Premier Plus' THEN 30
+        WHEN p.partner_tier = 'Aggregator' THEN 5
+        ELSE 0
+      END
       ${whereClause}
-    HAVING npcu_deficit > 0
-    ORDER BY npcu_deficit DESC
-    LIMIT 25
+    HAVING has_lms_group > 0 OR current_npcu > 0
+    ORDER BY (required_npcu - current_npcu) DESC
+    LIMIT 50
   `, params);
+  
+  // Filter to only those below threshold (already filtered in query)
+  const atRiskPartners = atRiskRaw;
 
   return {
     tierRequirements,
@@ -1197,38 +1261,72 @@ async function getTierProgressionInsights(filters = {}) {
  * Detailed metrics for each account owner's portfolio
  */
 async function getOwnerPerformanceDashboard(filters = {}) {
+  // Main owner metrics
   const owners = await query(`
     SELECT 
       p.account_owner,
-      COUNT(*) as partner_count,
+      COUNT(DISTINCT p.id) as partner_count,
       -- Tier breakdown
       SUM(CASE WHEN p.partner_tier = 'Premier Plus' THEN 1 ELSE 0 END) as premier_plus,
       SUM(CASE WHEN p.partner_tier = 'Premier' THEN 1 ELSE 0 END) as premier,
       SUM(CASE WHEN p.partner_tier = 'Certified' THEN 1 ELSE 0 END) as certified,
       SUM(CASE WHEN p.partner_tier = 'Registered' THEN 1 ELSE 0 END) as registered,
       -- NPCU metrics
-      SUM(p.total_npcu) as total_npcu,
-      AVG(p.total_npcu) as avg_npcu_per_partner,
-      -- Certification metrics
-      SUM(p.cert_count_nintex_ce) as total_ce_certs,
-      SUM(p.cert_count_nintex_k2) as total_k2_certs,
-      SUM(p.cert_count_nintex_salesforce) as total_sf_certs,
-      SUM(p.cert_count_go_to_market) as total_gtm_certs,
-      -- Contact/User metrics
-      (SELECT COUNT(*) FROM contacts c WHERE c.partner_id IN (SELECT id FROM partners WHERE account_owner = p.account_owner AND is_active = TRUE) AND c.is_active = TRUE) as total_contacts,
-      (SELECT COUNT(*) FROM contacts c WHERE c.partner_id IN (SELECT id FROM partners WHERE account_owner = p.account_owner AND is_active = TRUE) AND c.is_active = TRUE AND c.lms_user_id IS NOT NULL) as contacts_in_lms
+      COALESCE(SUM(p.total_npcu), 0) as total_npcu,
+      COALESCE(AVG(p.total_npcu), 0) as avg_npcu,
+      -- Compliance calculation
+      SUM(CASE 
+        WHEN p.partner_tier IN ('Premier', 'Premier Plus') AND COALESCE(p.total_npcu, 0) >= 20 THEN 1
+        WHEN p.partner_tier = 'Select' AND COALESCE(p.total_npcu, 0) >= 10 THEN 1
+        WHEN p.partner_tier = 'Certified' AND COALESCE(p.total_npcu, 0) >= 5 THEN 1
+        WHEN p.partner_tier = 'Registered' AND COALESCE(p.total_npcu, 0) >= 2 THEN 1
+        WHEN p.partner_tier = 'Aggregator' AND COALESCE(p.total_npcu, 0) >= 5 THEN 1
+        ELSE 0
+      END) as compliant_partners
     FROM partners p
     WHERE p.is_active = TRUE
-      AND p.account_owner IS NOT NULL
+      AND p.account_owner IS NOT NULL AND p.account_owner != ''
     GROUP BY p.account_owner
     ORDER BY total_npcu DESC
   `);
 
-  return owners.map(o => ({
-    ...o,
-    lms_adoption_rate: o.total_contacts > 0 ? ((o.contacts_in_lms / o.total_contacts) * 100).toFixed(1) : 0,
-    avg_npcu_per_partner: parseFloat(o.avg_npcu_per_partner || 0).toFixed(1)
-  }));
+  // Get user counts per owner separately (more efficient)
+  const userCounts = await query(`
+    SELECT 
+      p.account_owner,
+      COUNT(DISTINCT gm.user_id) as total_users,
+      COUNT(DISTINCT CASE WHEN u.last_active_at > DATE_SUB(NOW(), INTERVAL 90 DAY) THEN gm.user_id END) as active_users
+    FROM partners p
+    LEFT JOIN lms_groups g ON g.partner_id = p.id
+    LEFT JOIN lms_group_members gm ON gm.group_id = g.id
+    LEFT JOIN lms_users u ON u.id = gm.user_id
+    WHERE p.is_active = TRUE AND p.account_owner IS NOT NULL AND p.account_owner != ''
+    GROUP BY p.account_owner
+  `);
+  
+  const userMap = new Map(userCounts.map(u => [u.account_owner, u]));
+
+  return owners.map(o => {
+    const userInfo = userMap.get(o.account_owner) || { total_users: 0, active_users: 0 };
+    const complianceRate = o.partner_count > 0 
+      ? ((o.compliant_partners / o.partner_count) * 100).toFixed(1)
+      : '0';
+    
+    return {
+      account_owner: o.account_owner,
+      partner_count: o.partner_count,
+      total_users: userInfo.total_users || 0,
+      active_users: userInfo.active_users || 0,
+      avg_npcu: parseFloat(o.avg_npcu || 0).toFixed(1),
+      total_npcu: o.total_npcu || 0,
+      compliance_rate: complianceRate,
+      premier_plus: o.premier_plus || 0,
+      premier: o.premier || 0,
+      certified: o.certified || 0,
+      registered: o.registered || 0,
+      compliant_partners: o.compliant_partners || 0
+    };
+  });
 }
 
 /**
@@ -1291,6 +1389,7 @@ async function getCourseEffectivenessAnalysis(limit = 30) {
  * Compare metrics across different regions
  */
 async function getRegionalComparison(filters = {}) {
+  // Get partner and user metrics by region
   const results = await query(`
     SELECT 
       COALESCE(p.account_region, 'Unknown') as region,
@@ -1298,30 +1397,72 @@ async function getRegionalComparison(filters = {}) {
       -- Tier breakdown
       SUM(CASE WHEN p.partner_tier IN ('Premier', 'Premier Plus') THEN 1 ELSE 0 END) as top_tier_partners,
       -- NPCU metrics
-      SUM(p.total_npcu) as total_npcu,
-      AVG(p.total_npcu) as avg_npcu_per_partner,
-      -- Contact metrics
+      COALESCE(SUM(p.total_npcu), 0) as total_npcu,
+      COALESCE(AVG(p.total_npcu), 0) as avg_npcu,
+      -- Contact/User metrics
       COUNT(DISTINCT c.id) as total_contacts,
       COUNT(DISTINCT CASE WHEN c.lms_user_id IS NOT NULL THEN c.id END) as contacts_in_lms,
       -- Group metrics
       COUNT(DISTINCT g.id) as partner_groups,
-      COUNT(DISTINCT gm.user_id) as total_group_members
+      COUNT(DISTINCT gm.user_id) as total_users,
+      -- Compliance calculation (partners meeting tier requirements)
+      SUM(CASE 
+        WHEN p.partner_tier IN ('Premier', 'Premier Plus') AND COALESCE(p.total_npcu, 0) >= 20 THEN 1
+        WHEN p.partner_tier = 'Select' AND COALESCE(p.total_npcu, 0) >= 10 THEN 1
+        WHEN p.partner_tier = 'Certified' AND COALESCE(p.total_npcu, 0) >= 5 THEN 1
+        WHEN p.partner_tier = 'Registered' AND COALESCE(p.total_npcu, 0) >= 2 THEN 1
+        WHEN p.partner_tier = 'Aggregator' AND COALESCE(p.total_npcu, 0) >= 5 THEN 1
+        ELSE 0
+      END) as compliant_partners
     FROM partners p
     LEFT JOIN contacts c ON c.partner_id = p.id AND c.is_active = TRUE
     LEFT JOIN lms_groups g ON g.partner_id = p.id
     LEFT JOIN lms_group_members gm ON gm.group_id = g.id
     WHERE p.is_active = TRUE
     GROUP BY p.account_region
-    HAVING partner_count >= 3
+    HAVING partner_count >= 1
     ORDER BY total_npcu DESC
   `);
 
-  return results.map(r => ({
-    ...r,
-    avg_npcu_per_partner: parseFloat(r.avg_npcu_per_partner || 0).toFixed(1),
-    lms_adoption_rate: r.total_contacts > 0 ? ((r.contacts_in_lms / r.total_contacts) * 100).toFixed(1) : 0,
-    top_tier_percentage: r.partner_count > 0 ? ((r.top_tier_partners / r.partner_count) * 100).toFixed(1) : 0
-  }));
+  // Get completions by region separately (more efficient)
+  const completions = await query(`
+    SELECT 
+      COALESCE(p.account_region, 'Unknown') as region,
+      COUNT(DISTINCT e.id) as total_completions,
+      COUNT(DISTINCT e.user_id) as users_with_completions
+    FROM lms_enrollments e
+    INNER JOIN lms_group_members gm ON gm.user_id = e.user_id
+    INNER JOIN lms_groups g ON g.id = gm.group_id
+    INNER JOIN partners p ON p.id = g.partner_id
+    WHERE e.status = 'completed' AND p.is_active = TRUE
+    GROUP BY p.account_region
+  `);
+  
+  const completionMap = new Map(completions.map(c => [c.region, c]));
+
+  return results.map(r => {
+    const regionCompletions = completionMap.get(r.region) || { total_completions: 0, users_with_completions: 0 };
+    const completionRate = r.total_users > 0 
+      ? ((regionCompletions.users_with_completions / r.total_users) * 100).toFixed(1) 
+      : '0';
+    const complianceRate = r.partner_count > 0 
+      ? ((r.compliant_partners / r.partner_count) * 100).toFixed(1)
+      : '0';
+    
+    return {
+      region: r.region,
+      partner_count: r.partner_count,
+      total_users: r.total_users || 0,
+      avg_npcu: parseFloat(r.avg_npcu || 0).toFixed(1),
+      total_completions: regionCompletions.total_completions || 0,
+      completion_rate: completionRate,
+      compliance_rate: complianceRate,
+      top_tier_partners: r.top_tier_partners || 0,
+      total_npcu: r.total_npcu || 0,
+      total_contacts: r.total_contacts || 0,
+      contacts_in_lms: r.contacts_in_lms || 0
+    };
+  });
 }
 
 /**

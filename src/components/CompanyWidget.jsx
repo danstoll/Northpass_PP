@@ -1,13 +1,197 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { Tooltip, IconButton } from '@mui/material';
+import { Info } from '@mui/icons-material';
 import './CompanyWidget.css';
 import northpassApi from '../services/northpassApi';
 import NintexButton from './NintexButton';
+import { exportToExcel, exportToPDF } from '../services/exportService';
 
 // Tier badge images
 import PremierBadge from '../assets/images/PartnerNetworkPremierPartner_Horizontal.png';
 import CertifiedBadge from '../assets/images/PartnerNetworkCertifiedPartner_Horizontal.png';
 import RegisteredBadge from '../assets/images/PartnerNetworkRegisteredPartner_Horizontal.png';
 import PartnerNetworkLogo from '../assets/images/PartnerNetworkLogo_Horizontal.png';
+
+// Metric definitions for info tooltips
+const METRIC_DEFINITIONS = {
+  certifiedUsers: {
+    title: 'Certified Users',
+    description: 'Team members who have earned at least one NPCU certification.',
+    details: [
+      'Only users with completed certification courses count',
+      'Non-certification courses (NPCU = 0) don\'t count',
+      'Users appear once even with multiple certifications'
+    ]
+  },
+  totalNPCU: {
+    title: 'Total NPCU Points',
+    description: 'Nintex Partner Certification Units earned by your entire team.',
+    formula: 'Sum of all NPCU from completed certification courses',
+    details: [
+      'NPCU values: 1 (basic), 2 (advanced)',
+      'Expired certifications do NOT count',
+      'Used to determine tier qualification'
+    ]
+  },
+  totalLmsUsers: {
+    title: 'Total LMS Users',
+    description: 'All users registered in the Northpass LMS for your company.',
+    details: [
+      'Includes users with and without certifications',
+      'Users who have accounts but no completions',
+      'Base number for certification rate calculation'
+    ]
+  },
+  certificationRate: {
+    title: 'Certification Rate',
+    description: 'Percentage of your LMS users who have earned certifications.',
+    formula: '(Certified Users ÷ Total LMS Users) × 100',
+    details: [
+      'Higher is better - shows workforce readiness',
+      'Goal: 50%+ certification rate',
+      'Helps identify training opportunities'
+    ]
+  },
+  totalCourses: {
+    title: 'Total Courses',
+    description: 'Total number of course enrollments across all team members.',
+    details: [
+      'Includes all courses, not just certifications',
+      'Same course taken by multiple users counts each time',
+      'Shows overall learning engagement'
+    ]
+  },
+  inProgress: {
+    title: 'In Progress',
+    description: 'Courses that team members have started but not yet completed.',
+    details: [
+      'Users are actively working on these',
+      'May need follow-up to ensure completion',
+      'Potential future NPCU points'
+    ]
+  },
+  completed: {
+    title: 'Completed',
+    description: 'Total course completions across all team members.',
+    details: [
+      'Includes both certification and non-certification courses',
+      'Higher number shows active learning culture',
+      'Not all completions earn NPCU'
+    ]
+  },
+  certifications: {
+    title: 'Certifications',
+    description: 'Number of certification course completions earning NPCU.',
+    details: [
+      'Only courses with NPCU value > 0',
+      'Directly contributes to tier status',
+      'Expired certifications excluded from NPCU total'
+    ]
+  },
+  tierRequirement: {
+    title: 'NPCU Requirement',
+    description: 'Minimum NPCU points needed to maintain your partner tier.',
+    details: [
+      'Premier/Premier Plus: 20 NPCU required',
+      'Certified/Select: 10 NPCU required',
+      'Registered: 5 NPCU required',
+      'Aggregator: 5 NPCU required'
+    ]
+  },
+  userNPCU: {
+    title: 'User NPCU',
+    description: 'Total NPCU points earned by this individual user.',
+    formula: 'Sum of NPCU values from user\'s completed certifications',
+    details: [
+      'Green badge: Meets tier requirement individually',
+      'Yellow badge: 50%+ of tier requirement',
+      'Red badge: Below 50% of tier requirement'
+    ]
+  },
+  categoryNPCU: {
+    title: 'Category NPCU',
+    description: 'NPCU points earned in this certification category.',
+    details: [
+      'Categories: Nintex CE, K2, Salesforce, Other',
+      'Shows specialization areas',
+      'Helps plan balanced training'
+    ]
+  },
+  expiryStatus: {
+    title: 'Certification Expiry',
+    description: 'Time remaining before a certification expires and stops counting.',
+    details: [
+      '🟢 Valid: More than 90 days remaining',
+      '🟡 Warning: 31-90 days remaining',
+      '🟠 Expiring: 30 days or less',
+      '🔴 Expired: No longer counts toward NPCU'
+    ]
+  },
+  lastLogin: {
+    title: 'Last Login',
+    description: 'When the user last accessed the Northpass LMS.',
+    details: [
+      'Helps identify inactive users',
+      'Users who never logged in show "Never"',
+      'Consider outreach for dormant accounts'
+    ]
+  }
+};
+
+// Info tooltip component
+const InfoTooltip = ({ metricKey, size = 'small', light = false }) => {
+  const metric = METRIC_DEFINITIONS[metricKey];
+  if (!metric) return null;
+  
+  return (
+    <Tooltip
+      title={
+        <div style={{ padding: '8px', maxWidth: '300px' }}>
+          <div style={{ fontWeight: 'bold', marginBottom: '4px', fontSize: '14px' }}>
+            {metric.title}
+          </div>
+          <div style={{ marginBottom: '8px', fontSize: '13px' }}>
+            {metric.description}
+          </div>
+          {metric.formula && (
+            <div style={{ 
+              backgroundColor: 'rgba(255,255,255,0.1)', 
+              padding: '6px', 
+              borderRadius: '4px', 
+              marginBottom: '8px',
+              fontFamily: 'monospace',
+              fontSize: '12px'
+            }}>
+              {metric.formula}
+            </div>
+          )}
+          {metric.details && (
+            <ul style={{ margin: '0', paddingLeft: '16px', fontSize: '12px' }}>
+              {metric.details.map((detail, i) => (
+                <li key={i} style={{ marginBottom: '2px' }}>{detail}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      }
+      arrow
+      placement="top"
+    >
+      <IconButton 
+        size={size} 
+        sx={{ 
+          opacity: 0.6, 
+          '&:hover': { opacity: 1 },
+          color: light ? 'rgba(255,255,255,0.8)' : 'inherit',
+          padding: '2px',
+          marginLeft: '4px'
+        }}
+      >
+        <Info fontSize={size} />
+      </IconButton>
+    </Tooltip>
+  );
+};
 
 // Map tier names to badge images (case-insensitive lookup with typo tolerance)
 const TIER_BADGES = {
@@ -62,8 +246,12 @@ const getExpiryInfo = (expiryDate) => {
 const ProductCategoryCard = ({ category, stats }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   
+  const isEmpty = !stats.count || stats.count === 0;
+  
   const toggleExpanded = () => {
-    setIsExpanded(!isExpanded);
+    if (!isEmpty) {
+      setIsExpanded(!isExpanded);
+    }
   };
   
   const handleKeyDown = (event) => {
@@ -74,7 +262,7 @@ const ProductCategoryCard = ({ category, stats }) => {
   };
   
   // Get unique courses (remove duplicates by name)
-  const uniqueCourses = stats.courses.reduce((acc, course) => {
+  const uniqueCourses = (stats.courses || []).reduce((acc, course) => {
     const existing = acc.find(c => c.name === course.name);
     if (!existing) {
       acc.push(course);
@@ -102,25 +290,27 @@ const ProductCategoryCard = ({ category, stats }) => {
   const hasExpiryIssues = (expirySummary.expired || 0) + (expirySummary.expiring || 0) > 0;
   
   return (
-    <div className="product-card">
+    <div className={`product-card ${isEmpty ? 'product-card-empty' : ''}`}>
       <div 
-        className="product-header-clickable" 
+        className={`product-header-clickable ${isEmpty ? 'not-clickable' : ''}`}
         onClick={toggleExpanded}
         onKeyDown={handleKeyDown}
-        tabIndex={0}
+        tabIndex={isEmpty ? -1 : 0}
         role="button"
         aria-expanded={isExpanded}
-        aria-label={`${category} - ${stats.count} certifications, ${stats.npcu} NPCU points. Click to ${isExpanded ? 'collapse' : 'expand'} details.`}
+        aria-label={`${category} - ${stats.count || 0} certifications, ${stats.npcu || 0} NPCU points.${isEmpty ? '' : ` Click to ${isExpanded ? 'collapse' : 'expand'} details.`}`}
       >
         <div className="product-header-content">
           <span className="product-category-name">{category}</span>
-          <span className={`expand-icon ${isExpanded ? 'expanded' : ''}`}>
-            {isExpanded ? '▼' : '▶'}
-          </span>
+          {!isEmpty && (
+            <span className={`expand-icon ${isExpanded ? 'expanded' : ''}`}>
+              {isExpanded ? '▼' : '▶'}
+            </span>
+          )}
         </div>
         <div className="product-metrics">
-          <span className="product-count">{stats.count} certs</span>
-          <span className="product-npcu">{stats.npcu} NPCU</span>
+          <span className={`product-count ${isEmpty ? 'empty' : ''}`}>{stats.count || 0} certs</span>
+          <span className={`product-npcu ${isEmpty ? 'empty' : ''}`}>{stats.npcu || 0} NPCU</span>
           {hasExpiryIssues && (
             <span className="expiry-alert">
               {expirySummary.expired > 0 && `${expirySummary.expired} expired`}
@@ -131,7 +321,7 @@ const ProductCategoryCard = ({ category, stats }) => {
         </div>
       </div>
       
-      {isExpanded && (
+      {isExpanded && !isEmpty && (
         <div className="product-details">
           <div className="product-details-header">
             <h4>Certifications in this category:</h4>
@@ -160,6 +350,7 @@ const ProductCategoryCard = ({ category, stats }) => {
                            expiryInfo.status === 'warning' ? '🟡' : '🟢'}
                         </span>
                         {expiryInfo.text}
+                        {index === 0 && <InfoTooltip metricKey="expiryStatus" />}
                       </span>
                       <span className="cert-expiry-date">
                         Expires: {expiryInfo.formattedDate}
@@ -235,19 +426,20 @@ const CompanyWidget = ({ groupName, tier }) => {
   const [error, setError] = useState(null);
   const [groupData, setGroupData] = useState(null);
   const [users, setUsers] = useState([]);
+  const [inProgressUsers, setInProgressUsers] = useState([]);  // Users with in-progress courses (no certs yet)
   const [totalNPCU, setTotalNPCU] = useState(0);
   const [certifiedUsers, setCertifiedUsers] = useState(0);
   const [tierRequirement, setTierRequirement] = useState(20);
-  const [companyProductBreakdown, setCompanyProductBreakdown] = useState({
-    'Nintex CE': { count: 0, npcu: 0, courses: [] },
-    'Nintex K2': { count: 0, npcu: 0, courses: [] },
-    'Nintex for Salesforce': { count: 0, npcu: 0, courses: [] },
-    'Other': { count: 0, npcu: 0, courses: [] }
-  });
+  const [certificationBreakdown, setCertificationBreakdown] = useState({});
+  const [categoryLabels, setCategoryLabels] = useState({});
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState(null);
   const [cacheStats, setCacheStats] = useState(null);
   const [sortBy, setSortBy] = useState('npcu');
   const [expandedUserId, setExpandedUserId] = useState(null);
+  const [expandedInProgressUserId, setExpandedInProgressUserId] = useState(null);  // For in-progress section
+  const [totalLmsUsers, setTotalLmsUsers] = useState(0);
   
   // Learning activity summary
   const [learningStats, setLearningStats] = useState({
@@ -292,6 +484,49 @@ const CompanyWidget = ({ groupName, tier }) => {
       setError('Failed to refresh data. Please try again.');
     } finally {
       setIsRefreshing(false);
+    }
+  };
+
+  // Sync partner data from Northpass API (admin function)
+  const handleSyncPartner = async () => {
+    if (isSyncing) return;
+    
+    setIsSyncing(true);
+    setSyncResult(null);
+    
+    try {
+      const response = await fetch('/api/db/sync/partner-by-name', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: groupName })
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.error || 'Sync failed');
+      }
+      
+      setSyncResult({
+        success: true,
+        message: `Synced successfully! ${result.stats?.enrollments?.created || 0} new enrollments, ${result.stats?.enrollments?.updated || 0} updated.`,
+        stats: result.stats
+      });
+      
+      // Refresh the dashboard to show updated data
+      setTimeout(() => {
+        fetchGroupUsers();
+        setSyncResult(null);
+      }, 3000);
+      
+    } catch (error) {
+      console.error('Error syncing partner:', error);
+      setSyncResult({
+        success: false,
+        message: error.message
+      });
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -383,9 +618,12 @@ const CompanyWidget = ({ groupName, tier }) => {
       
       // Set all state from database response
       setUsers(processedUsers);
+      setInProgressUsers(data.inProgressUsers || []);  // Users with in-progress courses (no certs yet)
       setTotalNPCU(data.totals.totalNPCU);
       setCertifiedUsers(data.totals.certifiedUsers);
-      setCompanyProductBreakdown(data.productBreakdown);
+      setCertificationBreakdown(data.certificationBreakdown || {});
+      setCategoryLabels(data.categoryLabels || {});
+      setTotalLmsUsers(data.totals.totalLmsUsers || data.group.memberCount);
       setLearningStats({
         totalEnrolled: data.totals.totalEnrolled,
         totalInProgress: data.totals.totalInProgress,
@@ -403,10 +641,11 @@ const CompanyWidget = ({ groupName, tier }) => {
       console.log(`   Company Total NPCU: ${data.totals.totalNPCU}`);
       console.log(`   Users with Certifications: ${data.totals.certifiedUsers}`);
       console.log(`   Company ${tier} Status: ${companyMeetsTierRequirement ? 'QUALIFIED' : 'NOT QUALIFIED'} (${data.totals.totalNPCU}/${tierRequirement} NPCU)`);
-      console.log('🏢 COMPANY PRODUCT BREAKDOWN:');
-      Object.entries(data.productBreakdown).forEach(([category, stats]) => {
+      console.log('🏢 CERTIFICATION CATEGORY BREAKDOWN:');
+      Object.entries(data.certificationBreakdown || {}).forEach(([category, stats]) => {
         if (stats.count > 0) {
-          console.log(`   ${category}: ${stats.count} certifications, ${stats.npcu} NPCU`);
+          const label = data.categoryLabels?.[category] || category;
+          console.log(`   ${label}: ${stats.count} certifications, ${stats.npcu} NPCU`);
         }
       });
       
@@ -523,7 +762,8 @@ const CompanyWidget = ({ groupName, tier }) => {
     );
   }
 
-  const certificationRate = users.length > 0 ? ((certifiedUsers / users.length) * 100).toFixed(1) : 0;
+  // Calculate certification rate based on total LMS users, not just certified users
+  const certificationRate = totalLmsUsers > 0 ? ((users.length / totalLmsUsers) * 100).toFixed(1) : 0;
 
   return (
     <div className="company-widget">
@@ -564,19 +804,31 @@ const CompanyWidget = ({ groupName, tier }) => {
       <div className="company-stats">
         <div className="stat-card">
           <div className="stat-number">{users?.length ?? 0}</div>
-          <div className="stat-label">Total Users</div>
+          <div className="stat-label">
+            Certified Users
+            <InfoTooltip metricKey="certifiedUsers" />
+          </div>
         </div>
         <div className="stat-card">
           <div className="stat-number">{totalNPCU ?? 0}</div>
-          <div className="stat-label">Total NPCU Points</div>
+          <div className="stat-label">
+            Total NPCU Points
+            <InfoTooltip metricKey="totalNPCU" />
+          </div>
         </div>
         <div className="stat-card">
-          <div className="stat-number">{certifiedUsers ?? 0}</div>
-          <div className="stat-label">Certified Users</div>
+          <div className="stat-number">{totalLmsUsers ?? 0}</div>
+          <div className="stat-label">
+            Total LMS Users
+            <InfoTooltip metricKey="totalLmsUsers" />
+          </div>
         </div>
         <div className="stat-card">
           <div className="stat-number">{certificationRate ?? 0}%</div>
-          <div className="stat-label">Certification Rate</div>
+          <div className="stat-label">
+            Certification Rate
+            <InfoTooltip metricKey="certificationRate" />
+          </div>
         </div>
       </div>
 
@@ -588,51 +840,67 @@ const CompanyWidget = ({ groupName, tier }) => {
             <div className="tile-icon">📚</div>
             <div className="tile-content">
               <div className="tile-number">{learningStats.totalEnrolled}</div>
-              <div className="tile-label">Total Courses</div>
+              <div className="tile-label">
+                Total Courses
+                <InfoTooltip metricKey="totalCourses" />
+              </div>
             </div>
           </div>
           <div className="learning-tile in-progress">
             <div className="tile-icon">⏳</div>
             <div className="tile-content">
               <div className="tile-number">{learningStats.totalInProgress}</div>
-              <div className="tile-label">In Progress</div>
+              <div className="tile-label">
+                In Progress
+                <InfoTooltip metricKey="inProgress" />
+              </div>
             </div>
           </div>
           <div className="learning-tile completed">
             <div className="tile-icon">✅</div>
             <div className="tile-content">
               <div className="tile-number">{learningStats.totalCompleted}</div>
-              <div className="tile-label">Completed</div>
+              <div className="tile-label">
+                Completed
+                <InfoTooltip metricKey="completed" />
+              </div>
             </div>
           </div>
           <div className="learning-tile certifications">
             <div className="tile-icon">🎓</div>
             <div className="tile-content">
               <div className="tile-number">{learningStats.totalCertifications}</div>
-              <div className="tile-label">Certifications</div>
+              <div className="tile-label">
+                Certifications
+                <InfoTooltip metricKey="certifications" />
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Product Category Breakdown */}
+      {/* Certification Category Breakdown */}
       <div className="product-breakdown">
-        <h3>📊 Product Category Breakdown</h3>
+        <h3>
+          🎓 Certification Category Breakdown
+          <InfoTooltip metricKey="categoryNPCU" />
+        </h3>
         <div className="product-stats">
-          {Object.entries(companyProductBreakdown).map(([category, stats]) => (
-            stats.count > 0 && (
-              <ProductCategoryCard 
-                key={category} 
-                category={category} 
-                stats={stats} 
-              />
-            )
+          {Object.entries(certificationBreakdown).map(([categoryKey, stats]) => (
+            <ProductCategoryCard 
+              key={categoryKey} 
+              category={categoryLabels[categoryKey] || stats.label || categoryKey} 
+              stats={stats} 
+            />
           ))}
         </div>
       </div>
 
       <div className="tier-requirements">
-        <h3>📋 {tier} Partner Requirements</h3>
+        <h3>
+          📋 {tier} Partner Requirements
+          <InfoTooltip metricKey="tierRequirement" />
+        </h3>
         <div className="requirement-item">
           <span className="requirement-label">Company Total NPCU Required:</span>
           <span className="requirement-value">{tierRequirement} points</span>
@@ -658,7 +926,10 @@ const CompanyWidget = ({ groupName, tier }) => {
 
       <div className="users-list">
         <div className="users-list-header">
-          <h3>👥 User Certifications</h3>
+          <h3>
+            🎓 Certified Team Members ({users.length})
+            <InfoTooltip metricKey="userNPCU" />
+          </h3>
           <div className="sort-controls">
             <label htmlFor="sort-select">Sort by:</label>
             <select 
@@ -673,6 +944,12 @@ const CompanyWidget = ({ groupName, tier }) => {
             </select>
           </div>
         </div>
+        {users.length === 0 ? (
+          <div className="no-certifications-message">
+            <p>🎓 No team members with active certifications yet.</p>
+            <p className="muted">Complete certification courses to appear on this dashboard.</p>
+          </div>
+        ) : (
         <div className="user-cards-grid">
           {[...users].sort(SORT_OPTIONS[sortBy].sortFn).map(user => {
             const isExpanded = expandedUserId === user.id;
@@ -718,17 +995,167 @@ const CompanyWidget = ({ groupName, tier }) => {
             );
           })}
         </div>
+        )}
       </div>
 
+      {/* In-Progress Team Members Section */}
+      {inProgressUsers.length > 0 && (
+        <div className="users-list in-progress-section">
+          <div className="users-list-header">
+            <h3>
+              📚 Learning In Progress ({inProgressUsers.length})
+              <InfoTooltip metricKey="inProgress" />
+            </h3>
+          </div>
+          <p className="section-description">
+            Team members actively working on courses who haven't earned certifications yet.
+          </p>
+          <div className="user-cards-grid">
+            {inProgressUsers.map(user => {
+              const isExpanded = expandedInProgressUserId === user.id;
+              const certCourses = (user.inProgressList || []).filter(c => c.isCertification);
+              const potentialNPCU = certCourses.reduce((sum, c) => sum + (c.npcu || 0), 0);
+              return (
+                <div 
+                  key={user.id} 
+                  className={`user-card-compact in-progress-card ${isExpanded ? 'expanded' : ''}`}
+                  onClick={() => setExpandedInProgressUserId(isExpanded ? null : user.id)}
+                >
+                  <div className="user-card-top">
+                    <div className="user-name-email">
+                      <h4>{user.name}</h4>
+                      <p className="user-email">{user.email}</p>
+                    </div>
+                    <div className="npcu-badge in-progress-badge" title="Courses in progress">
+                      {user.inProgressCourses}
+                    </div>
+                  </div>
+                  
+                  <div className="user-mini-stats">
+                    <span className="mini-stat" title="In Progress">📚 {user.inProgressCourses}</span>
+                    <span className="mini-stat" title="Certification courses (potential NPCU)">
+                      🎯 {certCourses.length} cert{certCourses.length !== 1 ? 's' : ''}
+                    </span>
+                    <span className="mini-stat last-login" title={`Last login: ${formatLastLogin(user.lastLoginAt)}`}>
+                      🕐 {formatLastLogin(user.lastLoginAt)}
+                    </span>
+                    <span className="expand-icon">{isExpanded ? '▲' : '▼'}</span>
+                  </div>
+                  
+                  {user.inProgressList && user.inProgressList.length > 0 && (
+                    <div className={`user-certs-mini ${isExpanded ? 'expanded' : ''}`}>
+                      {(isExpanded ? user.inProgressList : user.inProgressList.slice(0, 2)).map((course, index) => (
+                        <div key={index} className={`cert-tag in-progress-tag ${isExpanded ? 'cert-tag-full' : ''}`}>
+                          <span className="cert-tag-name">
+                            {isExpanded ? course.name : (course.name.length > 30 ? course.name.substring(0, 30) + '...' : course.name)}
+                          </span>
+                          {course.isCertification && (
+                            <span className="cert-tag-npcu potential">{course.npcu} NPCU</span>
+                          )}
+                        </div>
+                      ))}
+                      {!isExpanded && user.inProgressList.length > 2 && (
+                        <div className="cert-more">+{user.inProgressList.length - 2} more</div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {potentialNPCU > 0 && (
+                    <div className="potential-npcu">
+                      Potential: +{potentialNPCU} NPCU on completion
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* No Activity Message - shown when no certified or in-progress users */}
+      {users.length === 0 && inProgressUsers.length === 0 && (
+        <div className="no-activity-section">
+          <div className="no-activity-content">
+            <div className="no-activity-icon">📭</div>
+            <h3>No Learning Activity Found</h3>
+            <p>This partner has <strong>{totalLmsUsers || 0} team member{totalLmsUsers !== 1 ? 's' : ''}</strong> in the LMS, but no one has started any courses yet.</p>
+            <div className="no-activity-suggestions">
+              <p><strong>To get started:</strong></p>
+              <ul>
+                <li>🎯 Encourage team members to log in and explore available courses</li>
+                <li>📚 Start with foundational courses to build product knowledge</li>
+                <li>🏆 Complete certification courses to earn NPCU points</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="widget-footer">
-        <NintexButton 
-          variant="secondary" 
-          size="medium"
-          onClick={fetchGroupUsers}
-          leftIcon="🔄"
-        >
-          Refresh Data
-        </NintexButton>
+        <div className="footer-actions">
+          <NintexButton 
+            variant="secondary" 
+            size="medium"
+            onClick={fetchGroupUsers}
+            leftIcon="🔄"
+          >
+            Refresh Data
+          </NintexButton>
+          
+          <NintexButton 
+            variant="secondary" 
+            size="medium"
+            onClick={handleSyncPartner}
+            disabled={isSyncing}
+            leftIcon={isSyncing ? "⏳" : "☁️"}
+            title="Sync latest data from Northpass LMS for this partner"
+          >
+            {isSyncing ? 'Syncing...' : 'Sync from LMS'}
+          </NintexButton>
+          
+          {syncResult && (
+            <span className={`sync-result ${syncResult.success ? 'success' : 'error'}`}>
+              {syncResult.success ? '✅' : '❌'} {syncResult.message}
+            </span>
+          )}
+          
+          {users.length > 0 && (
+            <div className="export-buttons">
+              <NintexButton 
+                variant="secondary" 
+                size="medium"
+                onClick={() => exportToExcel({
+                  groupName: groupData?.attributes?.name || groupName,
+                  tier,
+                  users,
+                  inProgressUsers,
+                  totals: { totalNPCU, certifiedUsers, totalLmsUsers, totalCertifications: learningStats.totalCertifications },
+                  certificationBreakdown,
+                  categoryLabels
+                }, 'certification-export')}
+                leftIcon="📊"
+              >
+                Export Excel
+              </NintexButton>
+              <NintexButton 
+                variant="primary" 
+                size="medium"
+                onClick={() => exportToPDF({
+                  groupName: groupData?.attributes?.name || groupName,
+                  tier,
+                  users,
+                  inProgressUsers,
+                  totals: { totalNPCU, certifiedUsers, totalLmsUsers, totalCertifications: learningStats.totalCertifications },
+                  certificationBreakdown,
+                  categoryLabels
+                }, 'certification-letter')}
+                leftIcon="📄"
+              >
+                Download PDF Report
+              </NintexButton>
+            </div>
+          )}
+        </div>
         <p className="last-updated">
           Last updated: {new Date().toLocaleTimeString()}
         </p>

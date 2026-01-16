@@ -16,7 +16,7 @@ router.get('/templates', async (req, res) => {
   try {
     const templates = await query(`
       SELECT * FROM notification_templates
-      ORDER BY name
+      ORDER BY template_name
     `);
     res.json(templates);
   } catch (error) {
@@ -42,19 +42,65 @@ router.get('/templates/:id', async (req, res) => {
   }
 });
 
+// Get template by key
+router.get('/templates/key/:key', async (req, res) => {
+  try {
+    const [template] = await query(`
+      SELECT * FROM notification_templates WHERE template_key = ?
+    `, [req.params.key]);
+    
+    if (!template) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    res.json(template);
+  } catch (error) {
+    console.error('Error fetching template:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Preview template with variables
+router.post('/templates/:key/preview', async (req, res) => {
+  try {
+    const [template] = await query(`
+      SELECT * FROM notification_templates WHERE template_key = ? OR id = ?
+    `, [req.params.key, req.params.key]);
+    
+    if (!template) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    
+    const variables = req.body.variables || {};
+    let content = template.content || '';
+    let subject = template.subject || '';
+    
+    // Replace {{variable}} placeholders
+    for (const [key, value] of Object.entries(variables)) {
+      const regex = new RegExp(`{{${key}}}`, 'g');
+      content = content.replace(regex, value);
+      subject = subject.replace(regex, value);
+    }
+    
+    res.json({ subject, content, commType: template.comm_type });
+  } catch (error) {
+    console.error('Error previewing template:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Create template
 router.post('/templates', async (req, res) => {
   try {
-    const { name, description, subject, body_html, body_text, variables, is_active } = req.body;
+    const { template_key, template_name, comm_type, subject, content, description, variables, is_active } = req.body;
     
-    if (!name || !subject) {
-      return res.status(400).json({ error: 'Name and subject are required' });
+    if (!template_key || !template_name || !content) {
+      return res.status(400).json({ error: 'template_key, template_name, and content are required' });
     }
     
     const result = await query(`
-      INSERT INTO notification_templates (name, description, subject, body_html, body_text, variables, is_active)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [name, description, subject, body_html, body_text, JSON.stringify(variables || []), is_active !== false]);
+      INSERT INTO notification_templates (template_key, template_name, comm_type, subject, content, description, variables, is_active)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [template_key, template_name, comm_type || 'email', subject, content, description, JSON.stringify(variables || []), is_active !== false]);
     
     res.json({ success: true, id: result.insertId });
   } catch (error) {
@@ -66,19 +112,16 @@ router.post('/templates', async (req, res) => {
 // Update template
 router.put('/templates/:id', async (req, res) => {
   try {
-    const { name, description, subject, body_html, body_text, variables, is_active } = req.body;
+    const { subject, content, description, is_active } = req.body;
     
     await query(`
       UPDATE notification_templates SET
-        name = COALESCE(?, name),
-        description = COALESCE(?, description),
         subject = COALESCE(?, subject),
-        body_html = COALESCE(?, body_html),
-        body_text = COALESCE(?, body_text),
-        variables = COALESCE(?, variables),
+        content = COALESCE(?, content),
+        description = COALESCE(?, description),
         is_active = COALESCE(?, is_active)
       WHERE id = ?
-    `, [name, description, subject, body_html, body_text, variables ? JSON.stringify(variables) : null, is_active, req.params.id]);
+    `, [subject, content, description, is_active, req.params.id]);
     
     res.json({ success: true });
   } catch (error) {

@@ -154,17 +154,30 @@ const {
   logout,
   validateSession,
   cleanupExpiredSessions,
+  requestPasswordReset,
+  validateResetToken,
+  resetPassword,
+  requestMagicLink,
+  loginWithMagicLink,
+  cleanupExpiredTokens,
   getUsers,
   getUserById,
   createUser,
   updateUser,
   changePassword,
   deleteUser,
+  sendCredentialsEmail,
   getProfiles,
   getProfileById,
   createProfile,
   updateProfile,
-  deleteProfile
+  deleteProfile,
+  // Login History
+  getLoginHistory,
+  getLoginStats,
+  getRecentFailedAttempts,
+  getLoginActivityByDay,
+  cleanupLoginHistory
 } = require('./db/authService.cjs');
 
 const router = express.Router();
@@ -429,6 +442,36 @@ router.delete('/partners', async (req, res) => {
   }
 });
 
+// Bulk deactivate partners (soft delete)
+router.post('/partners/bulk-deactivate', async (req, res) => {
+  try {
+    const { partnerIds } = req.body;
+    
+    if (!partnerIds || !Array.isArray(partnerIds) || partnerIds.length === 0) {
+      return res.status(400).json({ error: 'partnerIds array is required' });
+    }
+    
+    const placeholders = partnerIds.map(() => '?').join(',');
+    const result = await query(
+      `UPDATE partners 
+       SET is_active = FALSE, 
+           deleted_at = NOW(), 
+           account_status = 'Inactive'
+       WHERE id IN (${placeholders})`,
+      partnerIds
+    );
+    
+    res.json({ 
+      success: true, 
+      message: `Deactivated ${result.affectedRows} partners`,
+      affectedRows: result.affectedRows
+    });
+  } catch (error) {
+    console.error('Bulk deactivate error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Manual contact linking endpoint
 router.post('/partners/link-contacts', async (req, res) => {
   try {
@@ -512,6 +555,537 @@ router.get('/lms/users/:id', async (req, res) => {
   }
 });
 
+/**
+ * Unified User Search - Search across LMS and CRM (Impartner) by email
+ * GET /api/db/users/search?q=email@domain.com
+ * Returns user info from both systems with sync status
+ */
+router.get('/users/search', async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.length < 3) {
+      return res.status(400).json({ error: 'Search query must be at least 3 characters' });
+    }
+
+    const searchTerm = `%${q.toLowerCase()}%`;
+
+    // Search LMS users
+    const lmsUsers = await query(`
+      SELECT 
+        u.id,
+        u.email,
+        u.first_name,
+        u.last_name,
+        u.status,
+        u.created_at_lms as created_at,
+        u.last_active_at,
+        u.synced_at as sync_updated_at
+      FROM lms_users u
+      WHERE LOWER(u.email) LIKE ? 
+         OR LOWER(u.first_name) LIKE ? 
+         OR LOWER(u.last_name) LIKE ?
+      ORDER BY u.email
+      LIMIT 50
+    `, [searchTerm, searchTerm, searchTerm]);
+
+    // Search CRM contacts (join to lms_groups for group_id)
+    const crmContacts = await query(`
+      SELECT 
+        c.id,
+        c.email,
+        c.first_name,
+        c.last_name,
+        c.title,
+        c.phone,
+        c.lms_user_id,
+        c.partner_id,
+        c.is_active,
+        c.created_at,
+        p.account_name,
+        p.partner_tier,
+        p.account_region,
+        p.account_owner,
+        g.id as lms_group_id,
+        g.name as lms_group_name
+      FROM contacts c
+      LEFT JOIN partners p ON c.partner_id = p.id
+      LEFT JOIN lms_groups g ON g.partner_id = p.id
+      WHERE LOWER(c.email) LIKE ? 
+         OR LOWER(c.first_name) LIKE ? 
+         OR LOWER(c.last_name) LIKE ?
+      ORDER BY c.email
+      LIMIT 50
+    `, [searchTerm, searchTerm, searchTerm]);
+
+    // Get unique emails across both systems
+    const allEmails = new Set([
+      ...lmsUsers.map(u => u.email?.toLowerCase()),
+      ...crmContacts.map(c => c.email?.toLowerCase())
+    ]);
+
+    // Build unified results
+    const results = [];
+    for (const email of allEmails) {
+      if (!email) continue;
+      
+      const lmsUser = lmsUsers.find(u => u.email?.toLowerCase() === email);
+      const crmContact = crmContacts.find(c => c.email?.toLowerCase() === email);
+      
+      results.push({
+        email,
+        firstName: lmsUser?.first_name || crmContact?.first_name || '',
+        lastName: lmsUser?.last_name || crmContact?.last_name || '',
+        inLms: !!lmsUser,
+        inCrm: !!crmContact,
+        lmsUser: lmsUser || null,
+        crmContact: crmContact || null,
+        syncStatus: lmsUser && crmContact ? 'synced' : 
+                    lmsUser && !crmContact ? 'lms_only' : 
+                    !lmsUser && crmContact ? 'crm_only' : 'unknown'
+      });
+    }
+
+    // Sort by sync status (issues first), then email
+    results.sort((a, b) => {
+      const statusOrder = { 'crm_only': 0, 'lms_only': 1, 'synced': 2 };
+      const statusDiff = statusOrder[a.syncStatus] - statusOrder[b.syncStatus];
+      if (statusDiff !== 0) return statusDiff;
+      return a.email.localeCompare(b.email);
+    });
+
+    res.json({
+      success: true,
+      query: q,
+      totalResults: results.length,
+      results
+    });
+  } catch (error) {
+    console.error('User search error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get detailed user profile - includes enrollments, groups, certifications
+ * GET /api/db/users/profile/:email
+ */
+router.get('/users/profile/:email', async (req, res) => {
+  try {
+    const email = decodeURIComponent(req.params.email).toLowerCase();
+
+    // Get LMS user
+    const [lmsUser] = await query(`
+      SELECT * FROM lms_users WHERE LOWER(email) = ?
+    `, [email]);
+
+    // Get CRM contact (join to lms_groups for group_id)
+    const [crmContact] = await query(`
+      SELECT 
+        c.*,
+        p.account_name,
+        p.partner_tier,
+        p.account_region,
+        p.account_owner,
+        p.owner_email,
+        p.lead_count,
+        g.id as lms_group_id,
+        g.name as lms_group_name
+      FROM contacts c
+      LEFT JOIN partners p ON c.partner_id = p.id
+      LEFT JOIN lms_groups g ON g.partner_id = p.id
+      WHERE LOWER(c.email) = ?
+    `, [email]);
+
+    // Get LMS groups if user exists
+    let groups = [];
+    if (lmsUser) {
+      groups = await query(`
+        SELECT 
+          g.id,
+          g.name,
+          g.partner_id,
+          gm.added_at as joined_at,
+          p.account_name as partner_name
+        FROM lms_groups g
+        INNER JOIN lms_group_members gm ON gm.group_id = g.id
+        LEFT JOIN partners p ON g.partner_id = p.id
+        WHERE gm.user_id = ?
+        ORDER BY g.name
+      `, [lmsUser.id]);
+    }
+
+    // Get enrollments if user exists
+    let enrollments = [];
+    let certifications = [];
+    let totalNpcu = 0;
+    if (lmsUser) {
+      enrollments = await query(`
+        SELECT 
+          e.id,
+          e.course_id,
+          e.status,
+          e.progress_percent,
+          e.completed_at,
+          e.enrolled_at,
+          c.name as course_name,
+          c.npcu_value,
+          c.is_certification,
+          c.product_category
+        FROM lms_enrollments e
+        INNER JOIN lms_courses c ON c.id = e.course_id
+        WHERE e.user_id = ?
+        ORDER BY e.completed_at DESC, e.enrolled_at DESC
+      `, [lmsUser.id]);
+
+      // Calculate certifications and NPCU
+      certifications = enrollments.filter(e => 
+        e.is_certification && e.status === 'completed' && e.npcu_value > 0
+      );
+      
+      // Calculate total NPCU (only completed certifications that haven't expired)
+      const now = new Date();
+      const twoYearsAgo = new Date(now.setFullYear(now.getFullYear() - 2));
+      
+      totalNpcu = certifications
+        .filter(e => e.completed_at && new Date(e.completed_at) > twoYearsAgo)
+        .reduce((sum, e) => sum + (e.npcu_value || 0), 0);
+    }
+
+    // Build profile response
+    const profile = {
+      email,
+      firstName: lmsUser?.first_name || crmContact?.first_name || '',
+      lastName: lmsUser?.last_name || crmContact?.last_name || '',
+      inLms: !!lmsUser,
+      inCrm: !!crmContact,
+      syncStatus: lmsUser && crmContact ? 'synced' : 
+                  lmsUser && !crmContact ? 'lms_only' : 
+                  !lmsUser && crmContact ? 'crm_only' : 'not_found',
+      lmsUser,
+      crmContact,
+      groups,
+      enrollments,
+      certifications,
+      stats: {
+        totalEnrollments: enrollments.length,
+        completedCourses: enrollments.filter(e => e.status === 'completed').length,
+        inProgressCourses: enrollments.filter(e => e.status === 'in_progress').length,
+        certificationCount: certifications.length,
+        totalNpcu,
+        groupCount: groups.length
+      }
+    };
+
+    res.json({
+      success: true,
+      profile
+    });
+  } catch (error) {
+    console.error('User profile error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Create user in LMS (Northpass) 
+ * POST /api/db/users/create-lms
+ * Body: { email, firstName, lastName, partnerId? }
+ */
+router.post('/users/create-lms', async (req, res) => {
+  try {
+    const { email, firstName, lastName, partnerId } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    // Check if user already exists in LMS
+    const [existingUser] = await query('SELECT id, email FROM lms_users WHERE LOWER(email) = ?', [email.toLowerCase()]);
+    if (existingUser) {
+      return res.status(409).json({ 
+        error: 'User already exists in LMS', 
+        existingUser 
+      });
+    }
+
+    // Make API call to Northpass to create user
+    const fetch = (await import('node-fetch')).default;
+    const NORTHPASS_API_KEY = process.env.NORTHPASS_API_KEY || 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+    
+    const createResponse = await fetch('https://api.northpass.com/v2/people', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Api-Key': NORTHPASS_API_KEY
+      },
+      body: JSON.stringify({
+        person: {
+          email: email.toLowerCase(),
+          first_name: firstName || '',
+          last_name: lastName || ''
+        }
+      })
+    });
+
+    if (!createResponse.ok) {
+      const errorData = await createResponse.json().catch(() => ({}));
+      throw new Error(errorData.message || `Northpass API error: ${createResponse.status}`);
+    }
+
+    const createData = await createResponse.json();
+    const newUserId = createData.data?.id;
+
+    // Insert into local database
+    await query(`
+      INSERT INTO lms_users (id, email, first_name, last_name, status, created_at, sync_updated_at)
+      VALUES (?, ?, ?, ?, 'active', NOW(), NOW())
+      ON DUPLICATE KEY UPDATE first_name = VALUES(first_name), last_name = VALUES(last_name), sync_updated_at = NOW()
+    `, [newUserId, email.toLowerCase(), firstName || '', lastName || '']);
+
+    // If partner specified, add to partner group and All Partners group
+    let groupsAdded = [];
+    if (partnerId) {
+      // Get partner's LMS group from lms_groups table
+      const [partnerGroup] = await query(`
+        SELECT g.id as lms_group_id, p.account_name 
+        FROM partners p 
+        LEFT JOIN lms_groups g ON g.partner_id = p.id 
+        WHERE p.id = ?
+      `, [partnerId]);
+      
+      if (partnerGroup?.lms_group_id) {
+        // Add to partner group in Northpass
+        try {
+          await fetch(`https://api.northpass.com/v2/groups/${partnerGroup.lms_group_id}/people`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Api-Key': NORTHPASS_API_KEY
+            },
+            body: JSON.stringify({ person_id: newUserId })
+          });
+          
+          await query(`
+            INSERT IGNORE INTO lms_group_members (group_id, user_id, created_at) VALUES (?, ?, NOW())
+          `, [partnerGroup.lms_group_id, newUserId]);
+          
+          groupsAdded.push({ groupId: partnerGroup.lms_group_id, name: partnerGroup.account_name });
+        } catch (groupErr) {
+          console.error('Error adding to partner group:', groupErr.message);
+        }
+      }
+
+      // Add to All Partners group
+      const [allPartnersGroup] = await query("SELECT id FROM lms_groups WHERE name = 'All Partners' LIMIT 1");
+      if (allPartnersGroup) {
+        try {
+          await fetch(`https://api.northpass.com/v2/groups/${allPartnersGroup.id}/people`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Api-Key': NORTHPASS_API_KEY
+            },
+            body: JSON.stringify({ person_id: newUserId })
+          });
+          
+          await query(`
+            INSERT IGNORE INTO lms_group_members (group_id, user_id, created_at) VALUES (?, ?, NOW())
+          `, [allPartnersGroup.id, newUserId]);
+          
+          groupsAdded.push({ groupId: allPartnersGroup.id, name: 'All Partners' });
+        } catch (groupErr) {
+          console.error('Error adding to All Partners group:', groupErr.message);
+        }
+      }
+    }
+
+    // Update contact's lms_user_id if they exist in CRM
+    await query(`
+      UPDATE contacts SET lms_user_id = ? WHERE LOWER(email) = ?
+    `, [newUserId, email.toLowerCase()]);
+
+    res.json({
+      success: true,
+      message: 'User created in LMS',
+      user: {
+        id: newUserId,
+        email: email.toLowerCase(),
+        firstName,
+        lastName
+      },
+      groupsAdded
+    });
+  } catch (error) {
+    console.error('Create LMS user error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Create contact in CRM (local database) 
+ * POST /api/db/users/create-crm
+ * Body: { email, firstName, lastName, partnerId, title? }
+ */
+router.post('/users/create-crm', async (req, res) => {
+  try {
+    const { email, firstName, lastName, partnerId, title } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    // Check if contact already exists
+    const [existingContact] = await query('SELECT id, email FROM contacts WHERE LOWER(email) = ?', [email.toLowerCase()]);
+    if (existingContact) {
+      return res.status(409).json({ 
+        error: 'Contact already exists in CRM', 
+        existingContact 
+      });
+    }
+
+    // Get partner info if specified
+    let partnerInfo = null;
+    if (partnerId) {
+      const [partner] = await query('SELECT id, account_name, partner_tier FROM partners WHERE id = ?', [partnerId]);
+      partnerInfo = partner;
+    }
+
+    // Check if user exists in LMS to link
+    const [lmsUser] = await query('SELECT id FROM lms_users WHERE LOWER(email) = ?', [email.toLowerCase()]);
+
+    // Create contact
+    const result = await query(`
+      INSERT INTO contacts (email, first_name, last_name, title, partner_id, lms_user_id, is_active, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, TRUE, NOW())
+    `, [email.toLowerCase(), firstName || '', lastName || '', title || '', partnerId || null, lmsUser?.id || null]);
+
+    res.json({
+      success: true,
+      message: 'Contact created in CRM',
+      contact: {
+        id: result.insertId,
+        email: email.toLowerCase(),
+        firstName,
+        lastName,
+        title,
+        partnerId,
+        partnerName: partnerInfo?.account_name,
+        lmsUserId: lmsUser?.id || null
+      }
+    });
+  } catch (error) {
+    console.error('Create CRM contact error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Add existing LMS user to a group
+ * POST /api/db/users/add-to-group
+ * Body: { userId, groupId }
+ */
+router.post('/users/add-to-group', async (req, res) => {
+  try {
+    const { userId, groupId } = req.body;
+    
+    if (!userId || !groupId) {
+      return res.status(400).json({ error: 'userId and groupId are required' });
+    }
+
+    // Verify user exists
+    const [user] = await query('SELECT id, email FROM lms_users WHERE id = ?', [userId]);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found in LMS' });
+    }
+
+    // Verify group exists
+    const [group] = await query('SELECT id, name FROM lms_groups WHERE id = ?', [groupId]);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    // Check if already a member
+    const [existing] = await query(
+      'SELECT * FROM lms_group_members WHERE user_id = ? AND group_id = ?', 
+      [userId, groupId]
+    );
+    if (existing) {
+      return res.status(409).json({ error: 'User is already a member of this group' });
+    }
+
+    // Add to group in Northpass using JSON:API format
+    const fetch = (await import('node-fetch')).default;
+    const NORTHPASS_API_KEY = process.env.NORTHPASS_API_KEY || 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+    
+    // Build JSON:API payload
+    const payload = {
+      data: [{
+        type: 'people',
+        id: String(userId)
+      }]
+    };
+    
+    const addResponse = await fetch(`https://api.northpass.com/v2/groups/${groupId}/relationships/people`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Api-Key': NORTHPASS_API_KEY
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!addResponse.ok) {
+      const errorText = await addResponse.text();
+      console.error(`Northpass API error: ${addResponse.status} - ${errorText}`);
+      // 422 usually means user already in group
+      if (addResponse.status === 422) {
+        return res.status(409).json({ error: 'User may already be a member of this group in Northpass' });
+      }
+      throw new Error(`Northpass API error: ${addResponse.status}`);
+    }
+
+    // Add to local database
+    await query(`
+      INSERT INTO lms_group_members (group_id, user_id, added_at) VALUES (?, ?, NOW())
+    `, [groupId, userId]);
+
+    res.json({
+      success: true,
+      message: `Added ${user.email} to group "${group.name}"`,
+      user: { id: userId, email: user.email },
+      group: { id: groupId, name: group.name }
+    });
+  } catch (error) {
+    console.error('Add to group error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get list of partners for dropdown
+ * GET /api/db/users/partners-list
+ */
+router.get('/users/partners-list', async (req, res) => {
+  try {
+    const partners = await query(`
+      SELECT 
+        p.id, 
+        p.account_name, 
+        p.partner_tier, 
+        p.account_region,
+        g.id as lms_group_id,
+        p.is_active
+      FROM partners p
+      LEFT JOIN lms_groups g ON g.partner_id = p.id
+      WHERE p.is_active = TRUE
+      ORDER BY p.account_name
+    `);
+    res.json(partners);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/lms/groups', async (req, res) => {
   try {
     const { search, hasPartner } = req.query;
@@ -555,6 +1129,34 @@ router.get('/lms/groups/:id', async (req, res) => {
     `, [req.params.id]);
 
     res.json({ group, members });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update group name in local database (after Northpass API update)
+router.patch('/lms/groups/:id', async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name) {
+      return res.status(400).json({ error: 'Name is required' });
+    }
+
+    // Check group exists
+    const [group] = await query('SELECT * FROM lms_groups WHERE id = ?', [req.params.id]);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    // Update group name
+    await query('UPDATE lms_groups SET name = ?, updated_at = NOW() WHERE id = ?', [name, req.params.id]);
+
+    res.json({ 
+      success: true, 
+      message: `Group renamed from "${group.name}" to "${name}"`,
+      oldName: group.name,
+      newName: name
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -877,6 +1479,41 @@ router.get('/lms/partner-domain-analysis', async (req, res) => {
       }
     });
     
+    // Get CRM contact associations for lookup
+    const contactAssociations = await query(`
+      SELECT 
+        LOWER(c.email) as email,
+        c.id as contact_id,
+        c.first_name,
+        c.last_name,
+        p.id as crm_partner_id,
+        p.account_name as crm_partner_name,
+        p.partner_tier as crm_partner_tier,
+        p.is_active as crm_partner_active,
+        p.account_status as crm_partner_status,
+        g.id as crm_partner_group_id,
+        g.name as crm_partner_group_name
+      FROM contacts c
+      INNER JOIN partners p ON p.id = c.partner_id
+      LEFT JOIN lms_groups g ON g.partner_id = p.id
+      WHERE c.is_active = TRUE
+    `);
+    
+    // Build email -> CRM association lookup
+    const crmAssociationMap = new Map();
+    contactAssociations.forEach(c => {
+      crmAssociationMap.set(c.email, {
+        contactId: c.contact_id,
+        partnerName: c.crm_partner_name,
+        partnerId: c.crm_partner_id,
+        partnerTier: c.crm_partner_tier,
+        partnerActive: c.crm_partner_active,
+        partnerStatus: c.crm_partner_status,
+        partnerGroupId: c.crm_partner_group_id,
+        partnerGroupName: c.crm_partner_group_name
+      });
+    });
+    
     // Analyze users - only include those with partner domains
     const domainStats = new Map();
     let totalPartnerUsers = 0;
@@ -952,6 +1589,9 @@ router.get('/lms/partner-domain-analysis', async (req, res) => {
         stats.notInPartnerGroup++;
       }
       
+      // Get CRM association for this user
+      const crmAssociation = crmAssociationMap.get(email);
+      
       stats.users.push({
         id: user.id,
         email: user.email,
@@ -959,7 +1599,12 @@ router.get('/lms/partner-domain-analysis', async (req, res) => {
         lastName: user.last_name,
         groupIds: userGroupIds,
         groupNames: userGroupNames,
-        inPartnerGroup
+        inPartnerGroup,
+        // New: CRM association info
+        crmAssociation: crmAssociation || null,
+        hasCrmAssociation: !!crmAssociation,
+        // Flag if CRM partner differs from domain-matched partner
+        crmPartnerMismatch: crmAssociation && crmAssociation.partnerId !== stats.matchedPartnerId
       });
     });
     
@@ -1426,17 +2071,52 @@ router.get('/dashboard/group', async (req, res) => {
       return res.status(400).json({ error: 'Group name is required' });
     }
     
-    // Find the LMS group by name (case-insensitive)
-    const [groups] = await query(
-      'SELECT * FROM lms_groups WHERE LOWER(name) = LOWER(?) LIMIT 1',
-      [name]
-    );
+    let group = null;
+    let displayName = name; // Use the requested name as default display name
     
-    if (!groups || groups.length === 0) {
-      return res.status(404).json({ error: `Group "${name}" not found` });
+    // Strategy 1: Try to find a partner with this account_name and get their linked LMS group
+    const partnerGroups = await query(`
+      SELECT g.*, p.account_name as partner_name
+      FROM lms_groups g
+      JOIN partners p ON g.partner_id = p.id
+      WHERE LOWER(p.account_name) = LOWER(?)
+        AND p.is_active = 1
+      LIMIT 1
+    `, [name]);
+    
+    if (partnerGroups.length > 0) {
+      group = partnerGroups[0];
+      displayName = group.partner_name; // Use partner's account_name for display
+      console.log(`✅ Found group "${group.name}" via partner lookup for "${name}" (display: ${displayName})`);
     }
     
-    const group = groups;
+    // Strategy 2: Try exact match on LMS group name
+    if (!group) {
+      const [directMatch] = await query(
+        'SELECT * FROM lms_groups WHERE LOWER(name) = LOWER(?) LIMIT 1',
+        [name]
+      );
+      if (directMatch) {
+        group = directMatch;
+        console.log(`✅ Found group "${group.name}" via direct name match`);
+      }
+    }
+    
+    // Strategy 3: Try with "ptr_" prefix (common naming convention)
+    if (!group) {
+      const [prefixMatch] = await query(
+        'SELECT * FROM lms_groups WHERE LOWER(name) = LOWER(?) LIMIT 1',
+        [`ptr_${name}`]
+      );
+      if (prefixMatch) {
+        group = prefixMatch;
+        console.log(`✅ Found group "${group.name}" via ptr_ prefix match`);
+      }
+    }
+    
+    if (!group) {
+      return res.status(404).json({ error: `Group "${name}" not found` });
+    }
     
     // Get all users in this group via lms_group_members
     const users = await query(`
@@ -1456,7 +2136,7 @@ router.get('/dashboard/group', async (req, res) => {
       return res.json({
         group: {
           id: group.id,
-          name: group.name,
+          name: displayName,
           memberCount: 0
         },
         users: [],
@@ -1495,18 +2175,45 @@ router.get('/dashboard/group', async (req, res) => {
         co.name as course_name,
         co.npcu_value,
         co.is_certification,
-        co.product_category
+        co.product_category,
+        co.certification_category
       FROM lms_enrollments e
       JOIN lms_courses co ON co.id = e.course_id
       WHERE e.user_id IN (${placeholders})
     `, userIds);
     
-    // Build user data with learning stats
-    const productBreakdown = {
-      'Nintex CE': { count: 0, npcu: 0, courses: [] },
-      'Nintex K2': { count: 0, npcu: 0, courses: [] },
-      'Nintex for Salesforce': { count: 0, npcu: 0, courses: [] },
-      'Other': { count: 0, npcu: 0, courses: [] }
+    // Category labels for display
+    const CERT_CATEGORY_LABELS = {
+      'nintex_ce': 'Nintex CE',
+      'nintex_k2': 'Nintex Automation K2',
+      'nintex_salesforce': 'Nintex for Salesforce',
+      'go_to_market': 'Go To Market'
+    };
+    
+    // Calculate expiry date based on completion date and category
+    // GTM certifications: 12 months, all others: 24 months
+    const calculateExpiry = (completedAt, category) => {
+      if (!completedAt) return null;
+      const completionDate = new Date(completedAt);
+      const expiryMonths = category === 'go_to_market' ? 12 : 24;
+      const expiryDate = new Date(completionDate);
+      expiryDate.setMonth(expiryDate.getMonth() + expiryMonths);
+      return expiryDate.toISOString();
+    };
+    
+    // Check if a certification is expired
+    const isExpiredCert = (completedAt, category) => {
+      const expiryDate = calculateExpiry(completedAt, category);
+      if (!expiryDate) return false;
+      return new Date(expiryDate) < new Date();
+    };
+    
+    // Build user data with learning stats - use certification_category from DB
+    const certificationBreakdown = {
+      'nintex_ce': { count: 0, npcu: 0, courses: [], label: 'Nintex CE' },
+      'nintex_k2': { count: 0, npcu: 0, courses: [], label: 'Nintex Automation K2' },
+      'nintex_salesforce': { count: 0, npcu: 0, courses: [], label: 'Nintex for Salesforce' },
+      'go_to_market': { count: 0, npcu: 0, courses: [], label: 'Go To Market' }
     };
     
     let totalNPCU = 0;
@@ -1525,6 +2232,7 @@ router.get('/dashboard/group', async (req, res) => {
       let userNPCU = 0;
       let userCertCount = 0;
       const userCertifications = [];
+      const userInProgressCourses = [];  // Track in-progress courses
       
       // Count all enrollments (total courses user is enrolled in, regardless of status)
       let totalEnrollments = userEnrollments.length;
@@ -1532,12 +2240,28 @@ router.get('/dashboard/group', async (req, res) => {
       let completed = 0;
       
       userEnrollments.forEach(e => {
-        if (e.status === 'in_progress') inProgress++;
-        else if (e.status === 'completed') {
+        if (e.status === 'in_progress') {
+          inProgress++;
+          // Track in-progress course details
+          userInProgressCourses.push({
+            id: e.enrollment_id,
+            courseId: e.course_id,
+            name: e.course_name,
+            npcu: e.npcu_value || 0,
+            isCertification: e.is_certification && e.npcu_value > 0,
+            enrolledAt: e.enrolled_at || e.created_at,
+            category: e.certification_category || 'uncategorized',
+            categoryLabel: CERT_CATEGORY_LABELS[e.certification_category] || 'Other'
+          });
+        } else if (e.status === 'completed') {
           completed++;
           
-          // Check if this is a valid certification (not expired)
-          const isExpired = e.expires_at && new Date(e.expires_at) < new Date();
+          // Get category for expiry calculation
+          const category = e.certification_category || 'nintex_ce';
+          
+          // Calculate expiry based on completion date (24 months for regular, 12 months for GTM)
+          const calculatedExpiry = calculateExpiry(e.completed_at, category);
+          const isExpired = isExpiredCert(e.completed_at, category);
           
           if (e.is_certification && e.npcu_value > 0 && !isExpired) {
             // Use course_id + user_id as unique key to avoid counting duplicates
@@ -1548,19 +2272,21 @@ router.get('/dashboard/group', async (req, res) => {
               userNPCU += e.npcu_value;
               userCertCount++;
               
-              // Add to product breakdown
-              const category = e.product_category || getProductCategory(e.course_name);
-              if (productBreakdown[category]) {
-                productBreakdown[category].count++;
-                productBreakdown[category].npcu += e.npcu_value;
-                productBreakdown[category].courses.push({
+              // Add to certification breakdown using certification_category from DB
+              if (certificationBreakdown[category]) {
+                certificationBreakdown[category].count++;
+                certificationBreakdown[category].npcu += e.npcu_value;
+                certificationBreakdown[category].courses.push({
                   id: e.course_id,
                   name: e.course_name,
                   npcu: e.npcu_value,
                   completedAt: e.completed_at,
-                  expiresAt: e.expires_at,
+                  expiresAt: calculatedExpiry,
+                  expiryDate: calculatedExpiry, // alias for frontend compatibility
                   userId: user.id,
-                  userName: `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.email
+                  userName: `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.email,
+                  category: category,
+                  categoryLabel: CERT_CATEGORY_LABELS[category] || category
                 });
               }
               
@@ -1570,9 +2296,11 @@ router.get('/dashboard/group', async (req, res) => {
                 name: e.course_name,
                 npcu: e.npcu_value,
                 completedAt: e.completed_at,
-                expiresAt: e.expires_at,
+                expiresAt: calculatedExpiry,
                 status: 'completed',
-                isValidCourse: true
+                isValidCourse: true,
+                category: category,
+                categoryLabel: CERT_CATEGORY_LABELS[category] || category
               });
             }
           }
@@ -1596,6 +2324,7 @@ router.get('/dashboard/group', async (req, res) => {
         totalNPCU: userNPCU,
         certificationCount: userCertCount,
         certifications: userCertifications,
+        inProgressList: userInProgressCourses,  // List of in-progress courses
         enrolledCourses: totalEnrollments,  // Total courses this user is enrolled in
         inProgressCourses: inProgress,
         completedCourses: completed,
@@ -1606,25 +2335,41 @@ router.get('/dashboard/group', async (req, res) => {
       };
     });
     
-    // Sort users by NPCU descending
-    processedUsers.sort((a, b) => b.totalNPCU - a.totalNPCU);
+    // Filter to only users with certifications (NPCU > 0)
+    const certifiedUsersOnly = processedUsers.filter(u => u.certificationCount > 0);
+    
+    // Filter users who have in-progress courses but NO certifications yet
+    const inProgressUsersOnly = processedUsers.filter(u => 
+      u.inProgressCourses > 0 && u.certificationCount === 0
+    );
+    
+    // Sort certified users by NPCU descending
+    certifiedUsersOnly.sort((a, b) => b.totalNPCU - a.totalNPCU);
+    
+    // Sort in-progress users by number of in-progress courses descending
+    inProgressUsersOnly.sort((a, b) => b.inProgressCourses - a.inProgressCourses);
     
     res.json({
       group: {
         id: group.id,
-        name: group.name,
-        memberCount: users.length
+        name: displayName,
+        memberCount: users.length,        // Total LMS users in group
+        certifiedCount: certifiedUsersOnly.length,  // Users with certifications
+        inProgressCount: inProgressUsersOnly.length  // Users with in-progress but no certs
       },
-      users: processedUsers,
+      users: certifiedUsersOnly,  // Only return users with certifications
+      inProgressUsers: inProgressUsersOnly,  // Users with in-progress courses (no certs yet)
       totals: {
         totalNPCU,
         certifiedUsers,
         totalEnrolled,
         totalInProgress,
         totalCompleted,
-        totalCertifications
+        totalCertifications,
+        totalLmsUsers: users.length  // Keep track of total for reference
       },
-      productBreakdown
+      certificationBreakdown,  // Use new certification category breakdown
+      categoryLabels: CERT_CATEGORY_LABELS
     });
     
   } catch (error) {
@@ -2396,6 +3141,48 @@ router.put('/tasks/:taskType/interval', async (req, res) => {
   }
 });
 
+// Update task config (mode)
+router.put('/tasks/:taskType/config', async (req, res) => {
+  try {
+    const { mode } = req.body;
+    if (!mode || !['full', 'incremental'].includes(mode)) {
+      return res.status(400).json({ error: 'Invalid mode (must be "full" or "incremental")' });
+    }
+    
+    // Get current config
+    const [task] = await query('SELECT config FROM scheduled_tasks WHERE task_type = ?', [req.params.taskType]);
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    
+    // Parse and update config
+    let config = {};
+    try {
+      config = task.config ? JSON.parse(task.config) : {};
+    } catch {
+      config = {};
+    }
+    config.mode = mode;
+    
+    // Save updated config
+    const result = await query(`
+      UPDATE scheduled_tasks 
+      SET config = ?, 
+          updated_at = NOW()
+      WHERE task_type = ?
+    `, [JSON.stringify(config), req.params.taskType]);
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    
+    const updatedTask = await taskScheduler.getTask(req.params.taskType);
+    res.json({ success: true, task: updatedTask });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Manually trigger a task
 router.post('/tasks/:taskType/run', async (req, res) => {
   try {
@@ -2455,7 +3242,7 @@ router.post('/analysis/save', async (req, res) => {
 // Get unified sync history (combines task_run_history and sync_logs)
 router.get('/sync/unified-history', async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 30;
+    const limit = parseInt(req.query.limit) || 50;
     
     // Get task run history (scheduled tasks) - extract records from result_summary JSON
     const taskHistory = await query(`
@@ -2467,18 +3254,15 @@ router.get('/sync/unified-history', async (req, res) => {
         completed_at,
         duration_seconds,
         error_message,
-        result_summary as details,
+        result_summary,
         records_processed,
-        COALESCE(JSON_EXTRACT(result_summary, '$.recordsProcessed'), 0) as json_records_processed,
-        COALESCE(JSON_EXTRACT(result_summary, '$.updated'), JSON_EXTRACT(result_summary, '$.confirmed'), 0) as records_updated,
-        COALESCE(JSON_EXTRACT(result_summary, '$.errors'), JSON_EXTRACT(result_summary, '$.failed'), 0) as records_failed,
         'scheduled_task' as source
       FROM task_run_history 
       ORDER BY started_at DESC 
       LIMIT ?
     `, [limit]);
     
-    // Get enrollment sync logs
+    // Get sync logs (manual syncs and self-logging tasks)
     const syncLogs = await query(`
       SELECT 
         id,
@@ -2489,35 +3273,104 @@ router.get('/sync/unified-history', async (req, res) => {
         records_processed,
         records_created,
         records_updated,
+        records_deleted,
         records_failed,
         error_message,
         details,
         TIMESTAMPDIFF(SECOND, started_at, completed_at) as duration_seconds,
-        'enrollment_sync' as source
+        'manual_sync' as source
       FROM sync_logs 
       ORDER BY started_at DESC 
       LIMIT ?
     `, [limit]);
     
-    // Merge and sort by started_at DESC
-    const taskHistoryArray = Array.isArray(taskHistory) ? taskHistory : [];
-    const syncLogsArray = Array.isArray(syncLogs) ? syncLogs : [];
+    // Normalize task_run_history entries to consistent format
+    const normalizedTaskHistory = (Array.isArray(taskHistory) ? taskHistory : []).map(h => {
+      let details = {};
+      let recordsProcessed = h.records_processed || 0;
+      let recordsCreated = 0;
+      let recordsUpdated = 0;
+      let recordsDeleted = 0;
+      let recordsFailed = 0;
+      
+      // Parse result_summary to extract stats
+      if (h.result_summary) {
+        try {
+          const summary = typeof h.result_summary === 'string' 
+            ? JSON.parse(h.result_summary) 
+            : h.result_summary;
+          
+          // Extract records processed
+          recordsProcessed = summary.recordsProcessed || summary.processed || summary.total || summary.synced || h.records_processed || 0;
+          
+          // Extract CRUD counts from various possible locations
+          recordsCreated = summary.created || summary.details?.created || 0;
+          recordsUpdated = summary.updated || summary.confirmed || summary.details?.updated || summary.synced || 0;
+          recordsDeleted = summary.deleted || summary.details?.deleted || 0;
+          recordsFailed = summary.failed || summary.errors || summary.details?.failed || 0;
+          
+          // For LMS bundle, aggregate sub-task counts
+          if (summary.details && typeof summary.details === 'object') {
+            const subTasks = Object.values(summary.details);
+            if (subTasks.length > 0 && typeof subTasks[0] === 'object') {
+              recordsCreated = subTasks.reduce((sum, t) => sum + (t.created || 0), 0);
+              recordsUpdated = subTasks.reduce((sum, t) => sum + (t.updated || t.processed || 0), 0);
+              recordsFailed = subTasks.reduce((sum, t) => sum + (t.failed || t.errors || 0), 0);
+            }
+          }
+          
+          details = summary;
+        } catch (e) {
+          details = { raw: h.result_summary };
+        }
+      }
+      
+      return {
+        id: h.id,
+        sync_type: h.sync_type,
+        status: h.status,
+        started_at: h.started_at,
+        completed_at: h.completed_at,
+        duration_seconds: h.duration_seconds,
+        error_message: h.error_message,
+        records_processed: recordsProcessed,
+        records_created: recordsCreated,
+        records_updated: recordsUpdated,
+        records_deleted: recordsDeleted,
+        records_failed: recordsFailed,
+        details: JSON.stringify(details),
+        source: h.source
+      };
+    });
     
-    const combined = [
-      ...taskHistoryArray.map(h => ({
-        ...h,
-        // Use records_processed from column or fallback to JSON
-        records_processed: h.records_processed || h.json_records_processed || 0,
-        records_updated: h.records_updated || 0,
-        records_failed: h.records_failed || 0,
-        details: typeof h.details === 'string' ? h.details : JSON.stringify(h.details)
-      })),
-      ...syncLogsArray.map(log => ({
+    // Normalize sync_logs entries
+    const normalizedSyncLogs = (Array.isArray(syncLogs) ? syncLogs : []).map(log => {
+      let details = {};
+      if (log.details) {
+        try {
+          details = typeof log.details === 'string' ? JSON.parse(log.details) : log.details;
+        } catch {
+          details = { raw: log.details };
+        }
+      }
+      
+      // Add the record counts to details for display
+      details.processed = log.records_processed || details.processed || 0;
+      details.created = log.records_created || details.created || 0;
+      details.updated = log.records_updated || details.updated || 0;
+      details.deleted = log.records_deleted || details.deleted || 0;
+      details.failed = log.records_failed || details.failed || 0;
+      
+      return {
         ...log,
-        details: typeof log.details === 'string' ? log.details : JSON.stringify(log.details)
-      }))
-    ].sort((a, b) => new Date(b.started_at) - new Date(a.started_at))
-     .slice(0, limit);
+        details: JSON.stringify(details)
+      };
+    });
+    
+    // Merge and sort by started_at DESC
+    const combined = [...normalizedTaskHistory, ...normalizedSyncLogs]
+      .sort((a, b) => new Date(b.started_at) - new Date(a.started_at))
+      .slice(0, limit);
     
     res.json(combined);
   } catch (error) {
@@ -2570,6 +3423,15 @@ function requirePermission(category, action) {
   };
 }
 
+// Helper to get client IP address (handles proxies)
+function getClientIp(req) {
+  return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
+         req.headers['x-real-ip'] || 
+         req.socket?.remoteAddress || 
+         req.ip || 
+         'unknown';
+}
+
 // Login
 router.post('/auth/login', async (req, res) => {
   try {
@@ -2579,7 +3441,13 @@ router.post('/auth/login', async (req, res) => {
       return res.status(400).json({ error: 'Email and password required' });
     }
     
-    const result = await login(email, password);
+    // Gather metadata for login history
+    const metadata = {
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent']
+    };
+    
+    const result = await login(email, password, metadata);
     
     if (!result.success) {
       return res.status(401).json({ error: result.error });
@@ -2611,7 +3479,278 @@ router.get('/auth/me', authMiddleware, async (req, res) => {
 router.post('/auth/cleanup', authMiddleware, requirePermission('settings', 'edit'), async (req, res) => {
   try {
     const deleted = await cleanupExpiredSessions();
-    res.json({ success: true, deletedSessions: deleted });
+    const tokens = await cleanupExpiredTokens();
+    res.json({ 
+      success: true, 
+      deletedSessions: deleted,
+      deletedResetTokens: tokens.passwordResetTokens,
+      deletedMagicLinks: tokens.magicLinkTokens
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// Login History Endpoints
+// ============================================
+
+// Get login history (admin only)
+router.get('/auth/login-history', authMiddleware, requirePermission('users', 'view'), async (req, res) => {
+  try {
+    const { userId, email, success, limit, offset, startDate, endDate } = req.query;
+    
+    const filters = {
+      limit: parseInt(limit) || 100,
+      offset: parseInt(offset) || 0
+    };
+    
+    if (userId) filters.userId = parseInt(userId);
+    if (email) filters.email = email;
+    if (success !== undefined) filters.success = success === 'true';
+    if (startDate) filters.startDate = new Date(startDate);
+    if (endDate) filters.endDate = new Date(endDate);
+    
+    const history = await getLoginHistory(filters);
+    res.json(history);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get login stats (admin only)
+router.get('/auth/login-stats', authMiddleware, requirePermission('users', 'view'), async (req, res) => {
+  try {
+    const { userId, days } = req.query;
+    const stats = await getLoginStats(
+      userId ? parseInt(userId) : null,
+      parseInt(days) || 30
+    );
+    res.json(stats);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get recent failed login attempts (security monitoring)
+router.get('/auth/failed-attempts', authMiddleware, requirePermission('users', 'view'), async (req, res) => {
+  try {
+    const { hours, minAttempts } = req.query;
+    const attempts = await getRecentFailedAttempts(
+      parseInt(hours) || 1,
+      parseInt(minAttempts) || 3
+    );
+    res.json(attempts);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get login activity by day (for charts)
+router.get('/auth/login-activity', authMiddleware, requirePermission('users', 'view'), async (req, res) => {
+  try {
+    const { days, userId } = req.query;
+    const activity = await getLoginActivityByDay(
+      parseInt(days) || 30,
+      userId ? parseInt(userId) : null
+    );
+    res.json(activity);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Cleanup old login history (admin only)
+router.post('/auth/login-history/cleanup', authMiddleware, requirePermission('settings', 'edit'), async (req, res) => {
+  try {
+    const { retentionDays } = req.body;
+    const deleted = await cleanupLoginHistory(retentionDays || 90);
+    res.json({ success: true, deletedRecords: deleted });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// Password Reset Endpoints
+// ============================================
+
+// Request password reset (sends email via Nintex Workflow)
+router.post('/auth/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+    
+    const result = await requestPasswordReset(email);
+    
+    if (result.token) {
+      // Send email via Nintex Workflow
+      try {
+        const { sendEmail } = require('./db/notificationService.cjs');
+        
+        const resetUrl = `${req.protocol}://${req.get('host')}/admin/reset-password?token=${result.token}`;
+        
+        await sendEmail(
+          result.email,
+          'Reset Your Password - Nintex Partner Portal',
+          `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+              <div style="text-align: center; margin-bottom: 30px;">
+                <h1 style="color: #6B4C9A; margin: 0;">Nintex Partner Portal</h1>
+              </div>
+              <h2 style="color: #333;">Password Reset Request</h2>
+              <p>Hi ${result.firstName || 'there'},</p>
+              <p>You requested to reset your password for the Nintex Partner Portal.</p>
+              <p>Click the button below to reset your password (valid for 1 hour):</p>
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="${resetUrl}" style="display: inline-block; padding: 14px 28px; background: #FF6B35; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">Reset Password</a>
+              </div>
+              <p style="color: #666; font-size: 14px;">Or copy this link: <a href="${resetUrl}">${resetUrl}</a></p>
+              <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+              <p style="color: #999; font-size: 12px;">If you didn't request this, you can safely ignore this email. Your password will not be changed.</p>
+              <p style="color: #999; font-size: 12px;">- The Nintex Partner Network Team</p>
+            </div>
+          `
+        );
+        console.log('✅ Password reset email sent to:', result.email);
+      } catch (emailError) {
+        console.error('Failed to send reset email:', emailError.message);
+        // Still return success - don't reveal email status
+      }
+    }
+    
+    // Always return success to not reveal if email exists
+    res.json({ success: true, message: 'If the email exists, a reset link has been sent' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Validate reset token
+router.get('/auth/reset-password/:token', async (req, res) => {
+  try {
+    const tokenData = await validateResetToken(req.params.token);
+    
+    if (!tokenData) {
+      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
+    
+    res.json({ 
+      valid: true, 
+      email: tokenData.email,
+      firstName: tokenData.firstName
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Reset password with token
+router.post('/auth/reset-password', async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    
+    if (!token || !newPassword) {
+      return res.status(400).json({ error: 'Token and new password required' });
+    }
+    
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+    
+    const result = await resetPassword(token, newPassword);
+    
+    if (!result.success) {
+      return res.status(400).json({ error: result.error });
+    }
+    
+    res.json({ success: true, message: 'Password has been reset successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// Magic Link Endpoints
+// ============================================
+
+// Request magic link (sends email via Nintex Workflow)
+router.post('/auth/magic-link', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+    
+    const result = await requestMagicLink(email);
+    
+    if (result.token) {
+      // Send email via Nintex Workflow
+      try {
+        const { sendEmail } = require('./db/notificationService.cjs');
+        
+        const magicUrl = `${req.protocol}://${req.get('host')}/admin/magic-login?token=${result.token}`;
+        
+        await sendEmail(
+          result.email,
+          'Sign In to Nintex Partner Portal',
+          `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+              <div style="text-align: center; margin-bottom: 30px;">
+                <h1 style="color: #6B4C9A; margin: 0;">Nintex Partner Portal</h1>
+              </div>
+              <h2 style="color: #333;">Magic Link Sign In</h2>
+              <p>Hi ${result.firstName || 'there'},</p>
+              <p>Click the button below to sign in to the Nintex Partner Portal (valid for 15 minutes):</p>
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="${magicUrl}" style="display: inline-block; padding: 14px 28px; background: #6B4C9A; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">Sign In</a>
+              </div>
+              <p style="color: #666; font-size: 14px;">Or copy this link: <a href="${magicUrl}">${magicUrl}</a></p>
+              <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+              <p style="color: #999; font-size: 12px;">If you didn't request this, you can safely ignore this email.</p>
+              <p style="color: #999; font-size: 12px;">- The Nintex Partner Network Team</p>
+            </div>
+          `
+        );
+        console.log('✅ Magic link email sent to:', result.email);
+      } catch (emailError) {
+        console.error('Failed to send magic link email:', emailError.message);
+      }
+    }
+    
+    // Always return success to not reveal if email exists
+    res.json({ success: true, message: 'If the email exists, a magic link has been sent' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Login with magic link token
+router.post('/auth/magic-login', async (req, res) => {
+  try {
+    const { token } = req.body;
+    
+    if (!token) {
+      return res.status(400).json({ error: 'Token is required' });
+    }
+    
+    // Gather metadata for login history
+    const metadata = {
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent']
+    };
+    
+    const result = await loginWithMagicLink(token, metadata);
+    
+    if (!result.success) {
+      return res.status(401).json({ error: result.error });
+    }
+    
+    res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -2697,6 +3836,20 @@ router.put('/admin/users/:id/password', authMiddleware, async (req, res) => {
     const result = await changePassword(targetId, newPassword);
     res.json(result);
   } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Send credentials email to user (generates temp password and emails it)
+router.post('/admin/users/:id/send-credentials', authMiddleware, requirePermission('users', 'edit'), async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+    const { password } = req.body; // Optional: specify password, otherwise auto-generated
+    
+    const result = await sendCredentialsEmail(userId, password || null);
+    res.json(result);
+  } catch (error) {
+    console.error('Send credentials error:', error);
     res.status(400).json({ error: error.message });
   }
 });
@@ -3649,12 +4802,58 @@ router.post('/certifications/sync-to-impartner', async (req, res) => {
   // Valid tiers to sync (exclude Pending, blank)
   const VALID_TIERS = ['Premier', 'Premier Plus', 'Certified', 'Registered', 'Aggregator'];
   
+  // Create sync log entry (skip for dry run)
+  let logId = null;
+  if (!dryRun) {
+    try {
+      const logResult = await query(
+        'INSERT INTO sync_logs (sync_type, status, started_at) VALUES (?, ?, NOW())',
+        ['sync_to_impartner', 'running']
+      );
+      logId = logResult.insertId;
+    } catch (err) {
+      console.error('[Impartner Sync] Failed to create sync log:', err.message);
+    }
+  }
+  
+  // For dry run, execute synchronously
+  if (dryRun) {
+    try {
+      const result = await runSyncToImpartner(mode, VALID_TIERS, IMPARTNER_CONFIG, logId, true);
+      return res.json(result);
+    } catch (error) {
+      console.error('Error in dry run sync to Impartner:', error);
+      return res.status(500).json({ error: error.message });
+    }
+  }
+  
+  // For actual sync, respond immediately and run in background
+  res.json({
+    success: true,
+    message: `Push to Impartner started in background (${mode} mode)`,
+    mode,
+    logId,
+    status: 'running'
+  });
+  
+  // Run sync in background (don't await)
+  runSyncToImpartner(mode, VALID_TIERS, IMPARTNER_CONFIG, logId, false)
+    .then(result => {
+      console.log(`[Impartner Sync] Completed: synced=${result.synced}, failed=${result.failed}, notFound=${result.notFound}`);
+    })
+    .catch(error => {
+      console.error('[Impartner Sync] Background sync failed:', error.message);
+    });
+});
+
+// Background sync function
+async function runSyncToImpartner(mode, VALID_TIERS, IMPARTNER_CONFIG, logId, dryRun) {
   try {
     // Get last sync time for incremental mode
     let lastSyncTime = null;
     if (mode === 'incremental') {
       const [lastSync] = await query(`
-        SELECT completed_at FROM sync_log 
+        SELECT completed_at FROM sync_logs 
         WHERE sync_type = 'sync_to_impartner' AND status = 'completed'
         ORDER BY completed_at DESC LIMIT 1
       `);
@@ -3696,6 +4895,20 @@ router.post('/certifications/sync-to-impartner', async (req, res) => {
     
     const partners = await query(partnersQuery, queryParams);
     
+    // Build LMS user counts map for preview (contacts with lms_user_id IS NOT NULL)
+    const partnerIds = partners.map(p => p.id).filter(Boolean);
+    const lmsUserCounts = {};
+    if (partnerIds.length > 0) {
+      const placeholders = partnerIds.map(() => '?').join(',');
+      const rows = await query(
+        `SELECT partner_id, COUNT(*) as lms_user_count FROM contacts WHERE partner_id IN (${placeholders}) AND lms_user_id IS NOT NULL GROUP BY partner_id`,
+        partnerIds
+      );
+      for (const r of rows) {
+        lmsUserCounts[r.partner_id] = r.lms_user_count || 0;
+      }
+    }
+
     // Build sync payload matching Impartner field names (with __cf suffix for custom fields)
     const syncPayload = partners.map(p => {
       // Build the portal URL (base64 encoded JSON with company and tier)
@@ -3722,12 +4935,13 @@ router.post('/certifications/sync-to-impartner', async (req, res) => {
         Total_NPCU__cf: p.total_npcu || 0,
         LMS_Account_ID__cf: String(p.id),
         LMS_Group_Name__cf: p.lms_group_name || '',
-        LMS_Training_Dashboard__cf: portalUrl
+        LMS_Training_Dashboard__cf: portalUrl,
+        LMS_User_Count: lmsUserCounts[p.id] || 0
       };
     });
     
     if (dryRun) {
-      return res.json({
+      return {
         success: true,
         dryRun: true,
         mode,
@@ -3736,22 +4950,25 @@ router.post('/certifications/sync-to-impartner', async (req, res) => {
         message: `Would sync ${syncPayload.length} partners to Impartner (${mode} mode)`,
         preview: syncPayload.slice(0, 20),
         totalCount: syncPayload.length
-      });
+      };
     }
     
-    // First, get Impartner Account IDs by CrmId lookup
-    console.log('[Impartner Sync] Looking up Account IDs...');
+    // First, get ALL Impartner Account IDs with CrmIds
+    // This is more reliable than batched lookups with complex filters
+    console.log('[Impartner Sync] Fetching all Impartner accounts for ID mapping...');
     
-    // Build a map of CrmId -> Impartner Id
-    const crmIdToImpartnerId = new Map();
+    // Build maps of CrmId -> Impartner Id (handle 15/18-char SF IDs)
+    const crmIdToImpartnerId = new Map();      // Exact CrmId -> Impartner Id
+    const crmId15ToImpartnerId = new Map();    // 15-char prefix -> Impartner Id
     
-    // Fetch accounts in batches to get their IDs
-    const lookupBatchSize = 100;
-    for (let i = 0; i < syncPayload.length; i += lookupBatchSize) {
-      const batchCrmIds = syncPayload.slice(i, i + lookupBatchSize).map(p => p.CrmId);
-      const crmIdFilter = batchCrmIds.map(id => `CrmId eq '${id}'`).join(' or ');
-      
-      const lookupUrl = `${IMPARTNER_CONFIG.host}/api/objects/v1/Account?fields=Id,CrmId&filter=${encodeURIComponent(crmIdFilter)}&take=${lookupBatchSize}`;
+    // Fetch ALL accounts from Impartner (paginated)
+    const pageSize = 500;
+    let skip = 0;
+    let hasMore = true;
+    let totalFetched = 0;
+    
+    while (hasMore) {
+      const lookupUrl = `${IMPARTNER_CONFIG.host}/api/objects/v1/Account?fields=Id,CrmId&take=${pageSize}&skip=${skip}`;
       
       try {
         const lookupResp = await fetch(lookupUrl, {
@@ -3764,42 +4981,95 @@ router.post('/certifications/sync-to-impartner', async (req, res) => {
         
         if (lookupResp.ok) {
           const lookupData = await lookupResp.json();
-          if (lookupData.data?.results) {
-            for (const account of lookupData.data.results) {
-              if (account.CrmId) {
-                crmIdToImpartnerId.set(account.CrmId, account.Id);
+          const results = lookupData.data?.results || [];
+          totalFetched += results.length;
+          
+          for (const account of results) {
+            if (account.crmId && account.id) {
+              // Store exact match (lowercase field names from API)
+              crmIdToImpartnerId.set(account.crmId, account.id);
+              
+              // Also store 15-char prefix for cross-matching
+              if (account.crmId.length === 15) {
+                crmId15ToImpartnerId.set(account.crmId, account.id);
+              } else if (account.crmId.length === 18) {
+                crmId15ToImpartnerId.set(account.crmId.substring(0, 15), account.id);
               }
             }
           }
+          
+          // Check if there are more pages
+          hasMore = results.length === pageSize;
+          skip += pageSize;
+          
+          if (totalFetched % 1000 === 0) {
+            console.log(`[Impartner Sync] Fetched ${totalFetched} accounts...`);
+          }
+        } else {
+          console.error(`[Impartner Sync] Lookup failed with status ${lookupResp.status}`);
+          hasMore = false;
         }
       } catch (err) {
-        console.error(`[Impartner Sync] Lookup batch failed:`, err.message);
+        console.error(`[Impartner Sync] Lookup error:`, err.message);
+        hasMore = false;
       }
     }
     
-    console.log(`[Impartner Sync] Found ${crmIdToImpartnerId.size} matching accounts in Impartner`);
+    console.log(`[Impartner Sync] Fetched ${totalFetched} total accounts, ${crmIdToImpartnerId.size} have CrmIds, ${crmId15ToImpartnerId.size} indexed by 15-char prefix`);
     
-    // Build update payload with Impartner IDs
-    const updatePayload = syncPayload
-      .filter(p => crmIdToImpartnerId.has(p.CrmId))
-      .map(p => ({
-        Id: crmIdToImpartnerId.get(p.CrmId),
-        Name: p.Name,
-        Nintex_CE_Certifications__cf: p.Nintex_CE_Certifications__cf,
-        Nintex_K2_Certifications__cf: p.Nintex_K2_Certifications__cf,
-        Nintex_for_Salesforce_Certifications__cf: p.Nintex_for_Salesforce_Certifications__cf,
-        Nintex_GTM_Certifications__cf: p.Nintex_GTM_Certifications__cf,
-        Total_NPCU__cf: p.Total_NPCU__cf,
-        LMS_Account_ID__cf: p.LMS_Account_ID__cf,
-        LMS_Group_Name__cf: p.LMS_Group_Name__cf,
-        LMS_Training_Dashboard__cf: p.LMS_Training_Dashboard__cf
-      }));
+    // Build update payload with Impartner IDs (handle 15/18-char SF ID matching)
+    const updatePayload = [];
+    let matchedCount = 0;
+    let notFoundCount = 0;
+    
+    for (const p of syncPayload) {
+      let impartnerId = null;
+      
+      // Try exact match first
+      if (crmIdToImpartnerId.has(p.CrmId)) {
+        impartnerId = crmIdToImpartnerId.get(p.CrmId);
+      }
+      // If no match and CrmId is 18 chars, try 15-char prefix
+      else if (p.CrmId && p.CrmId.length === 18) {
+        const prefix15 = p.CrmId.substring(0, 15);
+        if (crmId15ToImpartnerId.has(prefix15)) {
+          impartnerId = crmId15ToImpartnerId.get(prefix15);
+        }
+      }
+      // If no match and CrmId is 15 chars, check if there's a 18-char match
+      else if (p.CrmId && p.CrmId.length === 15) {
+        if (crmId15ToImpartnerId.has(p.CrmId)) {
+          impartnerId = crmId15ToImpartnerId.get(p.CrmId);
+        }
+      }
+      
+      if (impartnerId) {
+        matchedCount++;
+        updatePayload.push({
+          Id: impartnerId,
+          Name: p.Name,
+          Nintex_CE_Certifications__cf: p.Nintex_CE_Certifications__cf,
+          Nintex_K2_Certifications__cf: p.Nintex_K2_Certifications__cf,
+          Nintex_for_Salesforce_Certifications__cf: p.Nintex_for_Salesforce_Certifications__cf,
+          Nintex_GTM_Certifications__cf: p.Nintex_GTM_Certifications__cf,
+          Total_NPCU__cf: p.Total_NPCU__cf,
+          LMS_Account_ID__cf: p.LMS_Account_ID__cf,
+          LMS_Group_Name__cf: p.LMS_Group_Name__cf,
+          LMS_Training_Dashboard__cf: p.LMS_Training_Dashboard__cf,
+          LMS_User_Count__cf: p.LMS_User_Count
+        });
+      } else {
+        notFoundCount++;
+      }
+    }
+    
+    console.log(`[Impartner Sync] Matched ${matchedCount} partners, ${notFoundCount} not found`);
     
     // Sync to Impartner API using PATCH with array
     const results = {
       synced: 0,
       failed: 0,
-      notFound: syncPayload.length - updatePayload.length,
+      notFound: notFoundCount,
       errors: []
     };
     
@@ -3853,7 +5123,44 @@ router.post('/certifications/sync-to-impartner', async (req, res) => {
       console.log(`[Impartner Sync] Progress: ${Math.min(i + batchSize, updatePayload.length)}/${updatePayload.length}`);
     }
     
-    res.json({
+    // Update sync log on success
+    if (logId) {
+      try {
+        await query(
+          `UPDATE sync_logs SET 
+            status = 'completed', 
+            completed_at = NOW(), 
+            records_processed = ?,
+            records_created = 0,
+            records_updated = ?,
+            records_deleted = 0,
+            records_failed = ?,
+            records_skipped = ?,
+            details = ?
+          WHERE id = ?`,
+          [
+            syncPayload.length, // total processed (partners in scope)
+            results.synced,     // actually updated in Impartner
+            results.failed,
+            results.notFound,   // not found = skipped
+            JSON.stringify({ 
+              mode, 
+              total: syncPayload.length,
+              synced: results.synced, 
+              failed: results.failed, 
+              notFound: results.notFound,
+              matched: updatePayload.length,
+              errors: results.errors.slice(0, 10)
+            }),
+            logId
+          ]
+        );
+      } catch (err) {
+        console.error('[Impartner Sync] Failed to update sync log:', err.message);
+      }
+    }
+    
+    return {
       success: true,
       message: `Synced ${results.synced} partners to Impartner (${results.failed} failed, ${results.notFound} not found)`,
       synced: results.synced,
@@ -3861,11 +5168,29 @@ router.post('/certifications/sync-to-impartner', async (req, res) => {
       notFound: results.notFound,
       errors: results.errors.slice(0, 20),
       totalCount: syncPayload.length
-    });
+    };
   } catch (error) {
     console.error('Error syncing to Impartner:', error);
-    res.status(500).json({ error: error.message });
+    
+    // Update sync log on failure
+    if (logId) {
+      try {
+        await query(
+          `UPDATE sync_logs SET 
+            status = 'failed', 
+            completed_at = NOW(), 
+            error_message = ?,
+            details = ?
+          WHERE id = ?`,
+          [error.message, JSON.stringify({ mode, error: error.message }), logId]
+        );
+      } catch (logErr) {
+        console.error('[Impartner Sync] Failed to update sync log:', logErr.message);
+      }
+    }
+    
+    throw error;
   }
-});
+}
 
 module.exports = { router, initializeDatabase, authMiddleware, requirePermission };

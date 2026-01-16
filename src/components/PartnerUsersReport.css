@@ -1,0 +1,94 @@
+/**
+ * Partner Users Report Styles
+ */
+
+.partner-users-report {
+  /* Uses NintexUI components - minimal custom styles needed */
+}
+
+/* Stats row styling */
+.partner-users-report .stats-row {
+  margin-bottom: var(--spacing-lg);
+}
+
+/* Table enhancements */
+.partner-users-report .MuiTableCell-root {
+  padding: 8px 12px;
+}
+
+.partner-users-report .MuiTableRow-root:hover {
+  background: var(--admin-bg-hover);
+}
+
+/* Selected row highlight */
+.partner-users-report .Mui-selected {
+  background: rgba(255, 107, 53, 0.08) !important;
+}
+
+/* NPCU highlight */
+.partner-users-report .npcu-value {
+  font-weight: 600;
+  color: var(--nintex-orange);
+}
+
+/* Expired cert warning */
+.partner-users-report .expired-warning {
+  color: var(--admin-error-text);
+}
+
+/* Action buttons */
+.partner-users-report .action-cell {
+  white-space: nowrap;
+}
+
+/* Dialog styling */
+.partner-users-report .MuiDialog-paper {
+  background: var(--admin-bg-card);
+}
+
+/* User detail stats grid */
+.user-detail-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-lg);
+}
+
+.user-detail-stats .stat-item {
+  text-align: center;
+  padding: var(--spacing-md);
+  background: var(--admin-bg-elevated);
+  border-radius: var(--border-radius);
+}
+
+.user-detail-stats .stat-value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--nintex-purple);
+}
+
+.user-detail-stats .stat-label {
+  font-size: 0.875rem;
+  color: var(--admin-text-secondary);
+}
+
+/* Filter section */
+.filter-section {
+  display: flex;
+  gap: var(--spacing-md);
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: var(--spacing-md);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .filter-section {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .user-detail-stats {
+    grid-template-columns: 1fr;
+  }
+}

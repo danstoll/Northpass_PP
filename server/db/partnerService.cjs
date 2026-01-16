@@ -322,25 +322,61 @@ async function searchPartners(searchTerm, filters = {}) {
 }
 
 /**
- * Get database stats
+ * Get database stats - with fallbacks for missing tables
  */
 async function getDatabaseStats() {
-  const [partners] = await query('SELECT COUNT(*) as count FROM partners');
-  const [contacts] = await query('SELECT COUNT(*) as count FROM contacts');
-  const [linkedContacts] = await query('SELECT COUNT(*) as count FROM contacts WHERE lms_user_id IS NOT NULL');
-  const [lmsUsers] = await query('SELECT COUNT(*) as count FROM lms_users');
-  const [lmsGroups] = await query('SELECT COUNT(*) as count FROM lms_groups');
-  const [lmsCourses] = await query('SELECT COUNT(*) as count FROM lms_courses');
-  const [lastSync] = await query('SELECT * FROM sync_logs ORDER BY started_at DESC LIMIT 1');
+  const safeCount = async (sql) => {
+    try {
+      const [result] = await query(sql);
+      return result?.count || 0;
+    } catch (e) {
+      return 0;
+    }
+  };
+
+  const partners = await safeCount('SELECT COUNT(*) as count FROM partners');
+  const contacts = await safeCount('SELECT COUNT(*) as count FROM contacts');
+  const linkedContacts = await safeCount('SELECT COUNT(*) as count FROM contacts WHERE lms_user_id IS NOT NULL');
+  const lmsUsers = await safeCount('SELECT COUNT(*) as count FROM lms_users');
+  const lmsGroups = await safeCount('SELECT COUNT(*) as count FROM lms_groups');
+  const lmsCourses = await safeCount('SELECT COUNT(*) as count FROM lms_courses');
+  const totalEnrollments = await safeCount('SELECT COUNT(*) as count FROM lms_enrollments');
+  const completedEnrollments = await safeCount('SELECT COUNT(*) as count FROM lms_enrollments WHERE status = "completed"');
+  
+  // Count PAMs (users with "Partner Account Manager" profile)
+  const partnerManagers = await safeCount(`
+    SELECT COUNT(*) as count FROM admin_users u 
+    INNER JOIN admin_profiles p ON p.id = u.profile_id 
+    WHERE u.is_active = 1 AND p.name = 'Partner Account Manager'
+  `);
+  
+  // Count Admin Users (users with admin-level profiles like Admin, Channel Leadership - not PAMs)
+  const adminUsers = await safeCount(`
+    SELECT COUNT(*) as count FROM admin_users u 
+    INNER JOIN admin_profiles p ON p.id = u.profile_id 
+    WHERE u.is_active = 1 AND p.name IN ('Admin', 'Channel Leadership')
+  `);
+  
+  let lastSync = null;
+  try {
+    const [sync] = await query('SELECT * FROM sync_logs ORDER BY started_at DESC LIMIT 1');
+    lastSync = sync || null;
+  } catch (e) {
+    lastSync = null;
+  }
 
   return {
-    partners: partners.count,
-    contacts: contacts.count,
-    linkedContacts: linkedContacts.count,
-    lmsUsers: lmsUsers.count,
-    lmsGroups: lmsGroups.count,
-    lmsCourses: lmsCourses.count,
-    lastSync: lastSync || null
+    partners,
+    contacts,
+    linkedContacts,
+    lmsUsers,
+    lmsGroups,
+    lmsCourses,
+    totalEnrollments,
+    completedEnrollments,
+    partnerManagers,
+    adminUsers,
+    lastSync
   };
 }
 

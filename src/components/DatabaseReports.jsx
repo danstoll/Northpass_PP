@@ -24,6 +24,7 @@ import {
   Paper,
   Chip,
   LinearProgress,
+  Tooltip,
 } from '@mui/material';
 import {
   ArrowBack,
@@ -39,9 +40,11 @@ import {
   Schedule,
   AccessTime,
   TrendingUp,
+  Timeline,
   PieChart as PieChartIcon,
   BarChart as BarChartIcon,
   DonutLarge,
+  InfoOutlined,
 } from '@mui/icons-material';
 import { 
   PageHeader, 
@@ -54,8 +57,280 @@ import {
   EmptyState,
   TierBadge,
   StatusChip,
+  SearchInput,
+  FilterSelect,
+  DataTable,
 } from './ui/NintexUI';
-import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend } from 'recharts';
+import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, Legend } from 'recharts';
+import PartnerUsersReport from './PartnerUsersReport';
+import ActivityTimeline from './ActivityTimeline';
+import './DatabaseReports.css';
+
+// ===========================================
+// METRIC DEFINITIONS FOR INFO TOOLTIPS
+// ===========================================
+const METRIC_DEFINITIONS = {
+  // Landing Page Stats
+  partners: {
+    title: 'Partners',
+    description: 'Total number of active partner companies in the database.',
+    details: ['Imported from Impartner CRM', 'Excludes inactive partners']
+  },
+  contacts: {
+    title: 'Contacts',
+    description: 'Total number of contacts across all partner companies.',
+    details: ['All CRM contacts for active partners', 'May not all be registered in LMS']
+  },
+  lmsUsers: {
+    title: 'LMS Users',
+    description: 'Total users registered in the Northpass learning management system.',
+    details: ['Includes all registered learners', 'Synced from Northpass API']
+  },
+  linked: {
+    title: 'Linked',
+    description: 'CRM contacts who are also registered in the LMS.',
+    formula: 'Contacts matched by email to LMS users',
+    details: ['Shows CRM-to-LMS connection rate', 'Key metric for adoption']
+  },
+  // Chart Metrics
+  tierDistribution: {
+    title: 'Partners by Tier',
+    description: 'Distribution of partners across tier levels.',
+    details: [
+      'Premier Plus: Top tier (20+ NPCU)',
+      'Premier: High tier (20+ NPCU)',
+      'Select: Mid tier (10+ NPCU)',
+      'Certified: Entry tier',
+      'Registered: Basic tier (5+ NPCU)'
+    ]
+  },
+  lmsCoverage: {
+    title: 'LMS Coverage',
+    description: 'Percentage of CRM contacts registered in the LMS.',
+    formula: '(Contacts in LMS ÷ Total Contacts) × 100',
+    details: ['Higher = better adoption', 'Target: 60%+ coverage']
+  },
+  regionalDistribution: {
+    title: 'Partners by Region',
+    description: 'Geographic distribution of partner companies.',
+    details: ['Based on CRM account region field', 'Helps identify regional gaps']
+  },
+  topOwners: {
+    title: 'Top Account Owners',
+    description: 'Account owners with the most assigned partners.',
+    details: ['Shows portfolio distribution', 'Click for detailed owner report']
+  },
+  // Overview Report Columns
+  tier: {
+    title: 'Partner Tier',
+    description: 'Partner classification level based on certification achievement.',
+    details: ['Premier Plus/Premier: 20+ NPCU', 'Select: 10+ NPCU', 'Registered: 5+ NPCU']
+  },
+  coverage: {
+    title: 'Coverage',
+    description: 'Percentage of contacts registered in the LMS.',
+    formula: '(In LMS ÷ Contacts) × 100',
+    details: ['Green: 50%+ coverage', 'Red: Below 50%', 'Target: 60%+']
+  },
+  region: {
+    title: 'Region',
+    description: 'Geographic region of the partner account.',
+    details: ['From Impartner CRM account region', 'Used for regional reporting']
+  },
+  owner: {
+    title: 'Account Owner',
+    description: 'Nintex account manager responsible for the partner.',
+    details: ['From Impartner CRM', 'Click Owner Report for details']
+  },
+  // Report Metrics
+  npcu: {
+    title: 'NPCU',
+    description: 'Nintex Partner Certification Units - measures certification achievement.',
+    formula: 'Sum of NPCU values from completed certifications',
+    details: ['Only valid (non-expired) certs count', 'Higher = more certified staff']
+  },
+  certGap: {
+    title: 'Certification Gap',
+    description: 'NPCU shortfall to meet tier requirements.',
+    formula: 'Required NPCU - Current NPCU',
+    details: ['Positive = needs more certifications', 'Zero = tier compliant']
+  },
+  completions: {
+    title: 'Course Completions',
+    description: 'Number of completed course enrollments.',
+    details: ['Includes all course types', 'Only completed status counts']
+  },
+  inLms: {
+    title: 'In LMS',
+    description: 'Contacts who are registered in the learning system.',
+    details: ['Have active Northpass accounts', 'Can access courses']
+  },
+  courses: {
+    title: 'Completed Courses',
+    description: 'Number of courses the user has completed.',
+    details: ['All course types included', 'Not all courses grant NPCU']
+  },
+  certs: {
+    title: 'Certifications',
+    description: 'Number of certification courses completed.',
+    details: ['Only courses with NPCU value > 0', 'May expire after 24 months']
+  },
+  status: {
+    title: 'LMS Status',
+    description: 'Whether the contact is registered in the Northpass LMS.',
+    details: ['In LMS: Has active account', 'Not in LMS: Needs to register']
+  },
+  // Leaderboard
+  totalContacts: {
+    title: 'Total Contacts',
+    description: 'Number of contacts in CRM for this partner.',
+    details: ['All contacts associated with partner', 'From Impartner sync']
+  },
+  contactsInLms: {
+    title: 'In LMS',
+    description: 'Number of partner contacts registered in Northpass.',
+    details: ['Shows adoption rate', 'Compare to Total Contacts']
+  },
+  totalCerts: {
+    title: 'Certifications',
+    description: 'Total certification completions across all partner users.',
+    details: ['Only courses with NPCU value', 'Counts valid certs only']
+  },
+  // Certification Gaps
+  currentNpcu: {
+    title: 'Current NPCU',
+    description: 'Partner\'s total NPCU from valid certifications.',
+    formula: 'Sum of NPCU from non-expired certs',
+    details: ['Updated via LMS sync', 'Expired certs not counted']
+  },
+  requiredNpcu: {
+    title: 'Required NPCU',
+    description: 'Minimum NPCU needed to maintain tier.',
+    details: ['Premier: 20 NPCU', 'Select: 10 NPCU', 'Registered: 5 NPCU']
+  },
+  gap: {
+    title: 'Gap',
+    description: 'Difference between required and current NPCU.',
+    formula: 'Required NPCU - Current NPCU',
+    details: ['Negative = needs more certs', 'Zero/Positive = compliant']
+  },
+  complianceStatus: {
+    title: 'Compliance Status',
+    description: 'Whether partner meets tier NPCU requirements.',
+    details: ['Compliant: Meets requirements', 'Needs X more: Shortfall amount']
+  },
+  // Popular Courses
+  courseName: {
+    title: 'Course Name',
+    description: 'Name of the course in Northpass.',
+    details: ['🎓 indicates certification course', 'Grants NPCU on completion']
+  },
+  category: {
+    title: 'Category',
+    description: 'Product category the course belongs to.',
+    details: ['Nintex Automation Cloud', 'Nintex Process Platform', 'K2', 'Others']
+  },
+  courseNpcu: {
+    title: 'NPCU Value',
+    description: 'NPCU points awarded for completing this course.',
+    details: ['0 = Not a certification', '1-2 = Certification course']
+  },
+  completionCount: {
+    title: 'Completions',
+    description: 'Total number of times this course was completed.',
+    details: ['Counts all completions', 'Same user can complete multiple times']
+  },
+  uniqueUsers: {
+    title: 'Unique Users',
+    description: 'Number of distinct users who completed this course.',
+    details: ['Each user counted once', 'Shows course reach']
+  },
+  avgScore: {
+    title: 'Avg Score',
+    description: 'Average assessment score for this course.',
+    details: ['Percentage score', 'Only if course has assessment']
+  },
+  // Recent Activity
+  completedDate: {
+    title: 'Completed Date',
+    description: 'Date the course was completed.',
+    details: ['From Northpass enrollment data', 'Used for activity tracking']
+  },
+  // Expiring Certs
+  expiresDate: {
+    title: 'Expires',
+    description: 'Date when the certification expires.',
+    formula: 'Completion Date + 24 months',
+    details: ['Certification is valid until this date', 'Requires renewal after']
+  },
+  daysLeft: {
+    title: 'Days Left',
+    description: 'Number of days until certification expires.',
+    details: ['Red = 30 days or less', 'Renewal recommended soon']
+  },
+  // Inactive Users
+  daysInactive: {
+    title: 'Days Inactive',
+    description: 'Number of days since last LMS activity.',
+    formula: 'Today - Last Active Date',
+    details: ['180+ days = potentially dormant', 'Consider follow-up outreach']
+  },
+  lastActive: {
+    title: 'Last Active',
+    description: 'Date of last activity in the LMS.',
+    details: ['Login, course progress, completion', 'From Northpass data']
+  },
+  // LMS Not in CRM
+  groupCount: {
+    title: 'Groups',
+    description: 'Number of LMS groups the user belongs to.',
+    details: ['Partner groups in Northpass', 'Shows group membership']
+  },
+  groupNames: {
+    title: 'Group Names',
+    description: 'Names of the LMS groups the user is in.',
+    details: ['Partner-specific groups', 'Used to identify partner association']
+  }
+};
+
+// Info tooltip component
+const InfoTooltip = ({ metricKey }) => {
+  const metric = METRIC_DEFINITIONS[metricKey];
+  if (!metric) return null;
+  
+  return (
+    <Tooltip
+      title={
+        <Box sx={{ p: 1 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
+            {metric.title}
+          </Typography>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            {metric.description}
+          </Typography>
+          {metric.formula && (
+            <Typography variant="body2" sx={{ fontStyle: 'italic', color: 'rgba(255,255,255,0.8)', mb: 1 }}>
+              {metric.formula}
+            </Typography>
+          )}
+          {metric.details && metric.details.length > 0 && (
+            <Box component="ul" sx={{ m: 0, pl: 2, fontSize: '0.75rem' }}>
+              {metric.details.map((detail, i) => (
+                <li key={i}>{detail}</li>
+              ))}
+            </Box>
+          )}
+        </Box>
+      }
+      arrow
+      placement="top"
+    >
+      <IconButton size="small" sx={{ ml: 0.5, p: 0.25, opacity: 0.7, '&:hover': { opacity: 1 } }}>
+        <InfoOutlined sx={{ fontSize: 16 }} />
+      </IconButton>
+    </Tooltip>
+  );
+};
 import './DatabaseReports.css';
 
 // ===========================================
@@ -108,7 +383,7 @@ const DonutChart = ({ data, title, centerText, centerValue }) => {
                 <Cell key={`cell-${index}`} fill={entry.fill} />
               ))}
             </Pie>
-            <Tooltip 
+            <RechartsTooltip 
               formatter={(value, name) => [value.toLocaleString(), name]}
               contentStyle={{ 
                 background: 'var(--admin-bg-card)', 
@@ -640,6 +915,9 @@ function DatabaseReports() {
       case 'overview':
         if (!overview) loadOverview();
         break;
+      case 'partner-users':
+        // Partner Users has its own component
+        break;
       case 'certifications':
         loadUserCerts();
         break;
@@ -715,6 +993,8 @@ function DatabaseReports() {
     { id: 'leaderboard', icon: <EmojiEvents />, title: 'Partner Leaderboard', desc: 'Top partners ranked by NPCU points.', category: 'partners' },
     { id: 'gaps', icon: <Warning />, title: 'Certification Gaps', desc: 'Partners not meeting tier requirements.', category: 'partners' },
     { id: 'no-groups', icon: <Business />, title: 'Partners Without Groups', desc: 'Partners without LMS groups.', category: 'partners' },
+    { id: 'activity-timeline', icon: <Timeline />, title: 'Activity Timeline', desc: 'Track enrollment & certification trends with anomaly detection.', category: 'partners', featured: true },
+    { id: 'partner-users', icon: <School />, title: 'Partner Users', desc: 'All partner LMS users with enrollments, certifications & NPCU.', category: 'users' },
     { id: 'certifications', icon: <School />, title: 'User Certifications', desc: 'All contacts with certification data.', category: 'users' },
     { id: 'not-in-lms', icon: <PersonOff />, title: 'Contacts Not in LMS', desc: 'CRM contacts not in learning system.', category: 'users' },
     { id: 'lms-not-in-crm', icon: <PersonOff />, title: 'LMS Users Not in CRM', desc: 'LMS users in groups but missing from Salesforce.', category: 'users' },
@@ -723,6 +1003,16 @@ function DatabaseReports() {
     { id: 'activity', icon: <Schedule />, title: 'Recent Activity', desc: 'Latest course completions.', category: 'courses' },
     { id: 'expiring', icon: <AccessTime />, title: 'Expiring Certifications', desc: 'Certifications expiring soon.', category: 'courses' },
   ];
+
+  // Render Activity Timeline as its own full-page view
+  if (activeReport === 'activity-timeline') {
+    return <ActivityTimeline onBack={backToLanding} />;
+  }
+
+  // Render Partner Users Report as its own full-page view
+  if (activeReport === 'partner-users') {
+    return <PartnerUsersReport onBack={backToLanding} />;
+  }
 
   return (
     <PageContent>
@@ -741,28 +1031,28 @@ function DatabaseReports() {
             <StatCard
               icon="🏢"
               value={quickStats?.partners || 0}
-              label="Partners"
+              label={<>Partners <InfoTooltip metricKey="partners" /></>}
               variant="primary"
               size="small"
             />
             <StatCard
               icon="👤"
               value={quickStats?.contacts || 0}
-              label="Contacts"
+              label={<>Contacts <InfoTooltip metricKey="contacts" /></>}
               variant="default"
               size="small"
             />
             <StatCard
               icon="🎓"
               value={quickStats?.lmsUsers || 0}
-              label="LMS Users"
+              label={<>LMS Users <InfoTooltip metricKey="lmsUsers" /></>}
               variant="default"
               size="small"
             />
             <StatCard
               icon="🔗"
               value={quickStats?.linkedContacts || 0}
-              label="Linked"
+              label={<>Linked <InfoTooltip metricKey="linked" /></>}
               variant="success"
               size="small"
             />
@@ -813,7 +1103,7 @@ function DatabaseReports() {
                   {/* Partner Tier Distribution - Large Donut Chart */}
                   {overview?.byTier && overview.byTier.length > 0 && (
                     <DonutChart
-                      title="Partners by Tier"
+                      title={<>Partners by Tier <InfoTooltip metricKey="tierDistribution" /></>}
                       data={overview.byTier.map((t, i) => ({
                         label: t.tier || 'Unknown',
                         value: t.partner_count,
@@ -829,6 +1119,7 @@ function DatabaseReports() {
                     <Typography variant="h6" className="chart-title">
                       <TrendingUp sx={{ mr: 1, verticalAlign: 'middle', color: '#28a745' }} />
                       LMS Coverage Metrics
+                      <InfoTooltip metricKey="lmsCoverage" />
                     </Typography>
                     <Box className="coverage-rings-row">
                       <ProgressRing
@@ -861,7 +1152,7 @@ function DatabaseReports() {
                   {/* Regional Distribution */}
                   {overview?.byRegion && overview.byRegion.length > 0 && (
                     <HorizontalBarChart
-                      title="Partners by Region"
+                      title={<>Partners by Region <InfoTooltip metricKey="regionalDistribution" /></>}
                       icon={<Business sx={{ mr: 1, verticalAlign: 'middle', color: '#6B4C9A' }} />}
                       data={overview.byRegion.slice(0, 6).map((r) => ({
                         label: r.region || 'Unknown',
@@ -873,7 +1164,7 @@ function DatabaseReports() {
                   {/* Top Account Owners */}
                   {overview?.byOwner && overview.byOwner.length > 0 && (
                     <HorizontalBarChart
-                      title="Top Account Owners"
+                      title={<>Top Account Owners <InfoTooltip metricKey="topOwners" /></>}
                       icon={<EmojiEvents sx={{ mr: 1, verticalAlign: 'middle', color: '#ffc107' }} />}
                       data={overview.byOwner.slice(0, 6).map((o) => ({
                         label: o.owner || 'Unassigned',
@@ -1062,52 +1353,85 @@ function DatabaseReports() {
 
           {/* Report Filters */}
           {!['overview', 'no-groups', 'courses', 'expiring', 'inactive'].includes(activeReport) && (
-            <div className="report-filters d-flex align-center flex-wrap gap-3 mb-5">
-              {['certifications', 'not-in-lms', 'gaps', 'leaderboard'].includes(activeReport) && (
-                <select value={selectedTier} onChange={(e) => setSelectedTier(e.target.value)}>
-                  <option value="">All Tiers</option>
-                  {filters.tiers.map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
-              )}
-              
-              {['certifications', 'not-in-lms', 'leaderboard'].includes(activeReport) && (
-                <select value={selectedRegion} onChange={(e) => setSelectedRegion(e.target.value)}>
-                  <option value="">All Regions</option>
-                  {filters.regions.map(r => <option key={r} value={r}>{r}</option>)}
-                </select>
-              )}
-              
-              {activeReport === 'not-in-lms' && (
-                <select value={selectedOwner} onChange={(e) => setSelectedOwner(e.target.value)}>
-                  <option value="">All Owners</option>
-                  {filters.owners.map(o => <option key={o} value={o}>{o}</option>)}
-                </select>
-              )}
-              
-              {activeReport === 'certifications' && (
-                <input 
-                  type="search"
-                  placeholder="Search name, email, company..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  autoComplete="off"
-                />
-              )}
-              
-              {activeReport === 'activity' && (
-                <select value={daysFilter} onChange={(e) => setDaysFilter(parseInt(e.target.value))}>
-                  <option value={7}>Last 7 days</option>
-                  <option value={14}>Last 14 days</option>
-                  <option value={30}>Last 30 days</option>
-                  <option value={60}>Last 60 days</option>
-                  <option value={90}>Last 90 days</option>
-                </select>
-              )}
-              
-              <button className="ntx-btn-primary" onClick={() => runReport(activeReport)}>
-                🔄 Run Report
-              </button>
-            </div>
+            <SectionCard title="Filters" icon="🔍">
+              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+                {['certifications', 'not-in-lms', 'gaps', 'leaderboard'].includes(activeReport) && (
+                  <FilterSelect
+                    label="Tier"
+                    value={selectedTier}
+                    onChange={setSelectedTier}
+                    options={filters.tiers.map(t => ({ value: t, label: t }))}
+                    minWidth={150}
+                  />
+                )}
+                
+                {['certifications', 'not-in-lms', 'leaderboard'].includes(activeReport) && (
+                  <FilterSelect
+                    label="Region"
+                    value={selectedRegion}
+                    onChange={setSelectedRegion}
+                    options={filters.regions.map(r => ({ value: r, label: r }))}
+                    minWidth={180}
+                  />
+                )}
+                
+                {activeReport === 'not-in-lms' && (
+                  <FilterSelect
+                    label="Owner"
+                    value={selectedOwner}
+                    onChange={setSelectedOwner}
+                    options={filters.owners.map(o => ({ value: o, label: o }))}
+                    minWidth={200}
+                  />
+                )}
+                
+                {['certifications', 'lms-not-in-crm'].includes(activeReport) && (
+                  <SearchInput
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    onClear={() => setSearchTerm('')}
+                    placeholder="Search name, email, company..."
+                    fullWidth={false}
+                    sx={{ minWidth: 280 }}
+                  />
+                )}
+                
+                {activeReport === 'activity' && (
+                  <FilterSelect
+                    label="Time Period"
+                    value={daysFilter.toString()}
+                    onChange={(val) => setDaysFilter(parseInt(val) || 30)}
+                    options={[
+                      { value: '7', label: 'Last 7 days' },
+                      { value: '14', label: 'Last 14 days' },
+                      { value: '30', label: 'Last 30 days' },
+                      { value: '60', label: 'Last 60 days' },
+                      { value: '90', label: 'Last 90 days' },
+                    ]}
+                    minWidth={150}
+                  />
+                )}
+                
+                <ActionButton onClick={() => runReport(activeReport)}>
+                  🔄 Run Report
+                </ActionButton>
+                
+                {(selectedTier || selectedRegion || selectedOwner || searchTerm) && (
+                  <ActionButton
+                    variant="outlined"
+                    size="small"
+                    onClick={() => {
+                      setSelectedTier('');
+                      setSelectedRegion('');
+                      setSelectedOwner('');
+                      setSearchTerm('');
+                    }}
+                  >
+                    Clear Filters
+                  </ActionButton>
+                )}
+              </Box>
+            </SectionCard>
           )}
 
           {/* Error Display */}
@@ -1131,543 +1455,579 @@ function DatabaseReports() {
             <div className="report-content">
           {/* Overview Report */}
           {activeReport === 'overview' && overview && (
-            <div className="overview-report">
-              <div className="overview-totals">
-                <div className="total-card">
-                  <span className="value">{overview.totals?.total_partners || 0}</span>
-                  <span className="label">Partners</span>
-                </div>
-                <div className="total-card">
-                  <span className="value">{overview.totals?.total_contacts || 0}</span>
-                  <span className="label">Contacts</span>
-                </div>
-                <div className="total-card highlight">
-                  <span className="value">{overview.totals?.lms_linked_contacts || 0}</span>
-                  <span className="label">In LMS</span>
-                </div>
-                <div className="total-card">
-                  <span className="value">{overview.totals?.total_lms_users || 0}</span>
-                  <span className="label">LMS Users</span>
-                </div>
-              </div>
+            <>
+              {/* Summary Stats */}
+              <StatsRow columns={4}>
+                <StatCard icon="🏢" value={overview.totals?.total_partners || 0} label={<>Partners <InfoTooltip metricKey="partners" /></>} variant="primary" />
+                <StatCard icon="👥" value={overview.totals?.total_contacts || 0} label={<>Contacts <InfoTooltip metricKey="totalContacts" /></>} />
+                <StatCard icon="📚" value={overview.totals?.lms_linked_contacts || 0} label={<>In LMS <InfoTooltip metricKey="inLms" /></>} variant="success" />
+                <StatCard icon="👤" value={overview.totals?.total_lms_users || 0} label={<>LMS Users <InfoTooltip metricKey="lmsUsers" /></>} />
+              </StatsRow>
 
-              <div className="overview-sections">
-                <div className="section">
-                  <h3>By Partner Tier</h3>
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Tier</th>
-                        <th>Partners</th>
-                        <th>Contacts</th>
-                        <th>In LMS</th>
-                        <th>Coverage</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {overview.byTier?.map(row => (
-                        <tr key={row.tier}>
-                          <td><span className={`tier-badge ${row.tier?.toLowerCase()}`}>{row.tier}</span></td>
-                          <td>{row.partner_count}</td>
-                          <td>{row.contact_count}</td>
-                          <td>{row.lms_linked_count}</td>
-                          <td>
-                            <span className={`coverage ${row.contact_count > 0 && (row.lms_linked_count / row.contact_count) > 0.5 ? 'good' : 'low'}`}>
-                              {row.contact_count > 0 ? Math.round((row.lms_linked_count / row.contact_count) * 100) : 0}%
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+              {/* Tier Distribution */}
+              <SectionCard title="By Partner Tier" icon="📊" noPadding>
+                <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    <InfoTooltip metricKey="tierDistribution" /> Distribution of partners and contacts by tier
+                  </Typography>
+                </Box>
+                <DataTable
+                  columns={[
+                    { id: 'tier', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Tier <InfoTooltip metricKey="tier" /></Box>, render: (val) => val ? <TierBadge tier={val} /> : '-' },
+                    { id: 'partner_count', label: 'Partners', align: 'center' },
+                    { id: 'contact_count', label: 'Contacts', align: 'center' },
+                    { id: 'lms_linked_count', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>In LMS <InfoTooltip metricKey="inLms" /></Box>, align: 'center' },
+                    { id: 'coverage', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>Coverage <InfoTooltip metricKey="coverage" /></Box>, align: 'center', sortable: false, render: (val, row) => {
+                      const pct = row.contact_count > 0 ? Math.round((row.lms_linked_count / row.contact_count) * 100) : 0;
+                      return <StatusChip status={pct > 50 ? 'success' : 'warning'} label={`${pct}%`} />;
+                    }},
+                  ]}
+                  data={overview.byTier || []}
+                  emptyMessage="No tier data available"
+                />
+              </SectionCard>
 
-                <div className="section">
-                  <h3>By Region</h3>
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Region</th>
-                        <th>Partners</th>
-                        <th>Contacts</th>
-                        <th>In LMS</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {overview.byRegion?.map(row => (
-                        <tr key={row.region}>
-                          <td>{row.region}</td>
-                          <td>{row.partner_count}</td>
-                          <td>{row.contact_count}</td>
-                          <td>{row.lms_linked_count}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+              {/* Region Distribution */}
+              <SectionCard title="By Region" icon="🌍" noPadding>
+                <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    <InfoTooltip metricKey="regionalDistribution" /> Geographic distribution of partners
+                  </Typography>
+                </Box>
+                <DataTable
+                  columns={[
+                    { id: 'region', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Region <InfoTooltip metricKey="region" /></Box> },
+                    { id: 'partner_count', label: 'Partners', align: 'center' },
+                    { id: 'contact_count', label: 'Contacts', align: 'center' },
+                    { id: 'lms_linked_count', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>In LMS <InfoTooltip metricKey="inLms" /></Box>, align: 'center' },
+                  ]}
+                  data={overview.byRegion || []}
+                  emptyMessage="No regional data available"
+                />
+              </SectionCard>
 
-                <div className="section">
-                  <h3>Top Account Owners</h3>
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Owner</th>
-                        <th>Partners</th>
-                        <th>Contacts</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {overview.byOwner?.slice(0, 10).map(row => (
-                        <tr key={row.owner}>
-                          <td>{row.owner}</td>
-                          <td>{row.partner_count}</td>
-                          <td>{row.contact_count}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
+              {/* Top Account Owners */}
+              <SectionCard title="Top Account Owners" icon="👤" noPadding>
+                <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    <InfoTooltip metricKey="topOwners" /> Top 10 account owners by partner count
+                  </Typography>
+                </Box>
+                <DataTable
+                  columns={[
+                    { id: 'owner', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Owner <InfoTooltip metricKey="owner" /></Box> },
+                    { id: 'partner_count', label: 'Partners', align: 'center' },
+                    { id: 'contact_count', label: 'Contacts', align: 'center' },
+                  ]}
+                  data={(overview.byOwner || []).slice(0, 10)}
+                  emptyMessage="No owner data available"
+                />
+              </SectionCard>
+            </>
           )}
 
           {/* User Certifications Report */}
           {activeReport === 'certifications' && (
-            <div className="table-report">
-              <div className="report-actions">
-                <span className="count">{userCerts.length} contacts</span>
-                <button onClick={() => exportToCsv(userCerts, 'user-certifications')}>
-                  📥 Export CSV
-                </button>
-              </div>
-              <table>
-                <thead>
-                  <tr>
-                    <th className="sortable" onClick={() => requestSort('first_name')}>Name{getSortIndicator('first_name')}</th>
-                    <th className="sortable" onClick={() => requestSort('email')}>Email{getSortIndicator('email')}</th>
-                    <th className="sortable" onClick={() => requestSort('account_name')}>Company{getSortIndicator('account_name')}</th>
-                    <th className="sortable" onClick={() => requestSort('partner_tier')}>Tier{getSortIndicator('partner_tier')}</th>
-                    <th className="sortable" onClick={() => requestSort('completed_courses')}>Courses{getSortIndicator('completed_courses')}</th>
-                    <th className="sortable" onClick={() => requestSort('certifications')}>Certs{getSortIndicator('certifications')}</th>
-                    <th className="sortable" onClick={() => requestSort('total_npcu')}>NPCU{getSortIndicator('total_npcu')}</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortData(userCerts).map(row => (
-                    <tr key={row.contact_id}>
-                      <td>{row.first_name} {row.last_name}</td>
-                      <td>{row.email}</td>
-                      <td>{row.account_name}</td>
-                      <td><span className={`tier-badge ${row.partner_tier?.toLowerCase()}`}>{row.partner_tier}</span></td>
-                      <td>{row.completed_courses}</td>
-                      <td>{row.certifications}</td>
-                      <td className="npcu">{row.total_npcu}</td>
-                      <td>
-                        {row.lms_user_id ? (
-                          <span className="status in-lms">✓ In LMS</span>
-                        ) : (
-                          <span className="status not-in-lms">Not in LMS</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              {/* Summary Stats */}
+              <StatsRow columns={4}>
+                <StatCard icon="👤" value={userCerts.length} label={<>Contacts <InfoTooltip metricKey="contacts" /></>} variant="primary" />
+                <StatCard icon="🎓" value={userCerts.reduce((sum, u) => sum + (parseInt(u.certifications) || 0), 0)} label={<>Total Certifications <InfoTooltip metricKey="certs" /></>} variant="success" />
+                <StatCard icon="📚" value={userCerts.reduce((sum, u) => sum + (parseInt(u.completed_courses) || 0), 0)} label={<>Courses Completed <InfoTooltip metricKey="courses" /></>} />
+                <StatCard icon="🏆" value={userCerts.reduce((sum, u) => sum + (parseInt(u.total_npcu) || 0), 0)} label={<>Total NPCU <InfoTooltip metricKey="npcu" /></>} variant="primary" />
+              </StatsRow>
+
+              {/* User Certifications Table */}
+              <SectionCard title="User Certification Details" icon="🎓" noPadding>
+                <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    {userCerts.length} contacts with certification data
+                  </Typography>
+                  <ActionButton size="small" onClick={() => exportToCsv(userCerts, 'user-certifications')}>
+                    📥 Export CSV
+                  </ActionButton>
+                </Box>
+                <DataTable
+                  columns={[
+                    { id: 'first_name', label: 'Name', render: (val, row) => `${val} ${row.last_name}` },
+                    { id: 'email', label: 'Email' },
+                    { id: 'account_name', label: 'Company' },
+                    { id: 'partner_tier', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Tier <InfoTooltip metricKey="tier" /></Box>, render: (val) => val ? <TierBadge tier={val} /> : '-' },
+                    { id: 'completed_courses', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>Courses <InfoTooltip metricKey="courses" /></Box>, align: 'center' },
+                    { id: 'certifications', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>Certs <InfoTooltip metricKey="certs" /></Box>, align: 'center' },
+                    { id: 'total_npcu', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>NPCU <InfoTooltip metricKey="npcu" /></Box>, align: 'center', render: (val) => <span style={{ color: parseInt(val) > 0 ? '#43E97B' : 'inherit', fontWeight: 600 }}>{val || 0}</span> },
+                    { id: 'lms_user_id', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Status <InfoTooltip metricKey="status" /></Box>, render: (val) => val ? <StatusChip status="success" label="In LMS" /> : <StatusChip status="warning" label="Not in LMS" /> },
+                  ]}
+                  data={sortData(userCerts)}
+                  emptyMessage="No certification data found"
+                  sortable={true}
+                  orderBy={sortConfig.key}
+                  order={sortConfig.direction}
+                  onSort={(key) => requestSort(key)}
+                />
+              </SectionCard>
+            </>
           )}
 
           {/* Contacts Not in LMS Report */}
           {activeReport === 'not-in-lms' && (
-            <div className="table-report">
-              <div className="report-actions">
-                <span className="count">{notInLms.length} contacts not in LMS</span>
-                <button onClick={() => exportToCsv(notInLms, 'contacts-not-in-lms')}>
-                  📥 Export CSV
-                </button>
-              </div>
-              <table>
-                <thead>
-                  <tr>
-                    <th className="sortable" onClick={() => requestSort('first_name')}>Name{getSortIndicator('first_name')}</th>
-                    <th className="sortable" onClick={() => requestSort('email')}>Email{getSortIndicator('email')}</th>
-                    <th className="sortable" onClick={() => requestSort('title')}>Title{getSortIndicator('title')}</th>
-                    <th className="sortable" onClick={() => requestSort('account_name')}>Company{getSortIndicator('account_name')}</th>
-                    <th className="sortable" onClick={() => requestSort('partner_tier')}>Tier{getSortIndicator('partner_tier')}</th>
-                    <th className="sortable" onClick={() => requestSort('account_region')}>Region{getSortIndicator('account_region')}</th>
-                    <th className="sortable" onClick={() => requestSort('account_owner')}>Owner{getSortIndicator('account_owner')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortData(notInLms).map(row => (
-                    <tr key={row.id}>
-                      <td>{row.first_name} {row.last_name}</td>
-                      <td>{row.email}</td>
-                      <td>{row.title || '-'}</td>
-                      <td>{row.account_name}</td>
-                      <td><span className={`tier-badge ${row.partner_tier?.toLowerCase()}`}>{row.partner_tier}</span></td>
-                      <td>{row.account_region}</td>
-                      <td>{row.account_owner}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              {/* Summary Stats */}
+              <StatsRow columns={4}>
+                <StatCard icon="⚠️" value={notInLms.length} label={<>Not in LMS <InfoTooltip metricKey="notInLms" /></>} variant="warning" />
+                <StatCard icon="🏢" value={new Set(notInLms.map(c => c.account_name)).size} label="Partners Affected" />
+                <StatCard icon="🌍" value={new Set(notInLms.map(c => c.account_region)).size} label="Regions" />
+                <StatCard icon="👤" value={new Set(notInLms.map(c => c.account_owner)).size} label="Account Owners" />
+              </StatsRow>
+
+              {/* Not in LMS Table */}
+              <SectionCard title="CRM Contacts Not in LMS" icon="⚠️" noPadding>
+                <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    {notInLms.length} contacts need LMS accounts
+                  </Typography>
+                  <ActionButton size="small" onClick={() => exportToCsv(notInLms, 'contacts-not-in-lms')}>
+                    📥 Export CSV
+                  </ActionButton>
+                </Box>
+                <DataTable
+                  columns={[
+                    { id: 'first_name', label: 'Name', render: (val, row) => `${val} ${row.last_name}` },
+                    { id: 'email', label: 'Email' },
+                    { id: 'title', label: 'Title', render: (val) => val || '-' },
+                    { id: 'account_name', label: 'Company' },
+                    { id: 'partner_tier', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Tier <InfoTooltip metricKey="tier" /></Box>, render: (val) => val ? <TierBadge tier={val} /> : '-' },
+                    { id: 'account_region', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Region <InfoTooltip metricKey="region" /></Box> },
+                    { id: 'account_owner', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Owner <InfoTooltip metricKey="owner" /></Box> },
+                  ]}
+                  data={sortData(notInLms)}
+                  emptyMessage="All contacts are in LMS"
+                  sortable={true}
+                  orderBy={sortConfig.key}
+                  order={sortConfig.direction}
+                  onSort={(key) => requestSort(key)}
+                />
+              </SectionCard>
+            </>
           )}
 
           {/* LMS Users Not in CRM Report */}
           {activeReport === 'lms-not-in-crm' && (
-            <div className="table-report">
-              <div className="report-stats">
-                <StatsRow columns={4}>
-                  <StatCard
-                    icon="👤"
-                    value={lmsNotInCrm.stats?.totalUsers || 0}
-                    label="Total Users"
-                    variant="warning"
-                    size="small"
-                  />
-                  <StatCard
-                    icon="📁"
-                    value={lmsNotInCrm.stats?.groupsAffected || 0}
-                    label="Groups Affected"
-                    variant="default"
-                    size="small"
-                  />
-                  <StatCard
-                    icon="✓"
-                    value={lmsNotInCrm.stats?.activeUsers || 0}
-                    label="Active Users"
-                    variant="success"
-                    size="small"
-                  />
-                  <StatCard
-                    icon="🎓"
-                    value={lmsNotInCrm.stats?.totalCompletions || 0}
-                    label="Total Completions"
-                    variant="primary"
-                    size="small"
-                  />
-                </StatsRow>
-              </div>
-              <div className="report-actions">
-                <span className="count">{lmsNotInCrm.users?.length || 0} LMS users in groups but NOT in CRM</span>
-                <button onClick={() => exportToCsv(lmsNotInCrm.users || [], 'lms-users-not-in-crm')}>
-                  📥 Export CSV
-                </button>
-              </div>
-              <table>
-                <thead>
-                  <tr>
-                    <th className="sortable" onClick={() => requestSort('first_name')}>Name{getSortIndicator('first_name')}</th>
-                    <th className="sortable" onClick={() => requestSort('email')}>Email{getSortIndicator('email')}</th>
-                    <th className="sortable" onClick={() => requestSort('lms_status')}>Status{getSortIndicator('lms_status')}</th>
-                    <th className="sortable" onClick={() => requestSort('group_count')}>Groups{getSortIndicator('group_count')}</th>
-                    <th className="sortable" onClick={() => requestSort('group_names')}>Group Names{getSortIndicator('group_names')}</th>
-                    <th className="sortable" onClick={() => requestSort('completed_courses')}>Courses{getSortIndicator('completed_courses')}</th>
-                    <th className="sortable" onClick={() => requestSort('total_npcu')}>NPCU{getSortIndicator('total_npcu')}</th>
-                    <th className="sortable" onClick={() => requestSort('last_active_at')}>Last Active{getSortIndicator('last_active_at')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortData(lmsNotInCrm.users || []).map(row => (
-                    <tr key={row.lms_user_id}>
-                      <td>{row.first_name} {row.last_name}</td>
-                      <td>{row.email}</td>
-                      <td><StatusChip status={row.lms_status === 'active' ? 'success' : 'warning'} label={row.lms_status} /></td>
-                      <td>{row.group_count}</td>
-                      <td className="group-names-cell" title={row.group_names}>{row.group_names}</td>
-                      <td>{row.completed_courses}</td>
-                      <td><strong>{row.total_npcu}</strong></td>
-                      <td>{formatDate(row.last_active_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              {/* Summary Stats */}
+              <StatsRow columns={4}>
+                <StatCard
+                  icon="👤"
+                  value={lmsNotInCrm.stats?.totalUsers || 0}
+                  label={<>Total Users <InfoTooltip metricKey="lmsUsers" /></>}
+                  variant="warning"
+                />
+                <StatCard
+                  icon="📁"
+                  value={lmsNotInCrm.stats?.groupsAffected || 0}
+                  label="Groups Affected"
+                />
+                <StatCard
+                  icon="✓"
+                  value={lmsNotInCrm.stats?.activeUsers || 0}
+                  label="Active Users"
+                  variant="success"
+                />
+                <StatCard
+                  icon="🎓"
+                  value={lmsNotInCrm.stats?.totalCompletions || 0}
+                  label={<>Total Completions <InfoTooltip metricKey="completions" /></>}
+                  variant="primary"
+                />
+              </StatsRow>
+
+              {/* LMS Not in CRM Table */}
+              <SectionCard title="LMS Users Not in CRM" icon="🔍" noPadding>
+                <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    {lmsNotInCrm.users?.length || 0} LMS users in partner groups but NOT in CRM
+                  </Typography>
+                  <ActionButton size="small" onClick={() => exportToCsv(lmsNotInCrm.users || [], 'lms-users-not-in-crm')}>
+                    📥 Export CSV
+                  </ActionButton>
+                </Box>
+                <DataTable
+                  columns={[
+                    { id: 'first_name', label: 'Name', render: (val, row) => `${val} ${row.last_name}` },
+                    { id: 'email', label: 'Email' },
+                    { id: 'lms_status', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Status <InfoTooltip metricKey="status" /></Box>, render: (val) => <StatusChip status={val === 'active' ? 'success' : 'warning'} label={val} /> },
+                    { id: 'group_count', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Groups <InfoTooltip metricKey="groupCount" /></Box>, align: 'center' },
+                    { id: 'group_names', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Group Names <InfoTooltip metricKey="groupNames" /></Box>, render: (val) => <span title={val} style={{ maxWidth: 200, display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{val}</span> },
+                    { id: 'completed_courses', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>Courses <InfoTooltip metricKey="courses" /></Box>, align: 'center' },
+                    { id: 'total_npcu', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>NPCU <InfoTooltip metricKey="npcu" /></Box>, align: 'center', render: (val) => <span style={{ fontWeight: 600 }}>{val || 0}</span> },
+                    { id: 'last_active_at', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Last Active <InfoTooltip metricKey="lastActive" /></Box>, render: (val) => formatDate(val) },
+                  ]}
+                  data={sortData(lmsNotInCrm.users || [])}
+                  emptyMessage="All LMS users are in CRM"
+                  sortable={true}
+                  orderBy={sortConfig.key}
+                  order={sortConfig.direction}
+                  onSort={(key) => requestSort(key)}
+                />
+              </SectionCard>
+            </>
           )}
 
           {/* Partners Without Groups Report */}
           {activeReport === 'no-groups' && (
-            <div className="table-report">
-              <div className="report-actions">
-                <span className="count">{partnersWithoutGroups.length} partners without LMS groups</span>
-                <button onClick={() => exportToCsv(partnersWithoutGroups, 'partners-without-groups')}>
-                  📥 Export CSV
-                </button>
-              </div>
-              <table>
-                <thead>
-                  <tr>
-                    <th className="sortable" onClick={() => requestSort('account_name')}>Partner Name{getSortIndicator('account_name')}</th>
-                    <th className="sortable" onClick={() => requestSort('partner_tier')}>Tier{getSortIndicator('partner_tier')}</th>
-                    <th className="sortable" onClick={() => requestSort('account_region')}>Region{getSortIndicator('account_region')}</th>
-                    <th className="sortable" onClick={() => requestSort('account_owner')}>Owner{getSortIndicator('account_owner')}</th>
-                    <th className="sortable" onClick={() => requestSort('contact_count')}>Contacts{getSortIndicator('contact_count')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortData(partnersWithoutGroups).map(row => (
-                    <tr key={row.id}>
-                      <td>{row.account_name}</td>
-                      <td><span className={`tier-badge ${row.partner_tier?.toLowerCase()}`}>{row.partner_tier}</span></td>
-                      <td>{row.account_region}</td>
-                      <td>{row.account_owner}</td>
-                      <td>{row.contact_count}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              {/* Summary Stats */}
+              <StatsRow columns={4}>
+                <StatCard icon="⚠️" value={partnersWithoutGroups.length} label={<>Partners Without Groups <InfoTooltip metricKey="partnersWithoutGroups" /></>} variant="warning" />
+                <StatCard icon="👥" value={partnersWithoutGroups.reduce((sum, p) => sum + (parseInt(p.contact_count) || 0), 0)} label={<>Contacts Affected <InfoTooltip metricKey="contacts" /></>} />
+                <StatCard icon="🌍" value={new Set(partnersWithoutGroups.map(p => p.account_region)).size} label="Regions" />
+                <StatCard icon="👤" value={new Set(partnersWithoutGroups.map(p => p.account_owner)).size} label="Account Owners" />
+              </StatsRow>
+
+              {/* Partners Without Groups Table */}
+              <SectionCard title="Partners Needing LMS Groups" icon="📁" noPadding>
+                <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    {partnersWithoutGroups.length} partners need LMS group setup
+                  </Typography>
+                  <ActionButton size="small" onClick={() => exportToCsv(partnersWithoutGroups, 'partners-without-groups')}>
+                    📥 Export CSV
+                  </ActionButton>
+                </Box>
+                <DataTable
+                  columns={[
+                    { id: 'account_name', label: 'Partner Name', render: (val) => <span style={{ fontWeight: 500 }}>{val}</span> },
+                    { id: 'partner_tier', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Tier <InfoTooltip metricKey="tier" /></Box>, render: (val) => val ? <TierBadge tier={val} /> : '-' },
+                    { id: 'account_region', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Region <InfoTooltip metricKey="region" /></Box> },
+                    { id: 'account_owner', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Owner <InfoTooltip metricKey="owner" /></Box> },
+                    { id: 'contact_count', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>Contacts <InfoTooltip metricKey="contacts" /></Box>, align: 'center' },
+                  ]}
+                  data={sortData(partnersWithoutGroups)}
+                  emptyMessage="All partners have LMS groups"
+                  sortable={true}
+                  orderBy={sortConfig.key}
+                  order={sortConfig.direction}
+                  onSort={(key) => requestSort(key)}
+                />
+              </SectionCard>
+            </>
           )}
 
           {/* Certification Gaps Report */}
           {activeReport === 'gaps' && (
-            <div className="table-report">
-              <div className="report-actions">
-                <span className="count">{certGaps.filter(r => r.npcu_gap > 0).length} partners with gaps</span>
-                <button onClick={() => exportToCsv(certGaps, 'certification-gaps')}>
-                  📥 Export CSV
-                </button>
-              </div>
-              <table>
-                <thead>
-                  <tr>
-                    <th className="sortable" onClick={() => requestSort('account_name')}>Partner Name{getSortIndicator('account_name')}</th>
-                    <th className="sortable" onClick={() => requestSort('partner_tier')}>Tier{getSortIndicator('partner_tier')}</th>
-                    <th className="sortable" onClick={() => requestSort('account_region')}>Region{getSortIndicator('account_region')}</th>
-                    <th className="sortable" onClick={() => requestSort('current_npcu')}>Current NPCU{getSortIndicator('current_npcu')}</th>
-                    <th className="sortable" onClick={() => requestSort('required_npcu')}>Required{getSortIndicator('required_npcu')}</th>
-                    <th className="sortable" onClick={() => requestSort('npcu_gap')}>Gap{getSortIndicator('npcu_gap')}</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortData(certGaps).map(row => (
-                    <tr key={row.id} className={row.npcu_gap > 0 ? 'has-gap' : ''}>
-                      <td>{row.account_name}</td>
-                      <td><span className={`tier-badge ${row.partner_tier?.toLowerCase()}`}>{row.partner_tier}</span></td>
-                      <td>{row.account_region}</td>
-                      <td className="npcu">{row.current_npcu}</td>
-                      <td>{row.required_npcu}</td>
-                      <td className={row.npcu_gap > 0 ? 'gap negative' : 'gap'}>
-                        {row.npcu_gap > 0 ? `-${row.npcu_gap}` : '✓'}
-                      </td>
-                      <td>
-                        {row.npcu_gap > 0 ? (
-                          <span className="status not-compliant">Needs {row.npcu_gap} more</span>
-                        ) : (
-                          <span className="status compliant">Compliant</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              {/* Summary Stats */}
+              <StatsRow columns={4}>
+                <StatCard 
+                  icon="⚠️" 
+                  value={certGaps.filter(r => r.npcu_gap > 0).length} 
+                  label={<>Partners with Gaps <InfoTooltip metricKey="gap" /></>} 
+                  variant={certGaps.filter(r => r.npcu_gap > 0).length > 0 ? 'warning' : 'success'} 
+                />
+                <StatCard 
+                  icon="✅" 
+                  value={certGaps.filter(r => r.npcu_gap <= 0).length} 
+                  label="Compliant Partners" 
+                  variant="success" 
+                />
+                <StatCard 
+                  icon="📊" 
+                  value={certGaps.reduce((sum, r) => sum + Math.max(r.npcu_gap, 0), 0)} 
+                  label="Total NPCU Gap" 
+                  variant="error" 
+                />
+                <StatCard 
+                  icon="🏆" 
+                  value={certGaps.reduce((sum, r) => sum + (parseInt(r.current_npcu) || 0), 0)} 
+                  label={<>Total Current NPCU <InfoTooltip metricKey="currentNpcu" /></>} 
+                  variant="primary" 
+                />
+              </StatsRow>
+
+              {/* Certification Gaps Table */}
+              <SectionCard title="Partner Tier Compliance Status" icon="📋" noPadding>
+                <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    {certGaps.filter(r => r.npcu_gap > 0).length} of {certGaps.length} partners below tier requirements
+                  </Typography>
+                  <ActionButton size="small" onClick={() => exportToCsv(certGaps, 'certification-gaps')}>
+                    📥 Export CSV
+                  </ActionButton>
+                </Box>
+                <DataTable
+                  columns={[
+                    { id: 'account_name', label: 'Partner Name', render: (val) => <span style={{ fontWeight: 500 }}>{val}</span> },
+                    { id: 'partner_tier', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Tier <InfoTooltip metricKey="tier" /></Box>, render: (val) => val ? <TierBadge tier={val} /> : '-' },
+                    { id: 'account_region', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Region <InfoTooltip metricKey="region" /></Box> },
+                    { id: 'current_npcu', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>Current NPCU <InfoTooltip metricKey="currentNpcu" /></Box>, align: 'center', render: (val) => <span style={{ color: parseInt(val) > 0 ? '#43E97B' : 'inherit', fontWeight: 600 }}>{val || 0}</span> },
+                    { id: 'required_npcu', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>Required <InfoTooltip metricKey="requiredNpcu" /></Box>, align: 'center' },
+                    { id: 'npcu_gap', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>Gap <InfoTooltip metricKey="gap" /></Box>, align: 'center', render: (val) => val > 0 ? <StatusChip status="error" label={`-${val}`} /> : <StatusChip status="success" label="✓" /> },
+                    { id: 'status', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Status <InfoTooltip metricKey="complianceStatus" /></Box>, sortable: false, render: (val, row) => row.npcu_gap > 0 ? <StatusChip status="warning" label={`Needs ${row.npcu_gap} more`} /> : <StatusChip status="success" label="Compliant" /> },
+                  ]}
+                  data={sortData(certGaps)}
+                  emptyMessage="No partners found"
+                  sortable={true}
+                  orderBy={sortConfig.key}
+                  order={sortConfig.direction}
+                  onSort={(key) => requestSort(key)}
+                />
+              </SectionCard>
+            </>
           )}
 
           {/* Partner Leaderboard Report */}
           {activeReport === 'leaderboard' && (
-            <div className="table-report">
-              <div className="report-actions">
-                <span className="count">{leaderboard.length} partners</span>
-                <button onClick={() => exportToCsv(leaderboard, 'partner-leaderboard')}>
-                  📥 Export CSV
-                </button>
-              </div>
-              <table>
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th className="sortable" onClick={() => requestSort('account_name')}>Partner Name{getSortIndicator('account_name')}</th>
-                    <th className="sortable" onClick={() => requestSort('partner_tier')}>Tier{getSortIndicator('partner_tier')}</th>
-                    <th className="sortable" onClick={() => requestSort('account_region')}>Region{getSortIndicator('account_region')}</th>
-                    <th className="sortable" onClick={() => requestSort('total_contacts')}>Contacts{getSortIndicator('total_contacts')}</th>
-                    <th className="sortable" onClick={() => requestSort('contacts_in_lms')}>In LMS{getSortIndicator('contacts_in_lms')}</th>
-                    <th className="sortable" onClick={() => requestSort('total_certifications')}>Certs{getSortIndicator('total_certifications')}</th>
-                    <th className="sortable" onClick={() => requestSort('total_npcu')}>NPCU{getSortIndicator('total_npcu')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortData(leaderboard).map((row, idx) => (
-                    <tr key={row.id}>
-                      <td className="rank">{idx + 1}</td>
-                      <td>{row.account_name}</td>
-                      <td><span className={`tier-badge ${row.partner_tier?.toLowerCase()}`}>{row.partner_tier}</span></td>
-                      <td>{row.account_region}</td>
-                      <td>{row.total_contacts}</td>
-                      <td>{row.contacts_in_lms}</td>
-                      <td>{row.total_certifications}</td>
-                      <td className="npcu">{row.total_npcu}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              {/* Summary Stats */}
+              <StatsRow columns={4}>
+                <StatCard icon="🏢" value={leaderboard.length} label={<>Partners <InfoTooltip metricKey="partners" /></>} variant="primary" />
+                <StatCard icon="👥" value={leaderboard.reduce((sum, p) => sum + (parseInt(p.total_contacts) || 0), 0)} label={<>Total Contacts <InfoTooltip metricKey="totalContacts" /></>} />
+                <StatCard icon="📚" value={leaderboard.reduce((sum, p) => sum + (parseInt(p.contacts_in_lms) || 0), 0)} label={<>In LMS <InfoTooltip metricKey="inLms" /></>} variant="success" />
+                <StatCard icon="🏆" value={leaderboard.reduce((sum, p) => sum + (parseInt(p.total_npcu) || 0), 0)} label={<>Total NPCU <InfoTooltip metricKey="npcu" /></>} variant="primary" />
+              </StatsRow>
+
+              {/* Partners Table */}
+              <SectionCard title="Partner Rankings" icon="📋" noPadding>
+                <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    {leaderboard.length} partners ranked by NPCU
+                  </Typography>
+                  <ActionButton size="small" onClick={() => exportToCsv(leaderboard, 'partner-leaderboard')}>
+                    📥 Export CSV
+                  </ActionButton>
+                </Box>
+                <DataTable
+                  columns={[
+                    { id: 'rank', label: '#', align: 'center', sortable: false },
+                    { id: 'account_name', label: 'Partner Name', render: (val) => <span style={{ fontWeight: 500 }}>{val}</span> },
+                    { id: 'partner_tier', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Tier <InfoTooltip metricKey="tier" /></Box>, render: (val) => <TierBadge tier={val || 'Unknown'} /> },
+                    { id: 'account_region', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Region <InfoTooltip metricKey="region" /></Box>, render: (val) => val || 'N/A' },
+                    { id: 'total_contacts', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>Contacts <InfoTooltip metricKey="totalContacts" /></Box>, align: 'center', render: (val) => parseInt(val) || 0 },
+                    { id: 'contacts_in_lms', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>In LMS <InfoTooltip metricKey="contactsInLms" /></Box>, align: 'center', render: (val) => parseInt(val) || 0 },
+                    { id: 'total_certifications', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>Certs <InfoTooltip metricKey="totalCerts" /></Box>, align: 'center', render: (val) => parseInt(val) || 0 },
+                    { id: 'total_npcu', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>NPCU <InfoTooltip metricKey="npcu" /></Box>, align: 'center', render: (val) => <span style={{ color: parseInt(val) > 0 ? '#43E97B' : 'inherit', fontWeight: 600 }}>{parseInt(val) || 0}</span> },
+                  ]}
+                  data={sortData(leaderboard).map((row, idx) => ({ ...row, rank: idx + 1 }))}
+                  emptyMessage="No partners found"
+                  sortable={true}
+                  orderBy={sortConfig.key}
+                  order={sortConfig.direction}
+                  onSort={(key) => requestSort(key)}
+                />
+              </SectionCard>
+            </>
           )}
 
           {/* Popular Courses Report */}
           {activeReport === 'courses' && (
-            <div className="table-report">
-              <div className="report-actions">
-                <span className="count">{coursePopularity.length} courses</span>
-                <button onClick={() => exportToCsv(coursePopularity, 'popular-courses')}>
-                  📥 Export CSV
-                </button>
-              </div>
-              <table>
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th className="sortable" onClick={() => requestSort('name')}>Course Name{getSortIndicator('name')}</th>
-                    <th className="sortable" onClick={() => requestSort('product_category')}>Category{getSortIndicator('product_category')}</th>
-                    <th className="sortable" onClick={() => requestSort('npcu_value')}>NPCU{getSortIndicator('npcu_value')}</th>
-                    <th className="sortable" onClick={() => requestSort('completion_count')}>Completions{getSortIndicator('completion_count')}</th>
-                    <th className="sortable" onClick={() => requestSort('unique_users')}>Unique Users{getSortIndicator('unique_users')}</th>
-                    <th className="sortable" onClick={() => requestSort('avg_score')}>Avg Score{getSortIndicator('avg_score')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortData(coursePopularity).map((row, idx) => (
-                    <tr key={row.id}>
-                      <td className="rank">{idx + 1}</td>
-                      <td>
-                        {row.name}
-                        {row.is_certification === 1 && <span className="cert-badge" title="Certification">🎓</span>}
-                      </td>
-                      <td>{row.product_category || '-'}</td>
-                      <td className="npcu">{row.npcu_value || 0}</td>
-                      <td>{row.completion_count}</td>
-                      <td>{row.unique_users}</td>
-                      <td>{row.avg_score ? `${Math.round(row.avg_score)}%` : '-'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              {/* Summary Stats */}
+              <StatsRow columns={4}>
+                <StatCard icon="📚" value={coursePopularity.length} label={<>Courses <InfoTooltip metricKey="courseName" /></>} variant="primary" />
+                <StatCard icon="🎓" value={coursePopularity.filter(c => c.is_certification === 1).length} label={<>Certifications <InfoTooltip metricKey="certificationCourse" /></>} variant="success" />
+                <StatCard icon="✅" value={coursePopularity.reduce((sum, c) => sum + (parseInt(c.completion_count) || 0), 0)} label={<>Total Completions <InfoTooltip metricKey="completionCount" /></>} />
+                <StatCard icon="🏆" value={coursePopularity.reduce((sum, c) => sum + (parseInt(c.npcu_value) || 0), 0)} label={<>Total NPCU Value <InfoTooltip metricKey="courseNpcu" /></>} variant="primary" />
+              </StatsRow>
+
+              {/* Courses Table */}
+              <SectionCard title="Course Popularity Rankings" icon="📚" noPadding>
+                <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    {coursePopularity.length} courses sorted by completions
+                  </Typography>
+                  <ActionButton size="small" onClick={() => exportToCsv(coursePopularity, 'popular-courses')}>
+                    📥 Export CSV
+                  </ActionButton>
+                </Box>
+                <DataTable
+                  columns={[
+                    { id: 'rank', label: '#', align: 'center', sortable: false },
+                    { id: 'name', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Course Name <InfoTooltip metricKey="courseName" /></Box>, render: (val, row) => (
+                      <>
+                        {val}
+                        {row.is_certification === 1 && <span title="Certification" style={{ marginLeft: 4 }}>🎓</span>}
+                      </>
+                    )},
+                    { id: 'product_category', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Category <InfoTooltip metricKey="category" /></Box>, render: (val) => val || '-' },
+                    { id: 'npcu_value', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>NPCU <InfoTooltip metricKey="courseNpcu" /></Box>, align: 'center', render: (val) => <span style={{ color: parseInt(val) > 0 ? '#43E97B' : 'inherit', fontWeight: 600 }}>{val || 0}</span> },
+                    { id: 'completion_count', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>Completions <InfoTooltip metricKey="completionCount" /></Box>, align: 'center' },
+                    { id: 'unique_users', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>Unique Users <InfoTooltip metricKey="uniqueUsers" /></Box>, align: 'center' },
+                    { id: 'avg_score', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>Avg Score <InfoTooltip metricKey="avgScore" /></Box>, align: 'center', render: (val) => val ? `${Math.round(val)}%` : '-' },
+                  ]}
+                  data={sortData(coursePopularity).map((row, idx) => ({ ...row, rank: idx + 1 }))}
+                  emptyMessage="No courses found"
+                  sortable={true}
+                  orderBy={sortConfig.key}
+                  order={sortConfig.direction}
+                  onSort={(key) => requestSort(key)}
+                />
+              </SectionCard>
+            </>
           )}
 
           {/* Recent Activity Report */}
           {activeReport === 'activity' && (
-            <div className="table-report">
-              <div className="report-actions">
-                <span className="count">{recentActivity.length} completions</span>
-                <button onClick={() => exportToCsv(recentActivity, 'recent-activity')}>
-                  📥 Export CSV
-                </button>
-              </div>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>User</th>
-                    <th>Email</th>
-                    <th>Course</th>
-                    <th>NPCU</th>
-                    <th>Partner</th>
-                    <th>Tier</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentActivity.map(row => (
-                    <tr key={row.enrollment_id}>
-                      <td>{formatDate(row.completed_at)}</td>
-                      <td>{row.user_name}</td>
-                      <td>{row.email}</td>
-                      <td>
-                        {row.course_name}
-                        {row.is_certification === 1 && <span className="cert-badge" title="Certification">🎓</span>}
-                      </td>
-                      <td className="npcu">{row.npcu_value || 0}</td>
-                      <td>{row.partner_name || '-'}</td>
-                      <td><span className={`tier-badge ${row.partner_tier?.toLowerCase()}`}>{row.partner_tier || '-'}</span></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              {/* Summary Stats */}
+              <StatsRow columns={4}>
+                <StatCard icon="📊" value={recentActivity.length} label={<>Recent Completions <InfoTooltip metricKey="completionCount" /></>} variant="primary" />
+                <StatCard icon="👤" value={new Set(recentActivity.map(r => r.email)).size} label={<>Unique Users <InfoTooltip metricKey="uniqueUsers" /></>} />
+                <StatCard icon="🏢" value={new Set(recentActivity.filter(r => r.partner_name).map(r => r.partner_name)).size} label="Partners Active" variant="success" />
+                <StatCard icon="🏆" value={recentActivity.reduce((sum, r) => sum + (parseInt(r.npcu_value) || 0), 0)} label={<>NPCU Earned <InfoTooltip metricKey="npcu" /></>} variant="primary" />
+              </StatsRow>
+
+              {/* Activity Table */}
+              <SectionCard title="Recent Course Completions" icon="📅" noPadding>
+                <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    Last {recentActivity.length} completions across all partners
+                  </Typography>
+                  <ActionButton size="small" onClick={() => exportToCsv(recentActivity, 'recent-activity')}>
+                    📥 Export CSV
+                  </ActionButton>
+                </Box>
+                <DataTable
+                  columns={[
+                    { id: 'completed_at', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Date <InfoTooltip metricKey="completedDate" /></Box>, render: (val) => formatDate(val) },
+                    { id: 'user_name', label: 'User' },
+                    { id: 'email', label: 'Email' },
+                    { id: 'course_name', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Course <InfoTooltip metricKey="courseName" /></Box>, render: (val, row) => (
+                      <>
+                        {val}
+                        {row.is_certification === 1 && <span title="Certification" style={{ marginLeft: 4 }}>🎓</span>}
+                      </>
+                    )},
+                    { id: 'npcu_value', label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>NPCU <InfoTooltip metricKey="npcu" /></Box>, align: 'center', render: (val) => <span style={{ color: parseInt(val) > 0 ? '#43E97B' : 'inherit', fontWeight: 600 }}>{val || 0}</span> },
+                    { id: 'partner_name', label: 'Partner', render: (val) => val || '-' },
+                    { id: 'partner_tier', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Tier <InfoTooltip metricKey="tier" /></Box>, render: (val) => val ? <TierBadge tier={val} /> : '-' },
+                  ]}
+                  data={recentActivity}
+                  emptyMessage="No recent activity found"
+                />
+              </SectionCard>
+            </>
           )}
 
           {/* Expiring Certifications Report */}
           {activeReport === 'expiring' && (
-            <div className="table-report">
-              <div className="report-actions">
-                <span className="count">{expiringCerts.length} expiring soon</span>
-                <button onClick={() => exportToCsv(expiringCerts, 'expiring-certifications')}>
-                  📥 Export CSV
-                </button>
-              </div>
-              {expiringCerts.length === 0 ? (
-                <div className="empty-state">
-                  <span className="empty-icon">✅</span>
-                  <p>No certifications expiring in the next 90 days!</p>
-                </div>
-              ) : (
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Expires</th>
-                      <th>Days Left</th>
-                      <th>User</th>
-                      <th>Email</th>
-                      <th>Certification</th>
-                      <th>Partner</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {expiringCerts.map(row => (
-                      <tr key={row.enrollment_id} className={row.days_until_expiry <= 30 ? 'urgent' : ''}>
-                        <td>{formatDate(row.expires_at)}</td>
-                        <td className={row.days_until_expiry <= 30 ? 'expiring-soon' : ''}>{row.days_until_expiry} days</td>
-                        <td>{row.user_name}</td>
-                        <td>{row.email}</td>
-                        <td>{row.course_name}</td>
-                        <td>{row.partner_name || '-'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
+            <>
+              {/* Summary Stats */}
+              <StatsRow columns={4}>
+                <StatCard 
+                  icon="⏰" 
+                  value={expiringCerts.length} 
+                  label={<>Expiring Soon <InfoTooltip metricKey="expiringCerts" /></>} 
+                  variant={expiringCerts.length > 0 ? 'warning' : 'success'} 
+                />
+                <StatCard 
+                  icon="🚨" 
+                  value={expiringCerts.filter(c => c.days_until_expiry <= 30).length} 
+                  label={<>Critical (&lt;30 days) <InfoTooltip metricKey="daysLeft" /></>} 
+                  variant="error" 
+                />
+                <StatCard 
+                  icon="👤" 
+                  value={new Set(expiringCerts.map(c => c.email)).size} 
+                  label="Affected Users" 
+                />
+                <StatCard 
+                  icon="🏢" 
+                  value={new Set(expiringCerts.filter(c => c.partner_name).map(c => c.partner_name)).size} 
+                  label="Affected Partners" 
+                />
+              </StatsRow>
+
+              {/* Expiring Table */}
+              <SectionCard title="Certifications Expiring Within 90 Days" icon="⏰" noPadding>
+                <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    {expiringCerts.length} certifications expiring
+                  </Typography>
+                  <ActionButton size="small" onClick={() => exportToCsv(expiringCerts, 'expiring-certifications')}>
+                    📥 Export CSV
+                  </ActionButton>
+                </Box>
+                {expiringCerts.length === 0 ? (
+                  <Box sx={{ p: 4, textAlign: 'center' }}>
+                    <Typography variant="h3" sx={{ mb: 1 }}>✅</Typography>
+                    <Typography color="success.main">No certifications expiring in the next 90 days!</Typography>
+                  </Box>
+                ) : (
+                  <DataTable
+                    columns={[
+                      { id: 'expires_at', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Expires <InfoTooltip metricKey="expiresDate" /></Box>, render: (val) => formatDate(val) },
+                      { id: 'days_until_expiry', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Days Left <InfoTooltip metricKey="daysLeft" /></Box>, render: (val) => (
+                        <StatusChip 
+                          status={val <= 30 ? 'error' : val <= 60 ? 'warning' : 'info'} 
+                          label={`${val} days`} 
+                        />
+                      )},
+                      { id: 'user_name', label: 'User' },
+                      { id: 'email', label: 'Email' },
+                      { id: 'course_name', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Certification <InfoTooltip metricKey="courseName" /></Box> },
+                      { id: 'partner_name', label: 'Partner', render: (val) => val || '-' },
+                    ]}
+                    data={expiringCerts}
+                    emptyMessage="No expiring certifications"
+                  />
+                )}
+              </SectionCard>
+            </>
           )}
 
           {/* Inactive Users Report */}
           {activeReport === 'inactive' && (
-            <div className="table-report">
-              <div className="report-actions">
-                <span className="count">{inactiveUsers.length} inactive users</span>
-                <button onClick={() => exportToCsv(inactiveUsers, 'inactive-users')}>
-                  📥 Export CSV
-                </button>
-              </div>
-              <table>
-                <thead>
-                  <tr>
-                    <th>User</th>
-                    <th>Email</th>
-                    <th>Last Active</th>
-                    <th>Days Inactive</th>
-                    <th>Completions</th>
-                    <th>Partner</th>
-                    <th>Tier</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {inactiveUsers.map(row => (
-                    <tr key={row.lms_user_id}>
-                      <td>{row.user_name}</td>
-                      <td>{row.email}</td>
-                      <td>{formatDate(row.last_active_at)}</td>
-                      <td>{row.days_inactive || '180+'}</td>
-                      <td>{row.total_completions}</td>
-                      <td>{row.partner_name || '-'}</td>
-                      <td><span className={`tier-badge ${row.partner_tier?.toLowerCase()}`}>{row.partner_tier || '-'}</span></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              {/* Summary Stats */}
+              <StatsRow columns={4}>
+                <StatCard 
+                  icon="😴" 
+                  value={inactiveUsers.length} 
+                  label={<>Inactive Users <InfoTooltip metricKey="inactiveUsers" /></>} 
+                  variant="warning" 
+                />
+                <StatCard 
+                  icon="📊" 
+                  value={inactiveUsers.reduce((sum, u) => sum + (parseInt(u.total_completions) || 0), 0)} 
+                  label={<>Total Completions <InfoTooltip metricKey="completions" /></>} 
+                />
+                <StatCard 
+                  icon="📅" 
+                  value={inactiveUsers[0]?.days_inactive || 'N/A'} 
+                  label={<>Max Days Inactive <InfoTooltip metricKey="daysInactive" /></>} 
+                />
+                <StatCard 
+                  icon="🏢" 
+                  value={new Set(inactiveUsers.filter(u => u.partner_name).map(u => u.partner_name)).size} 
+                  label="Partners Affected" 
+                />
+              </StatsRow>
+
+              {/* Inactive Users Table */}
+              <SectionCard title="Users Inactive 90+ Days" icon="😴" noPadding>
+                <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    {inactiveUsers.length} users with no activity in 90+ days
+                  </Typography>
+                  <ActionButton size="small" onClick={() => exportToCsv(inactiveUsers, 'inactive-users')}>
+                    📥 Export CSV
+                  </ActionButton>
+                </Box>
+                <DataTable
+                  columns={[
+                    { id: 'user_name', label: 'User' },
+                    { id: 'email', label: 'Email' },
+                    { id: 'last_active_at', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Last Active <InfoTooltip metricKey="lastActive" /></Box>, render: (val) => formatDate(val) },
+                    { id: 'days_inactive', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Days Inactive <InfoTooltip metricKey="daysInactive" /></Box>, render: (val) => val || '180+' },
+                    { id: 'total_completions', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Completions <InfoTooltip metricKey="completions" /></Box>, align: 'center' },
+                    { id: 'partner_name', label: 'Partner', render: (val) => val || '-' },
+                    { id: 'partner_tier', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Tier <InfoTooltip metricKey="tier" /></Box>, render: (val) => val ? <TierBadge tier={val} /> : '-' },
+                  ]}
+                  data={inactiveUsers}
+                  emptyMessage="No inactive users found"
+                />
+              </SectionCard>
+            </>
           )}
             </div>
           )}

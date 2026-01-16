@@ -6,7 +6,7 @@
 const { query, transaction, getPool } = require('./connection.cjs');
 const crypto = require('crypto');
 
-const SCHEMA_VERSION = 15;
+const SCHEMA_VERSION = 23;
 
 /**
  * Create all database tables
@@ -1058,13 +1058,13 @@ Get started by completing your certifications to help your team meet NPCU goals.
       try {
         await query(`
           INSERT INTO scheduled_tasks (task_type, task_name, enabled, interval_minutes, config)
-          VALUES ('sync_to_impartner', 'Push to Impartner', FALSE, 360, '{"mode": "full"}')
+          VALUES ('sync_to_impartner', 'Push to Impartner', FALSE, 360, '{"mode": "incremental"}')
           ON DUPLICATE KEY UPDATE 
             task_name = VALUES(task_name),
             interval_minutes = VALUES(interval_minutes),
             config = VALUES(config)
         `);
-        console.log('  ✓ Added Sync to Impartner task (6-hour interval, disabled by default)');
+        console.log('  ✓ Added Sync to Impartner task (6-hour interval, incremental mode, disabled by default)');
       } catch (err) {
         console.log(`  - Sync to Impartner task: ${err.message}`);
       }
@@ -1195,6 +1195,331 @@ Get started by completing your certifications to help your team meet NPCU goals.
       }
       
       console.log('  ✓ Account status tracking migration complete');
+    }
+    
+    // Version 16: Add performance indexes for analytics queries
+    if (currentVersion < 16) {
+      console.log('📦 Running v16 migration: Add analytics performance indexes...');
+      
+      // Composite indexes for common analytics joins
+      const indexes = [
+        // lms_enrollments indexes for analytics
+        { table: 'lms_enrollments', name: 'idx_enrollments_user_status', cols: '(user_id, status)' },
+        { table: 'lms_enrollments', name: 'idx_enrollments_status_completed', cols: '(status, completed_at)' },
+        { table: 'lms_enrollments', name: 'idx_enrollments_user_completed', cols: '(user_id, completed_at)' },
+        { table: 'lms_enrollments', name: 'idx_enrollments_enrolled_at', cols: '(enrolled_at)' },
+        
+        // lms_users indexes for date-based queries
+        { table: 'lms_users', name: 'idx_users_created_at', cols: '(created_at_lms)' },
+        { table: 'lms_users', name: 'idx_users_last_active', cols: '(last_active_at)' },
+        
+        // lms_group_members composite for partner lookups
+        { table: 'lms_group_members', name: 'idx_group_members_group_user', cols: '(group_id, user_id)' },
+        
+        // contacts indexes for LMS linkage
+        { table: 'contacts', name: 'idx_contacts_partner_lms', cols: '(partner_id, lms_user_id)' },
+        { table: 'contacts', name: 'idx_contacts_active_lms', cols: '(is_active, lms_user_id)' },
+        
+        // partners indexes for analytics
+        { table: 'partners', name: 'idx_partners_active_tier', cols: '(is_active, partner_tier)' },
+        { table: 'partners', name: 'idx_partners_active_region', cols: '(is_active, account_region)' },
+        { table: 'partners', name: 'idx_partners_active_owner', cols: '(is_active, account_owner)' },
+        { table: 'partners', name: 'idx_partners_total_npcu', cols: '(total_npcu)' },
+        
+        // lms_groups index for partner lookups
+        { table: 'lms_groups', name: 'idx_groups_partner', cols: '(partner_id)' }
+      ];
+      
+      for (const idx of indexes) {
+        try {
+          await query(`ALTER TABLE ${idx.table} ADD INDEX ${idx.name} ${idx.cols}`);
+          console.log(`  ✓ Added index ${idx.table}.${idx.name}`);
+        } catch (err) {
+          if (!err.message.includes('Duplicate key')) {
+            console.log(`  - ${idx.table}.${idx.name}: ${err.message}`);
+          }
+        }
+      }
+      
+      console.log('  ✓ Analytics performance indexes migration complete');
+    }
+    
+    // Version 17: Add country column to partners (account_region should be APAC/EMEA/AMER, country is mailing country)
+    if (currentVersion < 17) {
+      console.log('📦 Running v17 migration: Add country column and fix region mapping...');
+      
+      // Add country column to partners table
+      try {
+        await query(`ALTER TABLE partners ADD COLUMN country VARCHAR(100) AFTER account_region`);
+        console.log('  ✓ Added partners.country');
+      } catch (err) {
+        if (!err.message.includes('Duplicate column')) {
+          console.log(`  - partners.country: ${err.message}`);
+        }
+      }
+      
+      // Add index for country
+      try {
+        await query('ALTER TABLE partners ADD INDEX idx_country (country)');
+        console.log('  ✓ Added index partners.idx_country');
+      } catch (err) {
+        if (!err.message.includes('Duplicate key')) {
+          console.log(`  - partners.idx_country: ${err.message}`);
+        }
+      }
+      
+      // Move country names from account_region to country column
+      // This query identifies non-region values and moves them
+      const validRegions = ['APAC', 'EMEA', 'AMER', 'MENA', 'Americas', 'Europe', 'Asia', 'LATAM'];
+      try {
+        // First, copy country data where account_region is NOT a standard region code
+        await query(`
+          UPDATE partners 
+          SET country = account_region 
+          WHERE account_region IS NOT NULL 
+            AND account_region NOT IN ('APAC', 'EMEA', 'AMER', 'MENA', 'Americas', 'Europe', 'Asia', 'LATAM', '')
+        `);
+        console.log('  ✓ Copied country values from account_region to country');
+        
+        // Then clear account_region for non-region values (will be repopulated by Impartner sync)
+        await query(`
+          UPDATE partners 
+          SET account_region = NULL 
+          WHERE account_region IS NOT NULL 
+            AND account_region NOT IN ('APAC', 'EMEA', 'AMER', 'MENA', 'Americas', 'Europe', 'Asia', 'LATAM', '')
+        `);
+        console.log('  ✓ Cleared non-region values from account_region');
+      } catch (err) {
+        console.log(`  - Data migration: ${err.message}`);
+      }
+      
+      console.log('  ✓ Country/region mapping migration complete');
+    }
+    
+    // Version 18: Add primary user (partner primary contact) columns
+    if (currentVersion < 18) {
+      console.log('📦 Running v18 migration: Add primary user columns...');
+      
+      // Add primary_user_name column to partners table
+      try {
+        await query(`ALTER TABLE partners ADD COLUMN primary_user_name VARCHAR(255) AFTER owner_email`);
+        console.log('  ✓ Added partners.primary_user_name');
+      } catch (err) {
+        if (!err.message.includes('Duplicate column')) {
+          console.log(`  - partners.primary_user_name: ${err.message}`);
+        }
+      }
+      
+      // Add primary_user_email column to partners table
+      try {
+        await query(`ALTER TABLE partners ADD COLUMN primary_user_email VARCHAR(255) AFTER primary_user_name`);
+        console.log('  ✓ Added partners.primary_user_email');
+      } catch (err) {
+        if (!err.message.includes('Duplicate column')) {
+          console.log(`  - partners.primary_user_email: ${err.message}`);
+        }
+      }
+      
+      // Add primary_user_id column (Impartner User ID for reference)
+      try {
+        await query(`ALTER TABLE partners ADD COLUMN primary_user_id INT AFTER primary_user_email`);
+        console.log('  ✓ Added partners.primary_user_id');
+      } catch (err) {
+        if (!err.message.includes('Duplicate column')) {
+          console.log(`  - partners.primary_user_id: ${err.message}`);
+        }
+      }
+      
+      console.log('  ✓ Primary user migration complete');
+    }
+    
+    // Version 19: Add login history tracking
+    if (currentVersion < 19) {
+      console.log('📦 Running v19 migration: Add login history tracking...');
+      
+      // Create login_history table
+      try {
+        await query(`
+          CREATE TABLE IF NOT EXISTS login_history (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NULL COMMENT 'NULL if login failed with unknown email',
+            email VARCHAR(255) NOT NULL COMMENT 'Email used for login attempt',
+            success BOOLEAN NOT NULL DEFAULT FALSE,
+            failure_reason VARCHAR(100) NULL COMMENT 'wrong_password, invalid_email, account_disabled, etc.',
+            ip_address VARCHAR(45) NULL COMMENT 'IPv4 or IPv6 address',
+            user_agent TEXT NULL COMMENT 'Browser/client user agent string',
+            login_method ENUM('password', 'magic_link', 'sso') DEFAULT 'password',
+            session_id INT NULL COMMENT 'Reference to admin_sessions if login successful',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_user_id (user_id),
+            INDEX idx_email (email),
+            INDEX idx_success (success),
+            INDEX idx_created_at (created_at),
+            INDEX idx_ip_address (ip_address),
+            FOREIGN KEY (user_id) REFERENCES admin_users(id) ON DELETE SET NULL
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        console.log('  ✓ Created login_history table');
+      } catch (err) {
+        console.log(`  - login_history table: ${err.message}`);
+      }
+      
+      // Add indexes for reporting queries
+      try {
+        await query('ALTER TABLE login_history ADD INDEX idx_user_created (user_id, created_at)');
+        console.log('  ✓ Added composite index idx_user_created');
+      } catch (err) {
+        if (!err.message.includes('Duplicate key')) {
+          console.log(`  - idx_user_created: ${err.message}`);
+        }
+      }
+      
+      console.log('  ✓ Login history migration complete');
+    }
+    
+    // Version 20: Add leads table for Impartner lead tracking
+    if (currentVersion < 20) {
+      console.log('📦 Running v20 migration: Add leads table...');
+      
+      // Create leads table
+      try {
+        await query(`
+          CREATE TABLE IF NOT EXISTS leads (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            impartner_id INT NOT NULL UNIQUE COMMENT 'Impartner Lead ID',
+            partner_id INT NULL COMMENT 'Local partner ID (linked via partnerAccountId)',
+            impartner_partner_id INT NULL COMMENT 'Impartner partnerAccountId',
+            first_name VARCHAR(100),
+            last_name VARCHAR(100),
+            email VARCHAR(255),
+            phone VARCHAR(50),
+            title VARCHAR(255),
+            company_name VARCHAR(255),
+            status_id INT COMMENT 'Impartner status ID',
+            status_name VARCHAR(100) COMMENT 'Resolved status name',
+            source VARCHAR(255) COMMENT 'Lead source',
+            description TEXT,
+            crm_id VARCHAR(50) COMMENT 'Salesforce CRM ID if synced',
+            lead_created_at TIMESTAMP NULL COMMENT 'When lead was created in Impartner',
+            lead_updated_at TIMESTAMP NULL COMMENT 'When lead was last updated in Impartner',
+            synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_partner_id (partner_id),
+            INDEX idx_impartner_partner (impartner_partner_id),
+            INDEX idx_status (status_id),
+            INDEX idx_source (source),
+            INDEX idx_lead_created (lead_created_at),
+            INDEX idx_email (email),
+            FOREIGN KEY (partner_id) REFERENCES partners(id) ON DELETE SET NULL
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        console.log('  ✓ Created leads table');
+      } catch (err) {
+        console.log(`  - leads table: ${err.message}`);
+      }
+      
+      // Add lead count columns to partners for quick aggregation
+      const leadColumns = [
+        { name: 'lead_count', type: 'INT DEFAULT 0 COMMENT "Total leads for this partner"' },
+        { name: 'leads_last_30_days', type: 'INT DEFAULT 0 COMMENT "Leads in last 30 days"' },
+        { name: 'leads_updated_at', type: 'TIMESTAMP NULL COMMENT "When lead counts were last calculated"' }
+      ];
+      
+      for (const col of leadColumns) {
+        try {
+          await query(`ALTER TABLE partners ADD COLUMN ${col.name} ${col.type}`);
+          console.log(`  ✓ Added partners.${col.name}`);
+        } catch (err) {
+          if (!err.message.includes('Duplicate column')) {
+            console.log(`  - partners.${col.name}: ${err.message}`);
+          }
+        }
+      }
+      
+      // Add sync_leads task to scheduled_tasks
+      try {
+        await query(`
+          INSERT INTO scheduled_tasks (task_type, task_name, enabled, interval_minutes, config)
+          VALUES ('sync_leads', 'Sync Leads', FALSE, 360, '{"mode": "incremental"}')
+          ON DUPLICATE KEY UPDATE 
+            task_name = VALUES(task_name),
+            interval_minutes = VALUES(interval_minutes)
+        `);
+        console.log('  ✓ Added sync_leads scheduled task');
+      } catch (err) {
+        console.log(`  - sync_leads task: ${err.message}`);
+      }
+      
+      console.log('  ✓ Leads migration complete');
+    }
+    
+    // Version 21: Add email schedule features
+    if (currentVersion < 21) {
+      console.log('📦 Running v21 migration: Add email schedule features...');
+      
+      // Add pam_id column to email_log table for tracking which PAM received the email
+      try {
+        await query(`ALTER TABLE email_log ADD COLUMN pam_id INT NULL AFTER status`);
+        await query(`ALTER TABLE email_log ADD INDEX idx_pam_id (pam_id)`);
+        console.log('  ✓ Added email_log.pam_id column');
+      } catch (err) {
+        if (!err.message.includes('Duplicate column')) {
+          console.log(`  - email_log.pam_id: ${err.message}`);
+        }
+      }
+      
+      // Add pam_weekly_report scheduled task
+      try {
+        await query(`
+          INSERT INTO scheduled_tasks (task_type, task_name, enabled, interval_minutes, config)
+          VALUES ('pam_weekly_report', 'PAM Weekly Reports', FALSE, 10080, '{}')
+          ON DUPLICATE KEY UPDATE 
+            task_name = VALUES(task_name),
+            interval_minutes = VALUES(interval_minutes)
+        `);
+        console.log('  ✓ Added pam_weekly_report scheduled task');
+      } catch (err) {
+        console.log(`  - pam_weekly_report task: ${err.message}`);
+      }
+      
+      console.log('  ✓ Email schedule migration complete');
+    }
+    
+    // Version 22: Add daily full Impartner sync task for detecting inactive partners
+    if (currentVersion < 22) {
+      console.log('📦 Running v22 migration: Add daily full Impartner sync task...');
+      
+      try {
+        await query(`
+          INSERT INTO scheduled_tasks (task_type, task_name, enabled, interval_minutes, config)
+          VALUES ('impartner_sync_full', 'Impartner Full Sync (Daily)', TRUE, 1440, '{"mode": "full"}')
+          ON DUPLICATE KEY UPDATE 
+            task_name = VALUES(task_name),
+            interval_minutes = VALUES(interval_minutes),
+            config = VALUES(config)
+        `);
+        console.log('  ✓ Added daily Impartner full sync task (24-hour interval, detects inactive partners)');
+      } catch (err) {
+        console.log(`  - Impartner full sync task: ${err.message}`);
+      }
+    }
+    
+    // Version 23: Add daily full sync tasks for leads (deletion detection)
+    if (currentVersion < 23) {
+      console.log('📦 Running v23 migration: Add daily full sync tasks for leads...');
+      
+      try {
+        await query(`
+          INSERT INTO scheduled_tasks (task_type, task_name, enabled, interval_minutes, config)
+          VALUES ('sync_leads_full', 'Leads Full Sync (Daily)', TRUE, 1440, '{"mode": "full"}')
+          ON DUPLICATE KEY UPDATE 
+            task_name = VALUES(task_name),
+            interval_minutes = VALUES(interval_minutes),
+            config = VALUES(config)
+        `);
+        console.log('  ✓ Added daily leads full sync task (detects deleted/converted leads)');
+      } catch (err) {
+        console.log(`  - Leads full sync task: ${err.message}`);
+      }
     }
     
     await query('UPDATE schema_info SET version = ? WHERE id = 1', [SCHEMA_VERSION]);

@@ -1,0 +1,86 @@
+/**
+ * Activity Timeline Report Styles
+ */
+
+/* Override for anomaly highlight rows */
+.MuiTableRow-root.anomaly-row {
+  background-color: rgba(255, 193, 7, 0.1) !important;
+}
+
+/* Chart container responsiveness */
+.recharts-responsive-container {
+  min-height: 350px;
+}
+
+/* Stat card hover effects */
+.activity-stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Filter chip styling */
+.filter-chip-active {
+  background-color: var(--nintex-orange) !important;
+  color: white !important;
+}
+
+/* Timeline table styling */
+.timeline-table .MuiTableCell-root {
+  padding: 8px 12px;
+}
+
+/* Partner insights cards */
+.insight-card {
+  transition: all 0.2s ease;
+}
+
+.insight-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Declining partner row */
+.declining-row {
+  border-left: 3px solid #dc3545;
+}
+
+/* Surging partner row */
+.surging-row {
+  border-left: 3px solid #28a745;
+}
+
+/* Legend customization */
+.recharts-legend-item {
+  margin-right: 16px !important;
+}
+
+/* Tooltip styling */
+.recharts-tooltip-wrapper {
+  z-index: 1000;
+}
+
+/* Anomaly badge pulse animation */
+@keyframes pulse-warning {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(255, 193, 7, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 193, 7, 0);
+  }
+}
+
+.anomaly-badge {
+  animation: pulse-warning 2s infinite;
+}
+
+/* Period toggle buttons */
+.MuiToggleButtonGroup-root .MuiToggleButton-root.Mui-selected {
+  background-color: var(--nintex-orange);
+  color: white;
+}
+
+.MuiToggleButtonGroup-root .MuiToggleButton-root.Mui-selected:hover {
+  background-color: #e55a2b;
+}

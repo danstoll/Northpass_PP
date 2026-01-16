@@ -45,6 +45,7 @@ import {
   FilterList as FilterIcon,
   Sync as SyncIcon,
   Clear as ClearIcon,
+  InfoOutlined as InfoIcon,
 } from '@mui/icons-material';
 import {
   PageHeader,
@@ -581,34 +582,34 @@ const CertificationCategories = () => {
         {partnerSummary && (
           <StatsRow columns={6} sx={{ mb: 3 }}>
             <StatCard
-              title="Partners"
+              title={<>Partners<Tooltip title="Total number of active partners with certification tracking" arrow><IconButton size="small" sx={{ ml: 0.5, p: 0.25, opacity: 0.7 }}><InfoIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip></>}
               value={partnerSummary.total_partners}
               icon={<BusinessIcon />}
             />
             <StatCard
-              title="Total NPCU"
+              title={<>Total NPCU<Tooltip title="Nintex Partner Certification Units - Sum of all NPCU credits. Premier requires 20, Select requires 10, Registered requires 5" arrow><IconButton size="small" sx={{ ml: 0.5, p: 0.25, opacity: 0.7 }}><InfoIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip></>}
               value={partnerSummary.total_npcu || 0}
               icon={<SchoolIcon />}
               variant="primary"
             />
             <StatCard
-              title="With GTM"
+              title={<>With GTM<Tooltip title="Partners with at least one Go-to-Market certification, required for marketing and sales activities" arrow><IconButton size="small" sx={{ ml: 0.5, p: 0.25, opacity: 0.7 }}><InfoIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip></>}
               value={partnerSummary.partners_with_gtm || 0}
               icon={<CheckIcon />}
               variant="success"
             />
             <StatCard
-              title="Nintex CE Certs"
+              title={<>Nintex CE Certs<Tooltip title="Nintex Automation Cloud (formerly Nintex Cloud Edition) certifications across all partners" arrow><IconButton size="small" sx={{ ml: 0.5, p: 0.25, opacity: 0.7 }}><InfoIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip></>}
               value={partnerSummary.total_nintex_ce || 0}
               icon={<CategoryIcon style={{ color: CATEGORY_COLORS['nintex_ce'] }} />}
             />
             <StatCard
-              title="K2 Certs"
+              title={<>K2 Certs<Tooltip title="K2 platform certifications (legacy workflow and forms product)" arrow><IconButton size="small" sx={{ ml: 0.5, p: 0.25, opacity: 0.7 }}><InfoIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip></>}
               value={partnerSummary.total_nintex_k2 || 0}
               icon={<CategoryIcon style={{ color: CATEGORY_COLORS['nintex_k2'] }} />}
             />
             <StatCard
-              title="Salesforce Certs"
+              title={<>Salesforce Certs<Tooltip title="Nintex for Salesforce integration certifications" arrow><IconButton size="small" sx={{ ml: 0.5, p: 0.25, opacity: 0.7 }}><InfoIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip></>}
               value={partnerSummary.total_salesforce || 0}
               icon={<CategoryIcon style={{ color: CATEGORY_COLORS['nintex_salesforce'] }} />}
             />
@@ -621,12 +622,54 @@ const CertificationCategories = () => {
               <TableRow>
                 <TableCell>Partner</TableCell>
                 <TableCell>Tier</TableCell>
-                <TableCell align="center">NPCU</TableCell>
-                <TableCell align="center">Nintex CE</TableCell>
-                <TableCell align="center">K2</TableCell>
-                <TableCell align="center">Salesforce</TableCell>
-                <TableCell align="center">GTM</TableCell>
-                <TableCell align="center">Total</TableCell>
+                <TableCell align="center">
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
+                    NPCU
+                    <Tooltip title="Nintex Partner Certification Units - Total certification credits. Premier=20, Select=10, Registered=5" arrow>
+                      <InfoIcon sx={{ fontSize: 14, opacity: 0.6, cursor: 'help' }} />
+                    </Tooltip>
+                  </Box>
+                </TableCell>
+                <TableCell align="center">
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
+                    Nintex CE
+                    <Tooltip title="Nintex Automation Cloud (formerly Nintex Cloud Edition) certifications" arrow>
+                      <InfoIcon sx={{ fontSize: 14, opacity: 0.6, cursor: 'help' }} />
+                    </Tooltip>
+                  </Box>
+                </TableCell>
+                <TableCell align="center">
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
+                    K2
+                    <Tooltip title="K2 platform certifications (legacy workflow/forms product)" arrow>
+                      <InfoIcon sx={{ fontSize: 14, opacity: 0.6, cursor: 'help' }} />
+                    </Tooltip>
+                  </Box>
+                </TableCell>
+                <TableCell align="center">
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
+                    Salesforce
+                    <Tooltip title="Nintex for Salesforce integration certifications" arrow>
+                      <InfoIcon sx={{ fontSize: 14, opacity: 0.6, cursor: 'help' }} />
+                    </Tooltip>
+                  </Box>
+                </TableCell>
+                <TableCell align="center">
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
+                    GTM
+                    <Tooltip title="Go-to-Market certification - Required for marketing and sales activities" arrow>
+                      <InfoIcon sx={{ fontSize: 14, opacity: 0.6, cursor: 'help' }} />
+                    </Tooltip>
+                  </Box>
+                </TableCell>
+                <TableCell align="center">
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
+                    Total
+                    <Tooltip title="Total number of active certifications across all categories" arrow>
+                      <InfoIcon sx={{ fontSize: 14, opacity: 0.6, cursor: 'help' }} />
+                    </Tooltip>
+                  </Box>
+                </TableCell>
               </TableRow>
             </TableHead>
             <TableBody>

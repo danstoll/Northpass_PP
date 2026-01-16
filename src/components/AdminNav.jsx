@@ -39,6 +39,8 @@ import {
   SupervisorAccount,
   GroupWork,
   School,
+  ContactPage,
+  Email,
 } from '@mui/icons-material';
 import { useAuth } from '../context/AuthContext';
 
@@ -49,11 +51,19 @@ const DRAWER_WIDTH = 240;
 // If permission is null, always show
 const NAV_SECTIONS = [
   {
+    id: 'main',
+    label: 'Dashboard',
+    items: [
+      { id: 'home', label: 'Home', path: '/admin', icon: <Home />, permission: null },
+    ]
+  },
+  {
     id: 'reports',
     label: 'Reports',
     items: [
       { id: 'analytics', label: 'Analytics', path: '/admin/analytics', icon: <Timeline />, permission: { category: 'reports', action: 'view' } },
       { id: 'dbreports', label: 'Reports', path: '/admin/dbreports', icon: <Assessment />, permission: { category: 'reports', action: 'view' } },
+      { id: 'leads', label: 'Lead Reports', path: '/admin/leads', icon: <ContactPage />, permission: { category: 'reports', action: 'view' } },
       { id: 'owners', label: 'Owner Report', path: '/admin/owners', icon: <Dashboard />, permission: { category: 'reports', action: 'view' } },
     ]
   },
@@ -73,6 +83,7 @@ const NAV_SECTIONS = [
     items: [
       { id: 'data', label: 'Data Management', path: '/admin/data', icon: <Storage />, permission: { category: 'data_management', action: 'view' } },
       { id: 'sync-dashboard', label: 'LMS Sync', path: '/admin/sync-dashboard', icon: <Sync />, permission: { category: 'data_management', action: 'sync' } },
+      { id: 'emails', label: 'Email Schedules', path: '/admin/emails', icon: <Email />, permission: { category: 'data_management', action: 'view' } },
       { id: 'settings', label: 'Settings', path: '/admin/settings', icon: <Settings />, permission: { category: 'settings', action: 'view' } },
       { id: 'admin-users', label: 'Admin Users', path: '/admin/admin-users', icon: <People />, permission: { category: 'users', action: 'view' } },
     ]

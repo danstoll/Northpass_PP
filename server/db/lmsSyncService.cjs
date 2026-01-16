@@ -24,7 +24,90 @@ const NORTHPASS_API_URL = 'https://api.northpass.com';
 const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
 
 /**
- * Make an API request to Northpass
+ * Custom error class for API failures
+ */
+class NorthpassApiError extends Error {
+  constructor(message, statusCode, endpoint, details = null) {
+    super(message);
+    this.name = 'NorthpassApiError';
+    this.statusCode = statusCode;
+    this.endpoint = endpoint;
+    this.details = details;
+    this.isApiError = true;
+  }
+
+  static fromResponse(response, endpoint) {
+    const status = response.status;
+    const errorDetail = response.data?.errors?.[0]?.detail || response.data?.error || response.error;
+    
+    let message;
+    switch (status) {
+      case 401:
+        message = 'Northpass API authentication failed - check API key';
+        break;
+      case 403:
+        message = 'Northpass API access forbidden - check permissions';
+        break;
+      case 404:
+        message = `Northpass API endpoint not found: ${endpoint}`;
+        break;
+      case 429:
+        message = 'Northpass API rate limit exceeded';
+        break;
+      case 500:
+        message = 'Northpass API internal server error - API may be down';
+        break;
+      case 502:
+      case 503:
+      case 504:
+        message = `Northpass API unavailable (${status}) - API may be down`;
+        break;
+      default:
+        message = `Northpass API error (${status}): ${errorDetail || 'Unknown error'}`;
+    }
+    
+    return new NorthpassApiError(message, status, endpoint, errorDetail);
+  }
+}
+
+// Track consecutive API errors for health monitoring
+let consecutiveApiErrors = 0;
+let lastSuccessfulApiCall = null;
+const MAX_CONSECUTIVE_ERRORS = 5;
+
+/**
+ * Check API health status
+ */
+function getApiHealthStatus() {
+  return {
+    consecutiveErrors: consecutiveApiErrors,
+    lastSuccess: lastSuccessfulApiCall,
+    isHealthy: consecutiveApiErrors < MAX_CONSECUTIVE_ERRORS,
+    status: consecutiveApiErrors === 0 ? 'healthy' : 
+            consecutiveApiErrors < MAX_CONSECUTIVE_ERRORS ? 'degraded' : 'unhealthy'
+  };
+}
+
+/**
+ * Reset API error counter after successful calls
+ */
+function resetApiErrorCounter() {
+  consecutiveApiErrors = 0;
+  lastSuccessfulApiCall = new Date().toISOString();
+}
+
+/**
+ * Increment API error counter
+ */
+function incrementApiErrorCounter() {
+  consecutiveApiErrors++;
+  if (consecutiveApiErrors >= MAX_CONSECUTIVE_ERRORS) {
+    console.error(`🚨 CRITICAL: ${consecutiveApiErrors} consecutive Northpass API failures detected!`);
+  }
+}
+
+/**
+ * Make an API request to Northpass with enhanced error handling
  */
 function northpassRequest(endpoint, method = 'GET') {
   return new Promise((resolve, reject) => {
@@ -34,6 +117,7 @@ function northpassRequest(endpoint, method = 'GET') {
       hostname: url.hostname,
       path: url.pathname + url.search,
       method,
+      timeout: 30000, // 30 second timeout
       headers: {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
@@ -47,14 +131,31 @@ function northpassRequest(endpoint, method = 'GET') {
       res.on('end', () => {
         try {
           const json = JSON.parse(data);
+          // Track successful vs failed responses
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resetApiErrorCounter();
+          } else {
+            incrementApiErrorCounter();
+          }
           resolve({ status: res.statusCode, data: json });
         } catch (e) {
-          resolve({ status: res.statusCode, data: null, error: 'Parse error' });
+          incrementApiErrorCounter();
+          resolve({ status: res.statusCode, data: null, error: 'JSON parse error', rawData: data?.substring(0, 500) });
         }
       });
     });
 
-    req.on('error', reject);
+    req.on('timeout', () => {
+      incrementApiErrorCounter();
+      req.destroy();
+      resolve({ status: 0, data: null, error: 'Request timeout (30s)' });
+    });
+
+    req.on('error', (err) => {
+      incrementApiErrorCounter();
+      resolve({ status: 0, data: null, error: err.message, networkError: true });
+    });
+    
     req.end();
   });
 }
@@ -62,20 +163,46 @@ function northpassRequest(endpoint, method = 'GET') {
 /**
  * Fetch all pages of a paginated endpoint
  * Northpass API uses links.next for pagination
+ * @param {string} endpoint - API endpoint to fetch
+ * @param {string} dataKey - Key to extract data from response
+ * @param {Object} options - Additional options
+ * @param {boolean} options.throwOnError - Whether to throw on API errors (default: true)
+ * @param {boolean} options.allowPartialData - Whether to return partial data on mid-pagination errors (default: false)
  */
-async function fetchAllPages(endpoint, dataKey = 'data') {
+async function fetchAllPages(endpoint, dataKey = 'data', options = {}) {
+  const { throwOnError = true, allowPartialData = false } = options;
   const allData = [];
   let currentUrl = endpoint.includes('?') 
     ? `${endpoint}&limit=100` 
     : `${endpoint}?limit=100`;
   let pageNum = 1;
+  let apiError = null;
 
   while (currentUrl) {
     console.log(`  📄 Fetching page ${pageNum}...`);
     const response = await northpassRequest(currentUrl);
     
     if (response.status !== 200 || !response.data) {
-      console.error(`API error on page ${pageNum}:`, response);
+      const errorDetails = {
+        status: response.status,
+        error: response.error,
+        endpoint: currentUrl,
+        page: pageNum,
+        dataFetchedSoFar: allData.length
+      };
+      console.error(`❌ API error on page ${pageNum}:`, errorDetails);
+      
+      // Create proper error object
+      apiError = NorthpassApiError.fromResponse(response, endpoint);
+      
+      if (throwOnError && !allowPartialData) {
+        throw apiError;
+      }
+      
+      // If allowing partial data, log warning and break
+      if (allowPartialData && allData.length > 0) {
+        console.warn(`⚠️ Returning partial data (${allData.length} records) due to API error`);
+      }
       break;
     }
 
@@ -196,17 +323,34 @@ async function findAllPartnerGroupId() {
 /**
  * Fetch members of a specific group via memberships endpoint
  * Returns array of user IDs (not full user objects)
+ * @param {string} groupId - The group ID to fetch members for
+ * @param {Object} options - Options
+ * @param {boolean} options.throwOnError - Whether to throw on first API error (default: true)
  */
-async function fetchGroupMemberIds(groupId) {
+async function fetchGroupMemberIds(groupId, options = {}) {
+  const { throwOnError = true } = options;
   console.log(`👥 Fetching member IDs from group ${groupId}...`);
   const allUserIds = [];
   let page = 1;
+  let apiErrors = 0;
   
   while (true) {
     const response = await northpassRequest(`/v2/groups/${groupId}/memberships?page=${page}&limit=100`);
     
     if (response.status !== 200 || !response.data) {
-      console.error(`API error fetching memberships page ${page}:`, response);
+      apiErrors++;
+      const errorDetails = {
+        status: response.status,
+        error: response.error,
+        groupId,
+        page,
+        usersFetchedSoFar: allUserIds.length
+      };
+      console.error(`❌ API error fetching memberships page ${page}:`, errorDetails);
+      
+      if (throwOnError) {
+        throw NorthpassApiError.fromResponse(response, `/v2/groups/${groupId}/memberships`);
+      }
       break;
     }
     
@@ -228,9 +372,12 @@ async function fetchGroupMemberIds(groupId) {
       console.warn('⚠️ Stopped after 100 pages');
       break;
     }
+    
+    // Rate limiting
+    await new Promise(resolve => setTimeout(resolve, 200));
   }
   
-  console.log(`📥 Found ${allUserIds.length} member IDs in group`);
+  console.log(`📥 Found ${allUserIds.length} member IDs in group${apiErrors > 0 ? ` (${apiErrors} API errors)` : ''}`);
   return allUserIds;
 }
 
@@ -785,48 +932,114 @@ async function syncGroupsIncremental(logId, onProgress) {
 }
 
 /**
- * Sync group memberships
+ * Sync group memberships (optimized with count comparison)
+ * Only syncs groups where member count has changed
  */
 async function syncGroupMembers(logId, onProgress) {
-  console.log('👥 Syncing group memberships...');
-  const stats = { processed: 0, created: 0, updated: 0, failed: 0 };
+  console.log('👥 Syncing group memberships (smart mode)...');
+  const stats = { processed: 0, created: 0, updated: 0, failed: 0, skipped: 0, unchanged: 0 };
 
   try {
     // Only sync partner groups (those linked to partners) + the special "All Partners" group
-    // This avoids syncing large non-partner groups that can have thousands of members
     const groups = await query(`
-      SELECT g.id, g.name FROM lms_groups g
+      SELECT g.id, g.name, g.user_count as stored_count FROM lms_groups g
       WHERE g.partner_id IS NOT NULL 
          OR LOWER(g.name) = 'all partners'
       ORDER BY g.name
     `);
-    console.log(`📥 Syncing members for ${groups.length} partner groups (+ All Partners)`);
+    console.log(`📥 Checking ${groups.length} partner groups for membership changes...`);
 
-    for (let i = 0; i < groups.length; i++) {
-      const group = groups[i];
+    // Fetch current counts from Northpass API to compare
+    // We do this in batches to be more efficient
+    const groupsToSync = [];
+    const BATCH_SIZE = 50;
+    
+    for (let i = 0; i < groups.length; i += BATCH_SIZE) {
+      const batch = groups.slice(i, i + BATCH_SIZE);
+      
+      // Check each group's current count from the API
+      for (const group of batch) {
+        try {
+          // Fetch just the group metadata (single request, lightweight)
+          const response = await fetch(`https://api.northpass.com/v2/groups/${group.id}`, {
+            headers: { 
+              'X-Api-Key': process.env.NORTHPASS_API_KEY || 'wcU0QRpN9jnPvXEc5KXMiuVWk',
+              'Content-Type': 'application/json'
+            }
+          });
+          
+          if (!response.ok) {
+            stats.failed++;
+            continue;
+          }
+          
+          const data = await response.json();
+          const apiCount = data.data?.attributes?.user_count || 0;
+          const storedCount = group.stored_count || 0;
+          
+          // If counts differ, mark for full sync
+          if (apiCount !== storedCount) {
+            groupsToSync.push({ ...group, api_count: apiCount });
+          } else {
+            stats.unchanged++;
+          }
+          
+          // Small delay to avoid rate limits
+          await new Promise(resolve => setTimeout(resolve, 50));
+        } catch (e) {
+          // If we can't check, sync it to be safe
+          groupsToSync.push(group);
+        }
+      }
+      
+      if (i + BATCH_SIZE < groups.length) {
+        console.log(`  Checked ${Math.min(i + BATCH_SIZE, groups.length)}/${groups.length} groups for changes...`);
+      }
+    }
+    
+    console.log(`📊 Found ${groupsToSync.length} groups with membership changes (${stats.unchanged} unchanged)`);
+    
+    // Now sync only the groups that need updating
+    for (let i = 0; i < groupsToSync.length; i++) {
+      const group = groupsToSync[i];
       try {
-        // Fetch memberships for this group (using /memberships endpoint which works)
+        // Fetch memberships for this group
         const memberships = await fetchAllPages(`/v2/groups/${group.id}/memberships`);
+        
+        // Get existing memberships to preserve added_at timestamps
+        const existingMembers = await query(
+          'SELECT user_id, added_at FROM lms_group_members WHERE group_id = ?',
+          [group.id]
+        );
+        const existingMap = new Map(existingMembers.map(m => [m.user_id, m.added_at]));
         
         // Clear existing memberships for this group
         await query('DELETE FROM lms_group_members WHERE group_id = ?', [group.id]);
 
-        // Insert new memberships - extract user ID from relationships
+        // Insert new memberships
         let memberCount = 0;
         for (const membership of memberships) {
           try {
-            // Membership structure: { relationships: { person: { data: { id: 'user-id' } } } }
             const userId = membership.relationships?.person?.data?.id;
             if (userId) {
-              await query(
-                `INSERT IGNORE INTO lms_group_members (group_id, user_id, added_at) VALUES (?, ?, NOW())`,
-                [group.id, userId]
-              );
+              const originalAddedAt = existingMap.get(userId);
+              if (originalAddedAt) {
+                await query(
+                  `INSERT IGNORE INTO lms_group_members (group_id, user_id, added_at) VALUES (?, ?, ?)`,
+                  [group.id, userId, originalAddedAt]
+                );
+              } else {
+                await query(
+                  `INSERT IGNORE INTO lms_group_members (group_id, user_id, added_at) VALUES (?, ?, NOW())`,
+                  [group.id, userId]
+                );
+                stats.created++;
+              }
               memberCount++;
               stats.processed++;
             }
           } catch (e) {
-            // Ignore foreign key errors (user might not be synced)
+            // Ignore foreign key errors
           }
         }
 
@@ -835,10 +1048,11 @@ async function syncGroupMembers(logId, onProgress) {
           'UPDATE lms_groups SET user_count = ? WHERE id = ?',
           [memberCount, group.id]
         );
+        stats.updated++;
 
-        if ((i + 1) % 10 === 0) {
-          console.log(`  Processed ${i + 1}/${groups.length} groups`);
-          onProgress && onProgress('group_members', i + 1, groups.length);
+        if ((i + 1) % 10 === 0 || i === groupsToSync.length - 1) {
+          console.log(`  Synced ${i + 1}/${groupsToSync.length} changed groups`);
+          onProgress && onProgress('group_members', i + 1, groupsToSync.length);
         }
 
         // Rate limit
@@ -849,7 +1063,7 @@ async function syncGroupMembers(logId, onProgress) {
       }
     }
 
-    console.log(`✅ Group memberships synced: ${stats.processed} memberships`);
+    console.log(`✅ Group memberships synced: ${stats.processed} memberships, ${stats.updated} groups updated, ${stats.unchanged} unchanged`);
   } catch (error) {
     console.error('❌ Group members sync failed:', error);
     throw error;
@@ -1049,6 +1263,12 @@ async function syncCourseProperties(logId, onProgress) {
 
     console.log(`📥 Fetched properties for ${allProperties.length} courses`);
 
+    // Get existing courses - only process properties for courses we already have
+    // This skips orphaned/deleted courses that still appear in Northpass properties API
+    const existingCourses = await query('SELECT id FROM lms_courses');
+    const existingCourseIds = new Set(existingCourses.map(c => c.id));
+    console.log(`📚 Found ${existingCourseIds.size} courses in database`);
+
     // Process each course
     let certificationCount = 0;
     for (const item of allProperties) {
@@ -1056,6 +1276,13 @@ async function syncCourseProperties(logId, onProgress) {
         const courseId = item.id;
         const attrs = item.attributes || {};
         const properties = attrs.properties || {};
+        
+        // Skip orphaned courses that don't exist in our lms_courses table
+        // These are old artifacts in Northpass that can't be removed
+        if (!existingCourseIds.has(courseId)) {
+          stats.skipped++;
+          continue;
+        }
         
         // Extract NPCU value
         let npcuValue = 0;
@@ -1072,6 +1299,16 @@ async function syncCourseProperties(logId, onProgress) {
           console.log(`  ✅ ${properties.name || courseId}: NPCU=${npcuValue}`);
         }
 
+        // Update course record with NPCU value
+        await query(
+          `UPDATE lms_courses SET 
+             npcu_value = ?,
+             is_certification = ?,
+             synced_at = NOW()
+           WHERE id = ?`,
+          [npcuValue, npcuValue > 0, courseId]
+        );
+
         // Store in course_properties table
         await query(
           `INSERT INTO course_properties (course_id, npcu_value, property_data, fetched_at)
@@ -1083,19 +1320,8 @@ async function syncCourseProperties(logId, onProgress) {
           [courseId, npcuValue, JSON.stringify(properties)]
         );
 
-        // Update or insert course record with NPCU value
-        await query(
-          `INSERT INTO lms_courses (id, name, npcu_value, is_certification, synced_at)
-           VALUES (?, ?, ?, ?, NOW())
-           ON DUPLICATE KEY UPDATE
-             name = COALESCE(VALUES(name), name),
-             npcu_value = VALUES(npcu_value),
-             is_certification = VALUES(is_certification),
-             synced_at = NOW()`,
-          [courseId, properties.name || '', npcuValue, npcuValue > 0]
-        );
-
         stats.processed++;
+        stats.updated++;
       } catch (error) {
         stats.failed++;
         console.error(`  Failed to process course ${item.id}:`, error.message);
@@ -1118,7 +1344,15 @@ async function syncCourseProperties(logId, onProgress) {
  */
 async function syncEnrollments(logId, onProgress) {
   console.log('📊 Syncing enrollments for partner users...');
-  const stats = { processed: 0, created: 0, updated: 0, failed: 0, skipped: 0 };
+  const stats = { 
+    processed: 0, 
+    created: 0, 
+    updated: 0, 
+    failed: 0, 
+    skipped: 0,
+    apiErrors: 0,
+    details: { errors: [] }
+  };
 
   try {
     // Get only partner users - users in partner groups OR linked via contacts
@@ -1147,18 +1381,63 @@ async function syncEnrollments(logId, onProgress) {
     stats.skipped = totalActive.count - users.length;
     console.log(`📥 Syncing enrollments for ${users.length} partner users (skipped ${stats.skipped} non-partner users)`);
 
+    // Check API health before starting
+    const apiHealth = getApiHealthStatus();
+    if (!apiHealth.isHealthy) {
+      console.error(`🚨 API health check failed: ${apiHealth.consecutiveErrors} consecutive errors`);
+      throw new NorthpassApiError(
+        `Northpass API appears to be down (${apiHealth.consecutiveErrors} consecutive failures)`,
+        0, '/v2/transcripts', null
+      );
+    }
+
     for (let i = 0; i < users.length; i++) {
       const user = users[i];
       try {
-        // Fetch transcripts for this user
-        const response = await northpassRequest(`/v2/people/${user.id}/transcripts`);
+        // Fetch transcripts for this user (correct endpoint: /v2/transcripts/{learner_id})
+        const response = await northpassRequest(`/v2/transcripts/${user.id}`);
         
-        if (response.status === 200 && response.data?.data) {
+        // Check for API errors
+        if (response.status !== 200) {
+          stats.apiErrors++;
+          const errorInfo = {
+            userId: user.id,
+            email: user.email,
+            status: response.status,
+            error: response.error || `HTTP ${response.status}`
+          };
+          
+          // Log first few errors in details
+          if (stats.details.errors.length < 10) {
+            stats.details.errors.push(errorInfo);
+          }
+          
+          // If getting many consecutive API errors, abort
+          if (stats.apiErrors >= 10 && stats.apiErrors > stats.processed) {
+            const apiError = NorthpassApiError.fromResponse(response, `/v2/transcripts/${user.id}`);
+            console.error(`🚨 Too many API errors (${stats.apiErrors}), aborting sync`);
+            stats.details.abortReason = 'Too many consecutive API errors';
+            throw apiError;
+          }
+          
+          stats.failed++;
+          continue;
+        }
+        
+        if (response.data?.data) {
           for (const transcript of response.data.data) {
             const attrs = transcript.attributes || {};
-            const courseId = transcript.relationships?.course?.data?.id;
+            // resource_id contains the course ID, resource_type indicates if it's a course
+            const courseId = attrs.resource_id;
+            const resourceType = attrs.resource_type;
             
-            if (!courseId) continue;
+            // Only process course enrollments (skip learning_path, event, etc.)
+            if (!courseId || resourceType !== 'course') continue;
+
+            // Derive progress percent from progress_status
+            const progressStatus = attrs.progress_status || 'enrolled';
+            const progressPercent = progressStatus === 'completed' ? 100 : 
+                                    progressStatus === 'in_progress' ? 50 : 0;
 
             await query(
               `INSERT INTO lms_enrollments (id, user_id, course_id, status, progress_percent, enrolled_at, started_at, completed_at, expires_at, score, synced_at)
@@ -1174,8 +1453,8 @@ async function syncEnrollments(logId, onProgress) {
                 transcript.id,
                 user.id,
                 courseId,
-                attrs.status || 'enrolled',
-                attrs.progress_percent || 0,
+                progressStatus,
+                progressPercent,
                 attrs.enrolled_at ? new Date(attrs.enrolled_at) : null,
                 attrs.started_at ? new Date(attrs.started_at) : null,
                 attrs.completed_at ? new Date(attrs.completed_at) : null,
@@ -1188,7 +1467,7 @@ async function syncEnrollments(logId, onProgress) {
         }
 
         if ((i + 1) % 50 === 0) {
-          console.log(`  Processed ${i + 1}/${users.length} users`);
+          console.log(`  Processed ${i + 1}/${users.length} users (${stats.apiErrors} API errors)`);
           onProgress && onProgress('enrollments', i + 1, users.length);
         }
 
@@ -1196,12 +1475,23 @@ async function syncEnrollments(logId, onProgress) {
         await new Promise(resolve => setTimeout(resolve, 200));
       } catch (error) {
         stats.failed++;
+        // Track if it's an API error vs DB error
+        if (error.isApiError) {
+          stats.apiErrors++;
+        }
       }
     }
 
-    console.log(`✅ Enrollments synced: ${stats.processed} records`);
+    // Log summary with API error count
+    if (stats.apiErrors > 0) {
+      console.warn(`⚠️ Enrollments synced with ${stats.apiErrors} API errors: ${stats.processed} records`);
+      stats.details.warning = `${stats.apiErrors} API errors encountered`;
+    } else {
+      console.log(`✅ Enrollments synced: ${stats.processed} records`);
+    }
   } catch (error) {
-    console.error('❌ Enrollments sync failed:', error);
+    console.error('❌ Enrollments sync failed:', error.message || error);
+    stats.details.fatalError = error.message || 'Unknown error';
     throw error;
   }
 
@@ -1226,7 +1516,9 @@ async function syncEnrollmentsIncremental(logId, onProgress, options = {}) {
     usersChecked: 0,
     newUsers: 0,
     updatedUsers: 0,
-    staleUsers: 0
+    staleUsers: 0,
+    apiErrors: 0,
+    details: { errors: [] }
   };
 
   try {
@@ -1239,11 +1531,19 @@ async function syncEnrollmentsIncremental(logId, onProgress, options = {}) {
     // 1. Never synced (enrollment_synced_at IS NULL)
     // 2. Had activity since last enrollment sync (last_active_at)
     // 3. Enrollment sync is stale (older than maxAgeDays)
+    // 4. NEW: Added to a partner group since last enrollment sync
     const users = await query(`
       SELECT DISTINCT u.id, u.email, u.last_active_at, u.enrollment_synced_at,
         CASE 
           WHEN u.enrollment_synced_at IS NULL THEN 'new'
           WHEN u.last_active_at > u.enrollment_synced_at THEN 'updated'
+          WHEN EXISTS (
+            SELECT 1 FROM lms_group_members gm
+            INNER JOIN lms_groups g ON g.id = gm.group_id
+            WHERE gm.user_id = u.id 
+              AND g.partner_id IS NOT NULL
+              AND gm.added_at > u.enrollment_synced_at
+          ) THEN 'new_group_member'
           WHEN u.enrollment_synced_at < ? THEN 'stale'
           ELSE 'skip'
         END as sync_reason
@@ -1267,13 +1567,22 @@ async function syncEnrollmentsIncremental(logId, onProgress, options = {}) {
         u.enrollment_synced_at IS NULL
         OR u.last_active_at > u.enrollment_synced_at
         OR u.enrollment_synced_at < ?
+        OR EXISTS (
+          SELECT 1 FROM lms_group_members gm
+          INNER JOIN lms_groups g ON g.id = gm.group_id
+          WHERE gm.user_id = u.id 
+            AND g.partner_id IS NOT NULL
+            AND gm.added_at > u.enrollment_synced_at
+        )
       )
     `, [staleDate, staleDate]);
     
     // Count reasons
+    let newGroupMembers = 0;
     for (const u of users) {
       if (u.sync_reason === 'new') stats.newUsers++;
       else if (u.sync_reason === 'updated') stats.updatedUsers++;
+      else if (u.sync_reason === 'new_group_member') newGroupMembers++;
       else if (u.sync_reason === 'stale') stats.staleUsers++;
     }
     
@@ -1298,6 +1607,7 @@ async function syncEnrollmentsIncremental(logId, onProgress, options = {}) {
     console.log(`📥 Found ${users.length} users needing enrollment sync:`);
     console.log(`   - ${stats.newUsers} new (never synced)`);
     console.log(`   - ${stats.updatedUsers} updated (changed since last sync)`);
+    console.log(`   - ${newGroupMembers} new group members (recently added to partner group)`);
     console.log(`   - ${stats.staleUsers} stale (not synced in ${maxAgeDays}+ days)`);
     console.log(`   - ${stats.skipped} skipped (up to date)`);
 
@@ -1309,15 +1619,50 @@ async function syncEnrollmentsIncremental(logId, onProgress, options = {}) {
     for (let i = 0; i < users.length; i++) {
       const user = users[i];
       try {
-        // Fetch transcripts for this user
-        const response = await northpassRequest(`/v2/people/${user.id}/transcripts`);
+        // Fetch transcripts for this user (correct endpoint: /v2/transcripts/{learner_id})
+        const response = await northpassRequest(`/v2/transcripts/${user.id}`);
         
-        if (response.status === 200 && response.data?.data) {
+        // Check for API errors
+        if (response.status !== 200) {
+          stats.apiErrors++;
+          const errorInfo = {
+            userId: user.id,
+            email: user.email,
+            status: response.status,
+            error: response.error || `HTTP ${response.status}`
+          };
+          
+          // Log first few errors in details
+          if (stats.details.errors.length < 10) {
+            stats.details.errors.push(errorInfo);
+          }
+          
+          // If getting many consecutive API errors, abort
+          if (stats.apiErrors >= 10 && stats.apiErrors > stats.processed) {
+            const apiError = NorthpassApiError.fromResponse(response, `/v2/transcripts/${user.id}`);
+            console.error(`🚨 Too many API errors (${stats.apiErrors}), aborting sync`);
+            stats.details.abortReason = 'Too many consecutive API errors';
+            throw apiError;
+          }
+          
+          stats.failed++;
+          continue;
+        }
+        
+        if (response.data?.data) {
           for (const transcript of response.data.data) {
             const attrs = transcript.attributes || {};
-            const courseId = transcript.relationships?.course?.data?.id;
+            // resource_id contains the course ID, resource_type indicates if it's a course
+            const courseId = attrs.resource_id;
+            const resourceType = attrs.resource_type;
             
-            if (!courseId) continue;
+            // Only process course enrollments (skip learning_path, event, etc.)
+            if (!courseId || resourceType !== 'course') continue;
+
+            // Derive progress percent from progress_status
+            const progressStatus = attrs.progress_status || 'enrolled';
+            const progressPercent = progressStatus === 'completed' ? 100 : 
+                                    progressStatus === 'in_progress' ? 50 : 0;
 
             const result = await query(
               `INSERT INTO lms_enrollments (id, user_id, course_id, status, progress_percent, enrolled_at, started_at, completed_at, expires_at, score, synced_at)
@@ -1333,8 +1678,8 @@ async function syncEnrollmentsIncremental(logId, onProgress, options = {}) {
                 transcript.id,
                 user.id,
                 courseId,
-                attrs.status || 'enrolled',
-                attrs.progress_percent || 0,
+                progressStatus,
+                progressPercent,
                 attrs.enrolled_at ? new Date(attrs.enrolled_at) : null,
                 attrs.started_at ? new Date(attrs.started_at) : null,
                 attrs.completed_at ? new Date(attrs.completed_at) : null,
@@ -1353,7 +1698,7 @@ async function syncEnrollmentsIncremental(logId, onProgress, options = {}) {
         await query('UPDATE lms_users SET enrollment_synced_at = NOW() WHERE id = ?', [user.id]);
 
         if ((i + 1) % 50 === 0) {
-          console.log(`  Processed ${i + 1}/${users.length} users`);
+          console.log(`  Processed ${i + 1}/${users.length} users (${stats.apiErrors} API errors)`);
           onProgress && onProgress('enrollments', i + 1, users.length);
         }
 
@@ -1361,12 +1706,22 @@ async function syncEnrollmentsIncremental(logId, onProgress, options = {}) {
         await new Promise(resolve => setTimeout(resolve, 200));
       } catch (error) {
         stats.failed++;
+        if (error.isApiError) {
+          stats.apiErrors++;
+        }
       }
     }
 
-    console.log(`✅ Enrollments synced (incremental): ${stats.processed} records from ${users.length} users`);
+    // Log summary with API error count
+    if (stats.apiErrors > 0) {
+      console.warn(`⚠️ Enrollments synced (incremental) with ${stats.apiErrors} API errors: ${stats.processed} records from ${users.length} users`);
+      stats.details.warning = `${stats.apiErrors} API errors encountered`;
+    } else {
+      console.log(`✅ Enrollments synced (incremental): ${stats.processed} records from ${users.length} users`);
+    }
   } catch (error) {
-    console.error('❌ Incremental enrollments sync failed:', error);
+    console.error('❌ Incremental enrollments sync failed:', error.message || error);
+    stats.details.fatalError = error.message || 'Unknown error';
     throw error;
   }
 
@@ -1480,5 +1835,10 @@ module.exports = {
   linkContactsToLmsUsers,
   runFullSync,
   getLastSyncStatus,
-  getSyncHistory
+  getSyncHistory,
+  // API health monitoring
+  getApiHealthStatus,
+  NorthpassApiError,
+  // Low-level API function for external use
+  northpassRequest
 };

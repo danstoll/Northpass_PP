@@ -136,6 +136,7 @@ async function checkAndRunTasks() {
 async function runTask(task) {
   const startTime = Date.now();
   let historyId = null;
+  let syncLogId = null;
   
   console.log(`🚀 Starting task: ${task.task_name}`);
   
@@ -158,6 +159,42 @@ async function runTask(task) {
       VALUES (?, ?, NOW(), 'running')
     `, [task.id, task.task_type]);
     historyId = historyResult.insertId;
+    
+    // Also create sync_logs entry for visibility in sync history
+    // Skip for tasks that handle their own sync_logs via routes or services
+    // The sync routes (syncRoutes.cjs) create their own sync_log entries
+    const selfLoggingTasks = [
+      'impartner_sync',      // Handled by impartnerSyncService.cjs
+      'impartner_sync_full', // Full daily sync - also uses impartnerSyncService.cjs
+      'sync_to_impartner',   // Handled by certificationRoutes.cjs
+      'lms_sync',            // Composite task - sub-tasks log themselves
+      'sync_users',          // Logged via syncRoutes.cjs when called via API
+      'sync_users_full',
+      'sync_groups',
+      'sync_groups_full', 
+      'sync_courses',
+      'sync_courses_full',
+      'sync_npcu',
+      'sync_course_properties',
+      'sync_enrollments',
+      'sync_enrollments_full',
+      'sync_leads',          // Logged via impartnerSyncService.syncLeads
+      'sync_leads_full',       // Full daily sync - also uses impartnerSyncService.syncLeads
+      'group_analysis',      // Logged via runGroupAnalysis
+      'group_members_sync',  // Logged via runGroupMembersSync
+      'cleanup'              // Logged via runCleanup
+    ];
+    if (!selfLoggingTasks.includes(task.task_type)) {
+      try {
+        const syncLogResult = await query(
+          'INSERT INTO sync_logs (sync_type, status, started_at) VALUES (?, ?, NOW())',
+          [task.task_type, 'running']
+        );
+        syncLogId = syncLogResult.insertId;
+      } catch (logErr) {
+        console.warn(`⚠️ Could not create sync_log entry: ${logErr.message}`);
+      }
+    }
     
     // Execute the task
     const config = typeof task.config === 'string' ? JSON.parse(task.config) : task.config || {};
@@ -187,6 +224,35 @@ async function runTask(task) {
       WHERE id = ?
     `, [durationSeconds, result.recordsProcessed || 0, JSON.stringify(result), historyId]);
     
+    // Update sync_logs entry
+    if (syncLogId) {
+      try {
+        await query(
+          `UPDATE sync_logs SET 
+            status = 'completed', 
+            completed_at = NOW(), 
+            records_processed = ?,
+            records_created = ?,
+            records_updated = ?,
+            records_deleted = ?,
+            records_failed = ?,
+            details = ?
+          WHERE id = ?`,
+          [
+            result.recordsProcessed || 0,
+            result.details?.created || 0,
+            result.details?.updated || 0,
+            result.details?.deleted || 0,
+            result.details?.failed || 0,
+            JSON.stringify(result),
+            syncLogId
+          ]
+        );
+      } catch (logErr) {
+        console.warn(`⚠️ Could not update sync_log entry: ${logErr.message}`);
+      }
+    }
+    
     console.log(`✅ Task complete: ${task.task_name} (${durationSeconds}s)`);
     return result;
     
@@ -213,6 +279,23 @@ async function runTask(task) {
           error_message = ?
         WHERE id = ?
       `, [durationSeconds, error.message, historyId]);
+    }
+    
+    // Update sync_logs on failure
+    if (syncLogId) {
+      try {
+        await query(
+          `UPDATE sync_logs SET 
+            status = 'failed', 
+            completed_at = NOW(), 
+            error_message = ?,
+            details = ?
+          WHERE id = ?`,
+          [error.message, JSON.stringify({ error: error.message }), syncLogId]
+        );
+      } catch (logErr) {
+        console.warn(`⚠️ Could not update sync_log entry on failure: ${logErr.message}`);
+      }
     }
     
     console.error(`❌ Task failed: ${task.task_name} - ${error.message}`);
@@ -290,9 +373,25 @@ async function executeTask(taskType, config) {
     case 'impartner_sync':
       return await runImpartnerSync(config);
     
+    // Impartner CRM full sync - runs daily to detect inactive/deleted partners
+    case 'impartner_sync_full':
+      return await runImpartnerSync({ ...config, mode: 'full' });
+    
     // Sync LMS data TO Impartner (certification counts, NPCU, training URLs)
     case 'sync_to_impartner':
       return await runSyncToImpartner(config);
+    
+    // Sync leads FROM Impartner
+    case 'sync_leads':
+      return await runLeadSync(config);
+    
+    // Sync leads - FULL mode for deletion detection
+    case 'sync_leads_full':
+      return await runLeadSync({ ...config, mode: 'full' });
+    
+    // PAM Weekly Report - send reports to enabled PAMs
+    case 'pam_weekly_report':
+      return await runPamWeeklyReports(config);
     
     default:
       throw new Error(`Unknown task type: ${taskType}`);
@@ -691,7 +790,7 @@ async function runCleanup(config) {
 
 /**
  * Impartner CRM Sync Task
- * Syncs partners and contacts from Impartner PRM API to replace manual Excel import
+ * Syncs partners, contacts, and leads from Impartner PRM API to replace manual Excel import
  */
 async function runImpartnerSync(config) {
   const impartnerSyncService = require('./impartnerSyncService.cjs');
@@ -700,7 +799,8 @@ async function runImpartnerSync(config) {
   const results = { 
     recordsProcessed: 0, 
     partners: null, 
-    contacts: null 
+    contacts: null,
+    leads: null
   };
   
   updateTaskProgress('impartner_sync', 'Starting Impartner sync', 0, 100);
@@ -711,13 +811,18 @@ async function runImpartnerSync(config) {
     results.partners = await impartnerSyncService.syncPartners(mode);
     
     // Step 2: Sync contacts
-    updateTaskProgress('impartner_sync', 'Syncing contacts from Impartner', 50, 100);
+    updateTaskProgress('impartner_sync', 'Syncing contacts from Impartner', 40, 100);
     results.contacts = await impartnerSyncService.syncContacts(mode);
+    
+    // Step 3: Sync leads
+    updateTaskProgress('impartner_sync', 'Syncing leads from Impartner', 70, 100);
+    results.leads = await impartnerSyncService.syncLeads(mode);
     
     // Calculate totals
     results.recordsProcessed = 
       (results.partners?.processed || 0) + 
-      (results.contacts?.processed || 0);
+      (results.contacts?.processed || 0) +
+      (results.leads?.processed || 0);
     
     updateTaskProgress('impartner_sync', 'Complete', 100, 100);
     
@@ -746,6 +851,18 @@ async function runSyncToImpartner(config) {
     notFound: 0
   };
   
+  // Create sync log entry
+  let logId = null;
+  try {
+    const logResult = await query(
+      'INSERT INTO sync_logs (sync_type, status, started_at) VALUES (?, ?, NOW())',
+      ['sync_to_impartner', 'running']
+    );
+    logId = logResult.insertId;
+  } catch (err) {
+    console.error('[Sync To Impartner] Failed to create sync log:', err.message);
+  }
+  
   // Valid tiers to sync (exclude Pending, blank)
   const VALID_TIERS = ['Premier', 'Premier Plus', 'Certified', 'Registered', 'Aggregator'];
   
@@ -760,7 +877,7 @@ async function runSyncToImpartner(config) {
   let lastSyncTime = null;
   if (mode === 'incremental') {
     const [lastSync] = await query(`
-      SELECT completed_at FROM sync_log 
+      SELECT completed_at FROM sync_logs 
       WHERE sync_type = 'sync_to_impartner' AND status = 'completed'
       ORDER BY completed_at DESC LIMIT 1
     `);
@@ -896,6 +1013,38 @@ async function runSyncToImpartner(config) {
     if (partnersToSync.length === 0) {
       results.skipped = partners.length;
       console.log(`[Sync To Impartner] No partners changed since last sync, skipping API calls`);
+      
+      // Update sync log even when nothing to sync
+      if (logId) {
+        try {
+          await query(
+            `UPDATE sync_logs SET 
+              status = 'completed', 
+              completed_at = NOW(), 
+              records_processed = 0,
+              records_created = 0,
+              records_updated = 0,
+              records_failed = 0,
+              records_skipped = ?,
+              details = ?
+            WHERE id = ?`,
+            [
+              results.skipped,
+              JSON.stringify({ 
+                mode, 
+                total: 0,
+                recalculated: results.recalculated, 
+                skipped: results.skipped,
+                message: 'No partners changed since last sync'
+              }),
+              logId
+            ]
+          );
+        } catch (err) {
+          console.error('[Sync To Impartner] Failed to update sync log:', err.message);
+        }
+      }
+      
       return results;
     }
     
@@ -942,11 +1091,12 @@ async function runSyncToImpartner(config) {
     updateTaskProgress('sync_to_impartner', 'Step 3: Looking up Impartner accounts', 40, 100);
     
     const crmIdToImpartnerId = new Map();
+    const crmId15ToImpartnerId = new Map(); // For 15-char prefix matching
     const lookupBatchSize = 100;
     
     for (let i = 0; i < syncPayload.length; i += lookupBatchSize) {
       const batchCrmIds = syncPayload.slice(i, i + lookupBatchSize).map(p => p.CrmId);
-      const crmIdFilter = batchCrmIds.map(id => `CrmId eq '${id}'`).join(' or ');
+      const crmIdFilter = batchCrmIds.map(id => `CrmId = '${id}'`).join(' or ');
       
       try {
         const lookupUrl = `${IMPARTNER_CONFIG.host}/api/objects/v1/Account?fields=Id,CrmId&filter=${encodeURIComponent(crmIdFilter)}&take=${lookupBatchSize}`;
@@ -962,7 +1112,15 @@ async function runSyncToImpartner(config) {
           const lookupData = await lookupResp.json();
           if (lookupData.data?.results) {
             for (const account of lookupData.data.results) {
-              if (account.CrmId) crmIdToImpartnerId.set(account.CrmId, account.Id);
+              if (account.CrmId) {
+                crmIdToImpartnerId.set(account.CrmId, account.Id);
+                // Also index by first 15 chars for matching
+                if (account.CrmId.length === 15) {
+                  crmId15ToImpartnerId.set(account.CrmId, account.Id);
+                } else if (account.CrmId.length === 18) {
+                  crmId15ToImpartnerId.set(account.CrmId.substring(0, 15), account.Id);
+                }
+              }
             }
           }
         }
@@ -975,26 +1133,59 @@ async function runSyncToImpartner(config) {
     }
     
     console.log(`[Sync To Impartner] Found ${crmIdToImpartnerId.size} matching accounts`);
-    results.notFound = syncPayload.length - crmIdToImpartnerId.size;
     
-    // Step 4: Push updates to Impartner
+    // Step 4: Build update payload with Impartner IDs (handle 15/18-char SF ID matching)
     updateTaskProgress('sync_to_impartner', 'Step 4: Pushing updates to Impartner', 60, 100);
     
-    const updatePayload = syncPayload
-      .filter(p => crmIdToImpartnerId.has(p.CrmId))
-      .map(p => ({
-        Id: crmIdToImpartnerId.get(p.CrmId),
-        Name: p.Name,
-        Nintex_CE_Certifications__cf: p.Nintex_CE_Certifications__cf,
-        Nintex_K2_Certifications__cf: p.Nintex_K2_Certifications__cf,
-        Nintex_for_Salesforce_Certifications__cf: p.Nintex_for_Salesforce_Certifications__cf,
-        Nintex_GTM_Certifications__cf: p.Nintex_GTM_Certifications__cf,
-        Total_NPCU__cf: p.Total_NPCU__cf,
-        LMS_Account_ID__cf: p.LMS_Account_ID__cf,
-        LMS_Group_Name__cf: p.LMS_Group_Name__cf,
-        LMS_Training_Dashboard__cf: p.LMS_Training_Dashboard__cf,
-        LMS_User_Count: p.LMS_User_Count
-      }));
+    const updatePayload = [];
+    let matchedCount = 0;
+    let notFoundCount = 0;
+    
+    for (const p of syncPayload) {
+      let impartnerId = null;
+      
+      // Try exact match first
+      if (crmIdToImpartnerId.has(p.CrmId)) {
+        impartnerId = crmIdToImpartnerId.get(p.CrmId);
+      }
+      // If no match and CrmId is 18 chars, try 15-char prefix
+      else if (p.CrmId && p.CrmId.length === 18) {
+        const prefix15 = p.CrmId.substring(0, 15);
+        if (crmId15ToImpartnerId.has(prefix15)) {
+          impartnerId = crmId15ToImpartnerId.get(prefix15);
+        }
+      }
+      // If no match and CrmId is 15 chars, check if there's a 18-char match
+      else if (p.CrmId && p.CrmId.length === 15) {
+        if (crmId15ToImpartnerId.has(p.CrmId)) {
+          impartnerId = crmId15ToImpartnerId.get(p.CrmId);
+        }
+      }
+      
+      if (impartnerId) {
+        matchedCount++;
+        updatePayload.push({
+          Id: impartnerId,
+          Name: p.Name,
+          Nintex_CE_Certifications__cf: p.Nintex_CE_Certifications__cf,
+          Nintex_K2_Certifications__cf: p.Nintex_K2_Certifications__cf,
+          Nintex_for_Salesforce_Certifications__cf: p.Nintex_for_Salesforce_Certifications__cf,
+          Nintex_GTM_Certifications__cf: p.Nintex_GTM_Certifications__cf,
+          Total_NPCU__cf: p.Total_NPCU__cf,
+          LMS_Account_ID__cf: p.LMS_Account_ID__cf,
+          LMS_Group_Name__cf: p.LMS_Group_Name__cf,
+          LMS_Training_Dashboard__cf: p.LMS_Training_Dashboard__cf,
+          LMS_User_Count: p.LMS_User_Count
+        });
+      } else {
+        notFoundCount++;
+      }
+    }
+    
+    results.notFound = notFoundCount;
+    console.log(`[Sync To Impartner] Matched ${matchedCount} partners, ${notFoundCount} not found in Impartner`);
+    
+    // Step 5: Push updates to Impartner
     
     const batchSize = 50;
     for (let i = 0; i < updatePayload.length; i += batchSize) {
@@ -1037,13 +1228,303 @@ async function runSyncToImpartner(config) {
     results.recordsProcessed = results.synced;
     updateTaskProgress('sync_to_impartner', 'Complete', 100, 100);
     
+    // Update sync log on success
+    if (logId) {
+      try {
+        await query(
+          `UPDATE sync_logs SET 
+            status = 'completed', 
+            completed_at = NOW(), 
+            records_processed = ?,
+            records_created = 0,
+            records_updated = ?,
+            records_failed = ?,
+            records_skipped = ?,
+            details = ?
+          WHERE id = ?`,
+          [
+            syncPayload.length, // total in scope
+            results.synced,      // actually synced to Impartner
+            results.failed,
+            results.notFound,    // not found = skipped
+            JSON.stringify({ 
+              mode, 
+              total: syncPayload.length,
+              matched: matchedCount,
+              synced: results.synced, 
+              failed: results.failed,
+              notFound: results.notFound,
+              recalculated: results.recalculated
+            }),
+            logId
+          ]
+        );
+      } catch (err) {
+        console.error('[Sync To Impartner] Failed to update sync log:', err.message);
+      }
+    }
+    
     console.log(`[Sync To Impartner] Complete: ${results.synced} synced, ${results.failed} failed, ${results.notFound} not found`);
+    
+    return results;
+  } catch (err) {
+    results.error = err.message;
+    
+    // Update sync log on failure
+    if (logId) {
+      try {
+        await query(
+          `UPDATE sync_logs SET 
+            status = 'failed', 
+            completed_at = NOW(), 
+            error_message = ?,
+            details = ?
+          WHERE id = ?`,
+          [err.message, JSON.stringify({ mode, results }), logId]
+        );
+      } catch (logErr) {
+        console.error('[Sync To Impartner] Failed to update sync log:', logErr.message);
+      }
+    }
+    
+    throw err;
+  }
+}
+
+/**
+ * Lead Sync Task
+ * Syncs leads from Impartner PRM API
+ */
+async function runLeadSync(config) {
+  const impartnerSyncService = require('./impartnerSyncService.cjs');
+  const mode = config.mode || 'incremental';
+  
+  const results = { 
+    recordsProcessed: 0, 
+    details: null
+  };
+  
+  updateTaskProgress('sync_leads', 'Starting lead sync from Impartner', 0, 100);
+  
+  try {
+    updateTaskProgress('sync_leads', 'Syncing leads from Impartner', 20, 100);
+    results.details = await impartnerSyncService.syncLeads(mode);
+    
+    results.recordsProcessed = results.details?.processed || 0;
+    
+    updateTaskProgress('sync_leads', 'Complete', 100, 100);
     
     return results;
   } catch (err) {
     results.error = err.message;
     throw err;
   }
+}
+
+/**
+ * PAM Weekly Report Task
+ * Sends weekly certification reports to enabled PAMs
+ */
+async function runPamWeeklyReports(config) {
+  const { sendEmail, renderTemplate } = require('./notificationService.cjs');
+  
+  const results = { 
+    recordsProcessed: 0,
+    sent: 0,
+    failed: 0,
+    skipped: 0,
+    errors: []
+  };
+  
+  updateTaskProgress('pam_weekly_report', 'Finding PAMs to notify', 0, 100);
+  
+  // Get all PAMs with email reports enabled
+  const pams = await query(`
+    SELECT id, owner_name, email, report_frequency
+    FROM partner_managers 
+    WHERE is_active_pam = TRUE 
+      AND email_reports_enabled = TRUE 
+      AND email IS NOT NULL
+  `);
+  
+  if (pams.length === 0) {
+    updateTaskProgress('pam_weekly_report', 'No PAMs to notify', 100, 100);
+    return results;
+  }
+  
+  const reportDate = new Date().toLocaleDateString('en-US', { 
+    weekday: 'long', 
+    year: 'numeric', 
+    month: 'long', 
+    day: 'numeric' 
+  });
+  
+  for (let i = 0; i < pams.length; i++) {
+    const pam = pams[i];
+    updateTaskProgress('pam_weekly_report', `Sending to ${pam.owner_name}`, i + 1, pams.length, `${i + 1} of ${pams.length}`);
+    
+    try {
+      // Get partner stats for this PAM
+      const partners = await query(`
+        SELECT 
+          p.id,
+          p.account_name,
+          p.partner_tier,
+          p.account_region,
+          p.total_npcu,
+          p.active_certs,
+          p.total_users
+        FROM partners p
+        WHERE p.account_owner = ?
+        ORDER BY p.account_name
+      `, [pam.owner_name]);
+      
+      if (partners.length === 0) {
+        results.skipped++;
+        continue;
+      }
+      
+      // Get expiring certifications (next 90 days)
+      const expiringCerts = await query(`
+        SELECT 
+          u.first_name,
+          u.last_name,
+          u.email,
+          c.name as course_name,
+          e.expires_at,
+          p.account_name
+        FROM lms_enrollments e
+        INNER JOIN lms_users u ON u.id = e.user_id
+        INNER JOIN lms_courses c ON c.id = e.course_id
+        INNER JOIN lms_group_members gm ON gm.user_id = u.id
+        INNER JOIN lms_groups g ON g.id = gm.group_id
+        INNER JOIN partners p ON p.id = g.partner_id
+        WHERE p.account_owner = ?
+          AND e.status = 'completed'
+          AND c.npcu_value > 0
+          AND e.expires_at IS NOT NULL
+          AND e.expires_at BETWEEN NOW() AND DATE_ADD(NOW(), INTERVAL 90 DAY)
+        ORDER BY e.expires_at
+        LIMIT 20
+      `, [pam.owner_name]);
+      
+      // Build partner table
+      let partnerTable = `
+        <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+          <thead>
+            <tr style="background: #f5f5f5;">
+              <th style="padding: 10px; text-align: left; border-bottom: 2px solid #ddd;">Partner</th>
+              <th style="padding: 10px; text-align: center; border-bottom: 2px solid #ddd;">Tier</th>
+              <th style="padding: 10px; text-align: center; border-bottom: 2px solid #ddd;">NPCU</th>
+              <th style="padding: 10px; text-align: center; border-bottom: 2px solid #ddd;">Certs</th>
+              <th style="padding: 10px; text-align: center; border-bottom: 2px solid #ddd;">Users</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${partners.map(p => `
+              <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #eee;">${p.account_name}</td>
+                <td style="padding: 10px; text-align: center; border-bottom: 1px solid #eee;">
+                  <span style="padding: 2px 8px; border-radius: 4px; font-size: 12px; background: #e3f2fd; color: #1565c0;">${p.partner_tier || '-'}</span>
+                </td>
+                <td style="padding: 10px; text-align: center; border-bottom: 1px solid #eee; font-weight: 600; color: #FF6B35;">${p.total_npcu || 0}</td>
+                <td style="padding: 10px; text-align: center; border-bottom: 1px solid #eee;">${p.active_certs || 0}</td>
+                <td style="padding: 10px; text-align: center; border-bottom: 1px solid #eee;">${p.total_users || 0}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+      
+      // Build expiring certs section
+      let expiringCertsSection = '';
+      if (expiringCerts.length > 0) {
+        expiringCertsSection = `
+          <div style="background: #fff3cd; border-radius: 8px; padding: 20px; margin: 20px 0; border-left: 4px solid #856404;">
+            <h3 style="margin: 0 0 15px; color: #856404;">⚠️ Expiring Certifications (Next 90 Days)</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+              <thead>
+                <tr>
+                  <th style="padding: 8px; text-align: left; border-bottom: 1px solid #ddd;">User</th>
+                  <th style="padding: 8px; text-align: left; border-bottom: 1px solid #ddd;">Partner</th>
+                  <th style="padding: 8px; text-align: left; border-bottom: 1px solid #ddd;">Course</th>
+                  <th style="padding: 8px; text-align: center; border-bottom: 1px solid #ddd;">Expires</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${expiringCerts.map(c => `
+                  <tr>
+                    <td style="padding: 8px; border-bottom: 1px solid #eee;">${c.first_name} ${c.last_name}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #eee;">${c.account_name}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #eee;">${c.course_name}</td>
+                    <td style="padding: 8px; text-align: center; border-bottom: 1px solid #eee; color: #856404;">${new Date(c.expires_at).toLocaleDateString()}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        `;
+      }
+      
+      // Try to use template, fallback to inline HTML
+      let emailHtml;
+      let subject;
+      try {
+        const rendered = await renderTemplate('pam_weekly_report', {
+          reportDate,
+          pamFirstName: pam.owner_name.split(' ')[0],
+          partnerTable,
+          expiringCertsSection
+        });
+        emailHtml = rendered.content;
+        subject = rendered.subject;
+      } catch (e) {
+        // Fallback HTML
+        subject = `Partner Certification Report - ${reportDate}`;
+        emailHtml = `
+          <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #6B4C9A, #FF6B35); padding: 20px; color: white;">
+              <h1 style="margin: 0;">Partner Certification Report</h1>
+              <p style="margin: 5px 0 0 0; opacity: 0.9;">${reportDate}</p>
+            </div>
+            <div style="padding: 20px;">
+              <p>Hi ${pam.owner_name.split(' ')[0]},</p>
+              <p>Here's your partner activity summary:</p>
+              <h3>Your Partners (${partners.length})</h3>
+              ${partnerTable}
+              ${expiringCertsSection}
+              <p style="color: #666; font-size: 12px; margin-top: 30px;">
+                This report was generated automatically by the Nintex Partner Portal.
+              </p>
+            </div>
+          </div>
+        `;
+      }
+      
+      // Send email
+      await sendEmail(pam.email, subject, emailHtml);
+      
+      // Log the email
+      try {
+        await query(`
+          INSERT INTO email_log (recipient_email, recipient_name, subject, email_type, status, pam_id)
+          VALUES (?, ?, ?, 'pam_report', 'sent', ?)
+        `, [pam.email, pam.owner_name, subject, pam.id]);
+      } catch (logErr) {
+        // Ignore log errors
+      }
+      
+      results.sent++;
+      results.recordsProcessed++;
+    } catch (err) {
+      results.failed++;
+      results.errors.push({ pam: pam.owner_name, error: err.message });
+    }
+  }
+  
+  updateTaskProgress('pam_weekly_report', 'Complete', 100, 100, `Sent: ${results.sent}, Failed: ${results.failed}`);
+  
+  return results;
 }
 
 /**

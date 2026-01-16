@@ -19,6 +19,7 @@ const WORKFLOW_TOKEN = 'F80xrywkYF0FC7RyXa4QXUU78oQq7kobFQEp7HpauP1if7XsB81mswHa
  * @param {Object} options Notification options
  * @param {string} options.commType - 'email' or 'slack'
  * @param {string} [options.email] - Recipient email (for email type)
+ * @param {string} [options.emailCC] - CC email address (for email type)
  * @param {string} [options.subject] - Email subject (for email type)
  * @param {string} [options.emailContent] - Email body HTML (for email type)
  * @param {string} [options.attachment] - Base64 encoded file attachment (for email type)
@@ -30,6 +31,7 @@ async function sendNotification(options) {
   const {
     commType = 'email',
     email = '',
+    emailCC = '',
     subject = '',
     emailContent = '',
     attachment = '',
@@ -52,6 +54,7 @@ async function sendNotification(options) {
     startData: {
       se_varcommtype: commType,
       se_varemail: email,
+      se_varemailcc: emailCC,
       se_varemailsubject: subject,
       se_varemailcontent: emailContent,
       se_varemailattachement: attachment,
@@ -117,10 +120,11 @@ async function sendNotification(options) {
  * @param {string} [attachment] - Optional base64 encoded attachment
  * @returns {Promise<Object>} Result
  */
-async function sendEmail(to, subject, htmlContent, attachment = '') {
+async function sendEmail(to, subject, htmlContent, attachment = '', cc = '') {
   return sendNotification({
     commType: 'email',
     email: to,
+    emailCC: cc,
     subject,
     emailContent: htmlContent,
     attachment

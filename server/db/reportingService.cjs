@@ -35,13 +35,22 @@ async function refreshNpcuCache() {
           THEN c.npcu_value 
           ELSE 0 
         END), 0) as expired_npcu,
-        COUNT(DISTINCT e.id) as total_certifications,
-        COUNT(DISTINCT e.user_id) as certified_users
+        -- Only count active (non-expired) certifications (courses with NPCU > 0)
+        COUNT(DISTINCT CASE 
+          WHEN c.npcu_value > 0 AND (e.expires_at IS NULL OR e.expires_at > NOW()) 
+          THEN e.id 
+          ELSE NULL 
+        END) as total_certifications,
+        COUNT(DISTINCT CASE 
+          WHEN c.npcu_value > 0 AND (e.expires_at IS NULL OR e.expires_at > NOW()) 
+          THEN e.user_id 
+          ELSE NULL 
+        END) as certified_users
       FROM partners p
       LEFT JOIN lms_groups g ON g.partner_id = p.id
       LEFT JOIN lms_group_members gm ON gm.group_id = g.id
       LEFT JOIN lms_enrollments e ON e.user_id = gm.user_id AND e.status = 'completed'
-      LEFT JOIN lms_courses c ON c.id = e.course_id AND c.npcu_value > 0
+      LEFT JOIN lms_courses c ON c.id = e.course_id
       GROUP BY p.id
     `);
     

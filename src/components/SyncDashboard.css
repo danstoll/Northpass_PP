@@ -265,6 +265,34 @@
   transition: width 0.3s ease;
 }
 
+/* Indeterminate progress bar animation */
+.sync-dashboard .active-task-item .progress-bar-container.indeterminate {
+  position: relative;
+}
+
+.sync-dashboard .active-task-item .progress-bar-fill.indeterminate {
+  width: 30% !important;
+  animation: indeterminate-progress 1.5s infinite ease-in-out;
+}
+
+@keyframes indeterminate-progress {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+/* Manual badge in banner */
+.sync-dashboard .active-task-item .task-name .manual-badge {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 3px;
+  margin-left: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 .sync-dashboard .active-task-item .progress-numbers {
   color: rgba(255, 255, 255, 0.9);
   font-size: 0.75rem;
@@ -653,6 +681,64 @@
   text-transform: uppercase;
 }
 
+.sync-dashboard .task-expanded .config-controls {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: var(--admin-bg-elevated);
+  border-radius: 8px;
+  border: 1px solid var(--admin-border-light);
+}
+
+.sync-dashboard .task-expanded .config-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--admin-text-secondary);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.sync-dashboard .task-expanded .mode-toggle-group {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sync-dashboard .task-expanded .mode-toggle-btn {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--admin-border-default);
+  border-radius: 6px;
+  background: var(--admin-bg-card);
+  color: var(--admin-text-primary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.sync-dashboard .task-expanded .mode-toggle-btn:hover {
+  border-color: var(--nintex-orange);
+  background: var(--admin-bg-hover);
+}
+
+.sync-dashboard .task-expanded .mode-toggle-btn.active {
+  border-color: var(--nintex-orange);
+  background: var(--nintex-orange);
+  color: white;
+  font-weight: 600;
+}
+
+.sync-dashboard .task-expanded .mode-description {
+  font-size: 0.75rem;
+  color: var(--admin-text-muted);
+  padding-left: 4px;
+}
+
+.sync-dashboard .task-expanded .mode-description small {
+  display: block;
+}
+
 .sync-dashboard .task-expanded pre {
   background: var(--admin-bg-elevated);
   padding: 8px;
@@ -871,6 +957,97 @@
 .sync-dashboard .summary-text {
   font-size: 0.875rem;
   color: var(--admin-text-secondary);
+}
+
+.sync-dashboard .summary-text.empty {
+  color: var(--admin-text-muted);
+  font-style: italic;
+}
+
+.sync-dashboard .summary-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sync-dashboard .summary-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--admin-bg-elevated);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  color: var(--admin-text-secondary);
+}
+
+.sync-dashboard .summary-message .message-icon {
+  font-size: 1rem;
+}
+
+.sync-dashboard .metric-icon {
+  display: block;
+  font-size: 1rem;
+  margin-bottom: 4px;
+}
+
+.sync-dashboard .nested-details {
+  margin-top: 8px;
+  padding: 12px;
+  background: var(--admin-bg-card);
+  border: 1px solid var(--admin-border-light);
+  border-radius: 8px;
+}
+
+.sync-dashboard .nested-header {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--admin-text-muted);
+  margin-bottom: 8px;
+}
+
+.sync-dashboard .nested-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sync-dashboard .nested-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--admin-bg-elevated);
+  border-radius: 4px;
+  font-size: 0.813rem;
+}
+
+.sync-dashboard .nested-name {
+  font-weight: 500;
+  color: var(--admin-text-primary);
+}
+
+.sync-dashboard .nested-stats {
+  display: flex;
+  gap: 12px;
+  color: var(--admin-text-secondary);
+}
+
+.sync-dashboard .nested-stats span {
+  white-space: nowrap;
+}
+
+.sync-dashboard .nested-stats .created {
+  color: #66bb6a;
+}
+
+.sync-dashboard .nested-stats .updated {
+  color: #42a5f5;
+}
+
+.sync-dashboard .nested-stats .failed {
+  color: #ef5350;
 }
 
 .sync-dashboard .error-details {

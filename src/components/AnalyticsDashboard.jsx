@@ -16,12 +16,158 @@ import {
   TrendingUp, TrendingDown, TrendingFlat, People, School, EmojiEvents,
   CalendarMonth, Refresh, Download, Timeline, Assessment, BarChart,
   ArrowUpward, ArrowDownward, Remove, FilterList, Clear, Speed,
-  Groups, Map, Person, Warning, CheckCircle, Star, TrendingUp as Rocket
+  Groups, Map, Person, Warning, CheckCircle, Star, TrendingUp as Rocket,
+  Info
 } from '@mui/icons-material';
 import { PageHeader, PageContent, StatCard, StatsRow, ActionButton } from './ui/NintexUI';
 import './AnalyticsDashboard.css';
 
 const API_BASE = '/api/db';
+
+// Metric definitions for info tooltips
+const METRIC_DEFINITIONS = {
+  engagementScore: {
+    title: 'Engagement Score',
+    description: 'A composite score (0-100) measuring overall partner engagement with the LMS.',
+    formula: '(Activation × 25%) + (Completion × 25%) + (Certification Density × 30%) + (Activity × 20%)',
+    details: [
+      'Activation: % of CRM contacts with LMS accounts',
+      'Completion: % of enrollments completed',
+      'Certification Density: Certifications per user (scaled)',
+      'Activity: Course completions in last 30 days'
+    ]
+  },
+  activationRate: {
+    title: 'Activation Rate',
+    description: 'Percentage of CRM contacts who have created LMS accounts.',
+    formula: '(Contacts with LMS accounts ÷ Total active contacts) × 100',
+    details: [
+      'Higher is better - indicates partner engagement',
+      'Goal: 50%+ activation rate'
+    ]
+  },
+  completionRate: {
+    title: 'Completion Rate',
+    description: 'Percentage of course enrollments that have been completed.',
+    formula: '(Completed enrollments ÷ Total enrollments) × 100',
+    details: [
+      'Measures learning follow-through',
+      'Goal: 70%+ completion rate'
+    ]
+  },
+  certificationDensity: {
+    title: 'Certification Density',
+    description: 'Average number of certifications (NPCU courses) per group member.',
+    formula: 'Total certifications ÷ Group members',
+    details: [
+      'Only courses with NPCU value > 0 count',
+      'Higher density = more certified workforce'
+    ]
+  },
+  npcu: {
+    title: 'NPCU (Nintex Partner Certification Units)',
+    description: 'Points earned by completing certification courses.',
+    formula: 'Sum of NPCU values from completed courses',
+    details: [
+      'NPCU values: 0 (no cert), 1 (basic), 2 (advanced)',
+      'Premier tier requires 20+ NPCU',
+      'Select tier requires 10+ NPCU',
+      'Registered tier requires 5+ NPCU'
+    ]
+  },
+  complianceRate: {
+    title: 'Compliance Rate',
+    description: 'Percentage of partners meeting their tier\'s minimum NPCU requirement.',
+    formula: '(Compliant partners ÷ Total partners in tier) × 100',
+    details: [
+      'Premier: minimum 20 NPCU',
+      'Select: minimum 10 NPCU',
+      'Registered: minimum 5 NPCU'
+    ]
+  },
+  momChange: {
+    title: 'Month-over-Month Change',
+    description: 'Percentage change compared to the previous month.',
+    formula: '((This month - Last month) ÷ Last month) × 100',
+    details: [
+      'Green ↑ = positive growth',
+      'Red ↓ = decline',
+      'Gray — = no change'
+    ]
+  },
+  yoyChange: {
+    title: 'Year-over-Year Change',
+    description: 'Percentage change compared to the same month last year.',
+    formula: '((This year - Last year) ÷ Last year) × 100',
+    details: [
+      'Better for seasonal comparisons',
+      'Shows long-term trends'
+    ]
+  },
+  userSegments: {
+    title: 'User Segments',
+    description: 'Users categorized by their recent activity level.',
+    formula: 'Based on last enrollment completion date',
+    details: [
+      'Active: Activity within 30 days',
+      'Recent: Activity 31-90 days ago',
+      'Lapsed: Activity 91-180 days ago',
+      'Dormant: No activity for 180+ days',
+      'Never Active: Registered but never enrolled'
+    ]
+  },
+  tierProgression: {
+    title: 'Tier Progression',
+    description: 'Partners approaching tier upgrades or at risk of non-compliance.',
+    formula: 'Current NPCU vs tier thresholds',
+    details: [
+      'Close to Upgrade: Within 80% of next tier',
+      'At Risk: Below minimum for current tier',
+      'Thresholds vary by partner tier'
+    ]
+  }
+};
+
+// Info tooltip component
+function InfoTooltip({ metricKey, size = 'small' }) {
+  const metric = METRIC_DEFINITIONS[metricKey];
+  if (!metric) return null;
+  
+  return (
+    <Tooltip
+      title={
+        <Box sx={{ p: 1, maxWidth: 320 }}>
+          <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
+            {metric.title}
+          </Typography>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            {metric.description}
+          </Typography>
+          {metric.formula && (
+            <Box sx={{ bgcolor: 'rgba(255,255,255,0.1)', p: 1, borderRadius: 1, mb: 1 }}>
+              <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
+                {metric.formula}
+              </Typography>
+            </Box>
+          )}
+          {metric.details && (
+            <Box component="ul" sx={{ m: 0, pl: 2, '& li': { fontSize: '0.75rem' } }}>
+              {metric.details.map((detail, i) => (
+                <li key={i}>{detail}</li>
+              ))}
+            </Box>
+          )}
+        </Box>
+      }
+      arrow
+      placement="top"
+    >
+      <IconButton size={size} sx={{ opacity: 0.6, '&:hover': { opacity: 1 } }}>
+        <Info fontSize={size} />
+      </IconButton>
+    </Tooltip>
+  );
+}
 
 // Trend indicator component
 function TrendIndicator({ value, suffix = '%', showArrow = true }) {
@@ -46,13 +192,14 @@ function TrendIndicator({ value, suffix = '%', showArrow = true }) {
 }
 
 // KPI Card with MoM/YoY
-function KpiCard({ title, icon, current, total, momChange, yoyChange }) {
+function KpiCard({ title, icon, current, total, momChange, yoyChange, infoKey }) {
   return (
     <Card className="kpi-card">
       <CardContent>
         <Box className="kpi-header">
           <Box className="kpi-icon">{icon}</Box>
           <Typography variant="subtitle2" color="textSecondary">{title}</Typography>
+          {infoKey && <InfoTooltip metricKey={infoKey} />}
         </Box>
         <Typography variant="h3" className="kpi-value">{current?.toLocaleString() || 0}</Typography>
         <Box className="kpi-changes">
@@ -118,9 +265,13 @@ function ActiveFilters({ filters, onClearFilter, onClearAll }) {
 
 export default function AnalyticsDashboard() {
   const [loading, setLoading] = useState(true);
+  const [tabLoading, setTabLoading] = useState(false); // Loading state for tab-specific data
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState(0);
   const [monthRange, setMonthRange] = useState(12);
+  
+  // Track which tabs have been loaded (for lazy loading)
+  const [loadedTabs, setLoadedTabs] = useState(new Set([0])); // Tab 0 loads with initial
   
   // Filter states
   const [filterOptions, setFilterOptions] = useState({ tiers: [], regions: [], owners: [] });
@@ -169,8 +320,9 @@ export default function AnalyticsDashboard() {
     loadFilters();
   }, []);
 
-  // Fetch all data with filters
-  const fetchData = useCallback(async () => {
+  // LAZY LOADING: Load only essential data on initial mount
+  // Tab-specific data is loaded when tabs are clicked
+  const fetchInitialData = useCallback(async () => {
     setLoading(true);
     setError(null);
     
@@ -178,21 +330,13 @@ export default function AnalyticsDashboard() {
     const filterSuffix = filterParams ? `&${filterParams}` : '';
     
     try {
-      const [kpi, ytd, users, enrollments, certs, compliance, weekly,
-             engagement, tierProg, segments, regional, owners] = await Promise.all([
+      // INITIAL LOAD: Only KPI, YTD, and Tab 0 data (Monthly Trends)
+      const [kpi, ytd, users, enrollments, certs] = await Promise.all([
         fetch(`${API_BASE}/trends/kpi-summary?${filterParams}`).then(r => r.json()),
         fetch(`${API_BASE}/trends/ytd?${filterParams}`).then(r => r.json()),
         fetch(`${API_BASE}/trends/users?months=${monthRange}${filterSuffix}`).then(r => r.json()),
         fetch(`${API_BASE}/trends/enrollments?months=${monthRange}${filterSuffix}`).then(r => r.json()),
         fetch(`${API_BASE}/trends/certifications?months=${monthRange}${filterSuffix}`).then(r => r.json()),
-        fetch(`${API_BASE}/trends/compliance?${filterParams}`).then(r => r.json()),
-        fetch(`${API_BASE}/trends/weekly?weeks=12${filterSuffix}`).then(r => r.json()),
-        // Deep Analytics
-        fetch(`${API_BASE}/analytics/engagement-scores?limit=25${filterSuffix}`).then(r => r.json()),
-        fetch(`${API_BASE}/analytics/tier-progression?${filterParams}`).then(r => r.json()),
-        fetch(`${API_BASE}/analytics/user-segments?${filterParams}`).then(r => r.json()),
-        fetch(`${API_BASE}/analytics/regional-comparison?${filterParams}`).then(r => r.json()),
-        fetch(`${API_BASE}/analytics/owner-performance?${filterParams}`).then(r => r.json())
       ]);
       
       setKpiSummary(kpi);
@@ -200,26 +344,89 @@ export default function AnalyticsDashboard() {
       setUserTrends(users);
       setEnrollmentTrends(enrollments);
       setCertificationTrends(certs);
-      setComplianceData(compliance);
-      setWeeklySummary(weekly);
-      
-      // Deep Analytics
-      setEngagementScores(engagement?.data || []);
-      setTierProgression(tierProg?.data || null);
-      setUserSegments(segments?.data || []);
-      setRegionalComparison(regional?.data || []);
-      setOwnerPerformance(owners?.data || []);
+      setLoadedTabs(new Set([0])); // Mark tab 0 as loaded
     } catch (err) {
-      console.error('Failed to fetch analytics:', err);
+      console.error('Failed to fetch initial analytics:', err);
       setError(err.message);
     } finally {
       setLoading(false);
     }
   }, [monthRange, buildFilterParams]);
 
+  // LAZY LOADING: Load data for a specific tab
+  const loadTabData = useCallback(async (tabIndex) => {
+    if (loadedTabs.has(tabIndex)) return; // Already loaded
+    
+    setTabLoading(true);
+    const filterParams = buildFilterParams();
+    const filterSuffix = filterParams ? `&${filterParams}` : '';
+    
+    try {
+      switch (tabIndex) {
+        case 1: { // Weekly Activity
+          const weekly = await fetch(`${API_BASE}/trends/weekly?weeks=12${filterSuffix}`).then(r => r.json());
+          setWeeklySummary(weekly);
+          break;
+        }
+        case 2: { // Compliance
+          const compliance = await fetch(`${API_BASE}/trends/compliance?${filterParams}`).then(r => r.json());
+          setComplianceData(compliance);
+          break;
+        }
+        case 3: { // Partner Engagement (expensive!)
+          const engagement = await fetch(`${API_BASE}/analytics/engagement-scores?limit=25${filterSuffix}`).then(r => r.json());
+          setEngagementScores(engagement?.data || []);
+          break;
+        }
+        case 4: { // Tier Progression
+          const tierProg = await fetch(`${API_BASE}/analytics/tier-progression?${filterParams}`).then(r => r.json());
+          setTierProgression(tierProg?.data || null);
+          break;
+        }
+        case 5: { // User Segments
+          const segments = await fetch(`${API_BASE}/analytics/user-segments?${filterParams}`).then(r => r.json());
+          setUserSegments(segments?.data || []);
+          break;
+        }
+        case 6: { // Regional
+          const regional = await fetch(`${API_BASE}/analytics/regional-comparison?${filterParams}`).then(r => r.json());
+          setRegionalComparison(regional?.data || []);
+          break;
+        }
+        case 7: { // Owner Performance
+          const owners = await fetch(`${API_BASE}/analytics/owner-performance?${filterParams}`).then(r => r.json());
+          setOwnerPerformance(owners?.data || []);
+          break;
+        }
+        default:
+          break;
+      }
+      setLoadedTabs(prev => new Set([...prev, tabIndex]));
+    } catch (err) {
+      console.error(`Failed to load tab ${tabIndex} data:`, err);
+    } finally {
+      setTabLoading(false);
+    }
+  }, [buildFilterParams, loadedTabs]);
+
+  // Handle tab change with lazy loading
+  const handleTabChange = useCallback((event, newValue) => {
+    setActiveTab(newValue);
+    loadTabData(newValue);
+  }, [loadTabData]);
+
+  // Full refresh - reload all data for current tab and clear cache
+  const fetchData = useCallback(async () => {
+    setLoadedTabs(new Set()); // Reset loaded tabs
+    await fetchInitialData();
+    if (activeTab !== 0) {
+      await loadTabData(activeTab);
+    }
+  }, [fetchInitialData, loadTabData, activeTab]);
+
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    fetchInitialData();
+  }, [fetchInitialData]);
 
   // Export report with filters
   const handleExport = async () => {
@@ -411,6 +618,7 @@ export default function AnalyticsDashboard() {
                   total={kpiSummary.users?.total}
                   momChange={kpiSummary.users?.momChange}
                   yoyChange={kpiSummary.users?.yoyChange}
+                  infoKey="momChange"
                 />
               </Grid>
               <Grid item xs={12} sm={6} md={3}>
@@ -447,6 +655,7 @@ export default function AnalyticsDashboard() {
                   total={kpiSummary.npcu?.total}
                   momChange={kpiSummary.npcu?.momChange}
                   yoyChange={kpiSummary.npcu?.yoyChange}
+                  infoKey="npcu"
                 />
               </Grid>
             </Grid>
@@ -512,7 +721,7 @@ export default function AnalyticsDashboard() {
         <Paper sx={{ mb: 4 }}>
           <Tabs 
             value={activeTab} 
-            onChange={(e, v) => setActiveTab(v)}
+            onChange={handleTabChange}
             sx={{ borderBottom: 1, borderColor: 'divider' }}
             variant="scrollable"
             scrollButtons="auto"
@@ -526,6 +735,16 @@ export default function AnalyticsDashboard() {
             <Tab label="Regional" icon={<Map />} iconPosition="start" />
             <Tab label="Owner Performance" icon={<Person />} iconPosition="start" />
           </Tabs>
+          
+          {/* Tab loading indicator */}
+          {tabLoading && (
+            <Box sx={{ p: 2, textAlign: 'center' }}>
+              <CircularProgress size={24} />
+              <Typography variant="body2" color="textSecondary" sx={{ mt: 1 }}>
+                Loading tab data...
+              </Typography>
+            </Box>
+          )}
 
           {/* Monthly Trends Table */}
           {activeTab === 0 && (
@@ -609,6 +828,10 @@ export default function AnalyticsDashboard() {
           {/* Compliance by Tier */}
           {activeTab === 2 && (
             <Box sx={{ p: 3 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                <Typography variant="h6">Tier Compliance Summary</Typography>
+                <InfoTooltip metricKey="complianceRate" />
+              </Box>
               <Grid container spacing={3}>
                 {complianceData.map((tier) => (
                   <Grid item xs={12} sm={6} md={4} key={tier.tier}>
@@ -663,15 +886,25 @@ export default function AnalyticsDashboard() {
                 <Grid item xs={12} md={6}>
                   <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     <Star color="warning" /> Top Engaged Partners
+                    <InfoTooltip metricKey="engagementScore" />
                   </Typography>
                   <TableContainer>
                     <Table size="small">
                       <TableHead>
                         <TableRow>
                           <TableCell>Partner</TableCell>
-                          <TableCell align="center">Score</TableCell>
-                          <TableCell align="center">Activation</TableCell>
-                          <TableCell align="center">Completion</TableCell>
+                          <TableCell align="center">
+                            Score
+                            <InfoTooltip metricKey="engagementScore" />
+                          </TableCell>
+                          <TableCell align="center">
+                            Activation
+                            <InfoTooltip metricKey="activationRate" />
+                          </TableCell>
+                          <TableCell align="center">
+                            Completion
+                            <InfoTooltip metricKey="completionRate" />
+                          </TableCell>
                         </TableRow>
                       </TableHead>
                       <TableBody>
@@ -709,7 +942,10 @@ export default function AnalyticsDashboard() {
                       <TableHead>
                         <TableRow>
                           <TableCell>Partner</TableCell>
-                          <TableCell align="center">Score</TableCell>
+                          <TableCell align="center">
+                            Score
+                            <InfoTooltip metricKey="engagementScore" />
+                          </TableCell>
                           <TableCell align="center">Users</TableCell>
                           <TableCell align="center">Completions</TableCell>
                         </TableRow>
@@ -744,13 +980,17 @@ export default function AnalyticsDashboard() {
           {/* Tier Progression */}
           {activeTab === 4 && (
             <Box sx={{ p: 3 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                <Typography variant="h6">Partner Tier Progression</Typography>
+                <InfoTooltip metricKey="tierProgression" />
+              </Box>
               <Grid container spacing={3}>
                 {/* Close to Upgrade */}
                 <Grid item xs={12} md={6}>
                   <Card variant="outlined" sx={{ borderColor: 'success.main' }}>
                     <CardContent>
                       <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <CheckCircle color="success" /> Close to Upgrade ({tierProgression.closeToUpgrade?.length || 0})
+                        <CheckCircle color="success" /> Close to Upgrade ({tierProgression?.closeToUpgrade?.length || 0})
                       </Typography>
                       <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
                         Partners within 80% of next tier threshold
@@ -761,12 +1001,15 @@ export default function AnalyticsDashboard() {
                             <TableRow>
                               <TableCell>Partner</TableCell>
                               <TableCell>Current Tier</TableCell>
-                              <TableCell align="right">NPCU</TableCell>
+                              <TableCell align="right">
+                                NPCU
+                                <InfoTooltip metricKey="npcu" />
+                              </TableCell>
                               <TableCell align="right">To Upgrade</TableCell>
                             </TableRow>
                           </TableHead>
                           <TableBody>
-                            {tierProgression.closeToUpgrade?.map((partner) => (
+                            {tierProgression?.closeToUpgrade?.map((partner) => (
                               <TableRow key={partner.partner_id}>
                                 <TableCell>{partner.account_name}</TableCell>
                                 <TableCell>
@@ -792,7 +1035,7 @@ export default function AnalyticsDashboard() {
                   <Card variant="outlined" sx={{ borderColor: 'error.main' }}>
                     <CardContent>
                       <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Warning color="error" /> At Risk ({tierProgression.atRiskPartners?.length || 0})
+                        <Warning color="error" /> At Risk ({tierProgression?.atRiskPartners?.length || 0})
                       </Typography>
                       <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
                         Partners below minimum threshold for their tier
@@ -803,12 +1046,15 @@ export default function AnalyticsDashboard() {
                             <TableRow>
                               <TableCell>Partner</TableCell>
                               <TableCell>Tier</TableCell>
-                              <TableCell align="right">NPCU</TableCell>
+                              <TableCell align="right">
+                                NPCU
+                                <InfoTooltip metricKey="npcu" />
+                              </TableCell>
                               <TableCell align="right">Required</TableCell>
                             </TableRow>
                           </TableHead>
                           <TableBody>
-                            {tierProgression.atRiskPartners?.map((partner) => (
+                            {tierProgression?.atRiskPartners?.map((partner) => (
                               <TableRow key={partner.partner_id}>
                                 <TableCell>{partner.account_name}</TableCell>
                                 <TableCell>
@@ -835,6 +1081,10 @@ export default function AnalyticsDashboard() {
           {/* User Segments */}
           {activeTab === 5 && (
             <Box sx={{ p: 3 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                <Typography variant="h6">User Activity Segments</Typography>
+                <InfoTooltip metricKey="userSegments" />
+              </Box>
               <Grid container spacing={3}>
                 {userSegments.map((segment) => {
                   const segmentColors = {

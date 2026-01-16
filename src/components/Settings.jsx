@@ -105,7 +105,7 @@ export default function Settings() {
   const fetchTemplates = async () => {
     setLoadingTemplates(true);
     try {
-      const response = await fetch('/api/db/notification-templates');
+      const response = await fetch('/api/db/notifications/templates');
       if (response.ok) {
         const data = await response.json();
         setTemplates(data);
@@ -133,7 +133,7 @@ export default function Settings() {
     if (!editTemplateDialog.template) return;
     setSavingTemplate(true);
     try {
-      const response = await fetch(`/api/db/notification-templates/${editTemplateDialog.template.id}`, {
+      const response = await fetch(`/api/db/notifications/templates/${editTemplateDialog.template.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(templateForm)
@@ -156,7 +156,7 @@ export default function Settings() {
   // Preview template
   const handlePreviewTemplate = async (template) => {
     try {
-      const response = await fetch(`/api/db/notification-templates/${template.template_key}/preview`, {
+      const response = await fetch(`/api/db/notifications/templates/${template.template_key}/preview`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

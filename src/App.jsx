@@ -2,6 +2,7 @@ import CompanyWidget from './components/CompanyWidget'
 import CustomerDashboard from './components/CustomerDashboard'
 import PartnerDashboardDB from './components/PartnerDashboardDB'
 import AdminHub from './components/AdminHub'
+import AdminHome from './components/AdminHome'
 import UserManagement from './components/UserManagement'
 import AccountOwnerReport from './components/AccountOwnerReport'
 import DataManagement from './components/DataManagement'
@@ -13,6 +14,10 @@ import AnalyticsDashboard from './components/AnalyticsDashboard'
 import PamManagement from './components/PamManagement'
 import GroupManagement from './components/GroupManagement'
 import CertificationCategories from './components/CertificationCategories'
+import LeadReports from './components/LeadReports'
+import ResetPassword from './components/ResetPassword'
+import MagicLogin from './components/MagicLogin'
+import EmailSchedules from './components/EmailSchedules'
 import { extractUrlParams } from './utils/urlEncoder'
 import { extractCustomerParams } from './utils/customerUrlEncoder'
 import './App.css'
@@ -35,6 +40,11 @@ function App() {
   const isPamRoute = currentPath === '/admin/pam' || currentPath === '/admin/pam/';
   const isGroupsRoute = currentPath === '/admin/groups' || currentPath === '/admin/groups/';
   const isCertificationsRoute = currentPath === '/admin/certifications' || currentPath === '/admin/certifications/';
+  const isLeadReportsRoute = currentPath === '/admin/leads' || currentPath === '/admin/leads/';
+  const isResetPasswordRoute = currentPath === '/admin/reset-password' || currentPath === '/admin/reset-password/';
+  const isMagicLoginRoute = currentPath === '/admin/magic-login' || currentPath === '/admin/magic-login/';
+  const isEmailSchedulesRoute = currentPath === '/admin/emails' || currentPath === '/admin/emails/' || currentPath === '/admin/email-schedules' || currentPath === '/admin/email-schedules/';
+  const isAdminHomeRoute = currentPath === '/admin' || currentPath === '/admin/';
   const isCustomerRoute = currentPath === '/customer' || currentPath === '/customer/';
   const isPartnerDbRoute = currentPath === '/partner' || currentPath === '/partner/';
   
@@ -85,6 +95,24 @@ function App() {
         <AdminHub currentPage="data">
           <DataManagement />
         </AdminHub>
+      </div>
+    );
+  }
+
+  // Show reset password page (no auth required)
+  if (isResetPasswordRoute) {
+    return (
+      <div className="app">
+        <ResetPassword />
+      </div>
+    );
+  }
+
+  // Show magic login page (no auth required)
+  if (isMagicLoginRoute) {
+    return (
+      <div className="app">
+        <MagicLogin />
       </div>
     );
   }
@@ -155,6 +183,28 @@ function App() {
     );
   }
 
+  // Show lead reports for /admin/leads route
+  if (isLeadReportsRoute) {
+    return (
+      <div className="app">
+        <AdminHub currentPage="leads">
+          <LeadReports />
+        </AdminHub>
+      </div>
+    );
+  }
+
+  // Show email schedules for /admin/emails route
+  if (isEmailSchedulesRoute) {
+    return (
+      <div className="app">
+        <AdminHub currentPage="emails">
+          <EmailSchedules />
+        </AdminHub>
+      </div>
+    );
+  }
+
   // Show database reports for /admin/dbreports route
   if (isDbReportsRoute) {
     return (
@@ -199,7 +249,18 @@ function App() {
     );
   }
 
-  // Show analytics dashboard for admin route (default admin page)
+  // Show home dashboard for /admin route (landing page)
+  if (isAdminHomeRoute) {
+    return (
+      <div className="app">
+        <AdminHub currentPage="home">
+          <AdminHome />
+        </AdminHub>
+      </div>
+    );
+  }
+
+  // Show analytics dashboard for other admin routes (fallback)
   if (isAdminRoute) {
     return (
       <div className="app">

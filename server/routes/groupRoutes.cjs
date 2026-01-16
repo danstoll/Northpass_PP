@@ -297,7 +297,7 @@ router.get('/groups/:id', async (req, res) => {
   }
 });
 
-// Get partners without groups
+// Get partners without groups (with extended details)
 router.get('/partners-without-groups', async (req, res) => {
   try {
     const { search, tier, sort } = req.query;
@@ -309,8 +309,16 @@ router.get('/partners-without-groups', async (req, res) => {
         p.partner_tier,
         p.account_region,
         p.account_owner,
-        COUNT(c.id) as contact_count,
-        COUNT(CASE WHEN c.lms_user_id IS NOT NULL THEN 1 END) as lms_user_count
+        p.is_active,
+        p.account_status,
+        p.impartner_id,
+        p.salesforce_id,
+        p.lead_count,
+        p.leads_last_30_days,
+        p.created_at,
+        COUNT(DISTINCT c.id) as contact_count,
+        COUNT(DISTINCT CASE WHEN c.lms_user_id IS NOT NULL THEN c.id END) as lms_user_count,
+        COUNT(DISTINCT CASE WHEN c.is_active = TRUE THEN c.id END) as active_contact_count
       FROM partners p
       LEFT JOIN contacts c ON c.partner_id = p.id
       LEFT JOIN lms_groups g ON g.partner_id = p.id
@@ -342,6 +350,117 @@ router.get('/partners-without-groups', async (req, res) => {
     res.json(partners);
   } catch (error) {
     console.error('Partners without groups error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete a partner (and its contacts) - for test accounts or cleanup
+router.delete('/partners/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { force } = req.query;
+    
+    // Get partner details first
+    const [partner] = await query('SELECT * FROM partners WHERE id = ?', [id]);
+    if (!partner) {
+      return res.status(404).json({ error: 'Partner not found' });
+    }
+    
+    // Check if partner has LMS group
+    const [lmsGroup] = await query('SELECT id, name FROM lms_groups WHERE partner_id = ?', [id]);
+    if (lmsGroup && !force) {
+      return res.status(400).json({ 
+        error: 'Partner has an LMS group. Use force=true to delete anyway.',
+        lmsGroup: lmsGroup.name
+      });
+    }
+    
+    // Get contact count
+    const [contactInfo] = await query('SELECT COUNT(*) as count FROM contacts WHERE partner_id = ?', [id]);
+    const contactCount = contactInfo?.count || 0;
+    
+    // Get lead count (if leads exist)
+    let leadCount = 0;
+    try {
+      const [leadInfo] = await query('SELECT COUNT(*) as count FROM leads WHERE partner_id = ?', [id]);
+      leadCount = leadInfo?.count || 0;
+    } catch (e) {
+      // Leads table may not exist
+    }
+    
+    // Delete contacts first (due to foreign key)
+    const deleteContacts = await query('DELETE FROM contacts WHERE partner_id = ?', [id]);
+    
+    // Delete dismissed orphans for this partner
+    await query('DELETE FROM dismissed_orphans WHERE partner_id = ?', [id]);
+    
+    // Delete the partner
+    await query('DELETE FROM partners WHERE id = ?', [id]);
+    
+    res.json({
+      success: true,
+      deleted: {
+        partner: partner.account_name,
+        contacts: deleteContacts.affectedRows,
+        hadLeads: leadCount > 0,
+        leadCount
+      }
+    });
+  } catch (error) {
+    console.error('Delete partner error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Bulk delete partners
+router.post('/partners/bulk-delete', async (req, res) => {
+  try {
+    const { partnerIds, force } = req.body;
+    
+    if (!partnerIds || !Array.isArray(partnerIds) || partnerIds.length === 0) {
+      return res.status(400).json({ error: 'partnerIds array required' });
+    }
+    
+    const results = {
+      deleted: [],
+      failed: [],
+      contactsDeleted: 0
+    };
+    
+    for (const id of partnerIds) {
+      try {
+        // Get partner details
+        const [partner] = await query('SELECT * FROM partners WHERE id = ?', [id]);
+        if (!partner) {
+          results.failed.push({ id, error: 'Not found' });
+          continue;
+        }
+        
+        // Check if partner has LMS group
+        const [lmsGroup] = await query('SELECT id FROM lms_groups WHERE partner_id = ?', [id]);
+        if (lmsGroup && !force) {
+          results.failed.push({ id, name: partner.account_name, error: 'Has LMS group' });
+          continue;
+        }
+        
+        // Delete contacts
+        const deleteContacts = await query('DELETE FROM contacts WHERE partner_id = ?', [id]);
+        results.contactsDeleted += deleteContacts.affectedRows;
+        
+        // Delete dismissed orphans
+        await query('DELETE FROM dismissed_orphans WHERE partner_id = ?', [id]);
+        
+        // Delete partner
+        await query('DELETE FROM partners WHERE id = ?', [id]);
+        results.deleted.push({ id, name: partner.account_name });
+      } catch (err) {
+        results.failed.push({ id, error: err.message });
+      }
+    }
+    
+    res.json(results);
+  } catch (error) {
+    console.error('Bulk delete partners error:', error);
     res.status(500).json({ error: error.message });
   }
 });

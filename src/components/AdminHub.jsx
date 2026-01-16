@@ -12,6 +12,8 @@ import {
   ListItemText,
   InputAdornment,
   IconButton,
+  Link,
+  Divider,
 } from '@mui/material';
 import {
   Lock,
@@ -27,6 +29,8 @@ import {
   Dashboard,
   People,
   Security,
+  Email,
+  ArrowBack,
 } from '@mui/icons-material';
 import AdminNav from './AdminNav';
 import TopNavbar from './TopNavbar';
@@ -49,6 +53,12 @@ const AdminHub = ({ children, currentPage }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  
+  // Login mode: 'password' | 'forgot' | 'magic'
+  const [loginMode, setLoginMode] = useState('password');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [sendingEmail, setSendingEmail] = useState(false);
+  
   const [quickStats, setQuickStats] = useState([
     { label: 'Partners', value: '—' },
     { label: 'Users', value: '—' },
@@ -113,6 +123,68 @@ const AdminHub = ({ children, currentPage }) => {
     setLoggingIn(false);
   };
 
+  const handleForgotPassword = async (e) => {
+    e.preventDefault();
+    setLoginError('');
+    setSuccessMessage('');
+    setSendingEmail(true);
+    
+    try {
+      const response = await fetch(`${API_BASE}/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok) {
+        setSuccessMessage('If an account exists with this email, you will receive a password reset link shortly.');
+        setEmail('');
+      } else {
+        setLoginError(data.error || 'Failed to send reset email');
+      }
+    } catch (error) {
+      setLoginError('Network error. Please try again.');
+    }
+    
+    setSendingEmail(false);
+  };
+
+  const handleMagicLink = async (e) => {
+    e.preventDefault();
+    setLoginError('');
+    setSuccessMessage('');
+    setSendingEmail(true);
+    
+    try {
+      const response = await fetch(`${API_BASE}/auth/magic-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok) {
+        setSuccessMessage('If an account exists with this email, you will receive a sign-in link shortly.');
+        setEmail('');
+      } else {
+        setLoginError(data.error || 'Failed to send magic link');
+      }
+    } catch (error) {
+      setLoginError('Network error. Please try again.');
+    }
+    
+    setSendingEmail(false);
+  };
+
+  const switchToPasswordLogin = () => {
+    setLoginMode('password');
+    setLoginError('');
+    setSuccessMessage('');
+  };
+
   const handleLogout = async () => {
     await logout();
   };
@@ -169,72 +241,199 @@ const AdminHub = ({ children, currentPage }) => {
                   Admin Portal
                 </Typography>
                 <Typography variant="body2" sx={{ opacity: 0.7 }}>
-                  Sign in to access the Nintex Partner Portal administration tools.
+                  {loginMode === 'password' && 'Sign in to access the Nintex Partner Portal administration tools.'}
+                  {loginMode === 'forgot' && 'Enter your email to receive a password reset link.'}
+                  {loginMode === 'magic' && 'Enter your email to receive a sign-in link.'}
                 </Typography>
               </Box>
 
-              {/* Login Form */}
-              <form onSubmit={handleLogin} autoComplete="on">
-                <TextField
-                  fullWidth
-                  id="admin-email"
-                  name="email"
-                  label="Email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="admin@nintex.com"
-                  autoComplete="username email"
-                  autoFocus
-                  required
-                  sx={{ mb: 2 }}
-                />
-                
-                <TextField
-                  fullWidth
-                  id="admin-password"
-                  name="password"
-                  label="Password"
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  autoComplete="current-password"
-                  required
-                  sx={{ mb: 2 }}
-                  InputProps={{
-                    endAdornment: (
-                      <InputAdornment position="end">
-                        <IconButton
-                          aria-label={showPassword ? 'Hide password' : 'Show password'}
-                          onClick={() => setShowPassword(!showPassword)}
-                          onMouseDown={(e) => e.preventDefault()}
-                          edge="end"
-                          tabIndex={-1}
-                        >
-                          {showPassword ? <VisibilityOff /> : <Visibility />}
-                        </IconButton>
-                      </InputAdornment>
-                    ),
-                  }}
-                />
-                
-                {(loginError || authError) && (
-                  <Alert severity="error" sx={{ mb: 2 }}>
-                    {loginError || authError}
-                  </Alert>
-                )}
-                
-                <ActionButton 
-                  type="submit" 
-                  fullWidth 
-                  loading={loggingIn}
-                  icon={<LockOpen />}
-                  sx={{ mb: 3 }}
-                  disabled={!email || !password}
-                >
-                  Sign In
-                </ActionButton>
-              </form>
+              {/* Success Message */}
+              {successMessage && (
+                <Alert severity="success" sx={{ mb: 2 }}>
+                  {successMessage}
+                </Alert>
+              )}
+
+              {/* Error Message */}
+              {(loginError || authError) && (
+                <Alert severity="error" sx={{ mb: 2 }}>
+                  {loginError || authError}
+                </Alert>
+              )}
+
+              {/* Password Login Form */}
+              {loginMode === 'password' && (
+                <form onSubmit={handleLogin} autoComplete="on">
+                  <TextField
+                    fullWidth
+                    id="admin-email"
+                    name="email"
+                    label="Email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="admin@nintex.com"
+                    autoComplete="username email"
+                    autoFocus
+                    required
+                    sx={{ mb: 2 }}
+                  />
+                  
+                  <TextField
+                    fullWidth
+                    id="admin-password"
+                    name="password"
+                    label="Password"
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    autoComplete="current-password"
+                    required
+                    sx={{ mb: 2 }}
+                    slotProps={{
+                      input: {
+                        endAdornment: (
+                          <InputAdornment position="end">
+                            <IconButton
+                              aria-label={showPassword ? 'Hide password' : 'Show password'}
+                              onClick={() => setShowPassword(!showPassword)}
+                              onMouseDown={(e) => e.preventDefault()}
+                              edge="end"
+                              tabIndex={-1}
+                            >
+                              {showPassword ? <VisibilityOff /> : <Visibility />}
+                            </IconButton>
+                          </InputAdornment>
+                        ),
+                      },
+                    }}
+                  />
+                  
+                  <ActionButton 
+                    type="submit" 
+                    fullWidth 
+                    loading={loggingIn}
+                    icon={<LockOpen />}
+                    sx={{ mb: 2 }}
+                    disabled={!email || !password}
+                  >
+                    Sign In
+                  </ActionButton>
+
+                  {/* Forgot Password & Magic Link Links */}
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
+                    <Link
+                      component="button"
+                      type="button"
+                      variant="body2"
+                      onClick={() => { setLoginMode('forgot'); setLoginError(''); setSuccessMessage(''); }}
+                      sx={{ cursor: 'pointer' }}
+                    >
+                      Forgot password?
+                    </Link>
+                    <Link
+                      component="button"
+                      type="button"
+                      variant="body2"
+                      onClick={() => { setLoginMode('magic'); setLoginError(''); setSuccessMessage(''); }}
+                      sx={{ cursor: 'pointer' }}
+                    >
+                      Sign in with email link
+                    </Link>
+                  </Box>
+                </form>
+              )}
+
+              {/* Forgot Password Form */}
+              {loginMode === 'forgot' && (
+                <form onSubmit={handleForgotPassword}>
+                  <TextField
+                    fullWidth
+                    id="reset-email"
+                    name="email"
+                    label="Email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="admin@nintex.com"
+                    autoComplete="email"
+                    autoFocus
+                    required
+                    sx={{ mb: 2 }}
+                  />
+                  
+                  <ActionButton 
+                    type="submit" 
+                    fullWidth 
+                    loading={sendingEmail}
+                    icon={<Email />}
+                    sx={{ mb: 2 }}
+                    disabled={!email}
+                  >
+                    Send Reset Link
+                  </ActionButton>
+
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Link
+                      component="button"
+                      type="button"
+                      variant="body2"
+                      onClick={switchToPasswordLogin}
+                      sx={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 0.5 }}
+                    >
+                      <ArrowBack fontSize="small" />
+                      Back to sign in
+                    </Link>
+                  </Box>
+                </form>
+              )}
+
+              {/* Magic Link Form */}
+              {loginMode === 'magic' && (
+                <form onSubmit={handleMagicLink}>
+                  <TextField
+                    fullWidth
+                    id="magic-email"
+                    name="email"
+                    label="Email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="admin@nintex.com"
+                    autoComplete="email"
+                    autoFocus
+                    required
+                    sx={{ mb: 2 }}
+                  />
+                  
+                  <ActionButton 
+                    type="submit" 
+                    fullWidth 
+                    loading={sendingEmail}
+                    icon={<Email />}
+                    variant="secondary"
+                    sx={{ mb: 2 }}
+                    disabled={!email}
+                  >
+                    Send Magic Link
+                  </ActionButton>
+
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Link
+                      component="button"
+                      type="button"
+                      variant="body2"
+                      onClick={switchToPasswordLogin}
+                      sx={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 0.5 }}
+                    >
+                      <ArrowBack fontSize="small" />
+                      Back to sign in
+                    </Link>
+                  </Box>
+                </form>
+              )}
+
+              <Divider sx={{ my: 3 }} />
 
               {/* Tools Preview */}
               <Box>

@@ -226,6 +226,7 @@ if (modularRoutes) {
   app.use('/api/db/certifications', mountModularRoutes, modularRoutes.certificationRoutes);
   app.use('/api/db/pams', mountModularRoutes, modularRoutes.pamRoutes);
   app.use('/api/db/notifications', mountModularRoutes, modularRoutes.notificationRoutes);
+  app.use('/api/db/leads', mountModularRoutes, modularRoutes.leadRoutes);
   console.log('✅ Modular routes mounted at /api/db/*');
 }
 
@@ -270,6 +271,20 @@ app.use('/assets', express.static(path.join(__dirname, 'dist', 'assets'), {
     // Other assets cache for 1 day
     else {
       res.setHeader('Cache-Control', 'public, max-age=86400');
+    }
+  }
+}));
+
+// Serve root-level static files (signature images, favicon, etc.)
+app.use(express.static(path.join(__dirname, 'dist'), {
+  index: false, // Don't serve index.html for directory requests
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, filePath) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    // Images cache for 1 week
+    if (filePath.match(/\.(png|jpg|jpeg|gif|svg|ico)$/)) {
+      res.setHeader('Cache-Control', 'public, max-age=604800');
     }
   }
 }));

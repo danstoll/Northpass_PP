@@ -41,6 +41,9 @@ import {
   Refresh,
   Close,
   ArrowBack,
+  Share,
+  ContentCopy,
+  Check,
 } from '@mui/icons-material';
 
 // ============ PAGE LAYOUT COMPONENTS ============
@@ -52,7 +55,29 @@ export const PageHeader = ({
   subtitle,
   onBack,
   actions,
+  showShare = true, // Show share button by default
 }) => {
+  const [copied, setCopied] = React.useState(false);
+
+  const handleShare = async () => {
+    const url = window.location.href;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Fallback for older browsers
+      const textArea = document.createElement('textarea');
+      textArea.value = url;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
   return (
     <Box sx={{ mb: 3 }}>
       <Box sx={{ 
@@ -88,16 +113,33 @@ export const PageHeader = ({
             </Typography>
           )}
         </Box>
-        {actions && (
-          <Box sx={{ 
-            display: 'flex', 
-            gap: 1, 
-            flexWrap: 'wrap',
-            flexShrink: 0,
-          }}>
-            {actions}
-          </Box>
-        )}
+        <Box sx={{ 
+          display: 'flex', 
+          gap: 1, 
+          flexWrap: 'wrap',
+          flexShrink: 0,
+          alignItems: 'center',
+        }}>
+          {actions}
+          {showShare && (
+            <Tooltip title={copied ? "Link copied!" : "Copy page link to share"}>
+              <IconButton 
+                onClick={handleShare}
+                size="small"
+                sx={{ 
+                  color: copied ? 'success.main' : 'var(--admin-text-secondary)',
+                  transition: 'color 0.2s',
+                  '&:hover': {
+                    color: copied ? 'success.main' : 'primary.main',
+                    backgroundColor: 'var(--admin-bg-hover)',
+                  },
+                }}
+              >
+                {copied ? <Check /> : <Share />}
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
       </Box>
     </Box>
   );
@@ -155,6 +197,7 @@ export const SectionCard = ({
   subtitle,
   icon,
   action,
+  infoTooltip, // New: info tooltip text
   children, 
   noPadding,
   collapsible,
@@ -180,6 +223,13 @@ export const SectionCard = ({
             <Typography variant="h3" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               {icon && <span>{icon}</span>}
               {title}
+              {infoTooltip && (
+                <Tooltip title={infoTooltip} arrow placement="top">
+                  <IconButton size="small" sx={{ ml: 0.5, opacity: 0.6 }} onClick={e => e.stopPropagation()}>
+                    <Info fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              )}
               {collapsible && <span style={{ opacity: 0.5 }}>{expanded ? '▼' : '▶'}</span>}
             </Typography>
             {subtitle && (
@@ -207,6 +257,7 @@ export const StatCard = ({
   icon, 
   value, 
   label, 
+  infoTooltip, // New: info tooltip text
   variant = 'default', // 'default', 'success', 'warning', 'error', 'primary'
   size = 'medium', // 'small', 'medium', 'large'
   onClick,
@@ -248,9 +299,27 @@ export const StatCard = ({
         } : {
           boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
         },
+        position: 'relative',
       }}
       onClick={onClick}
     >
+      {infoTooltip && (
+        <Tooltip title={infoTooltip} arrow placement="top">
+          <IconButton 
+            size="small" 
+            sx={{ 
+              position: 'absolute', 
+              top: 4, 
+              right: 4, 
+              opacity: 0.5,
+              '&:hover': { opacity: 1 }
+            }} 
+            onClick={e => e.stopPropagation()}
+          >
+            <Info fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
       <CardContent sx={{ p: sizes[size].padding, textAlign: 'center' }}>
         {icon && (
           <Box sx={{ fontSize: '1.75rem', mb: 1 }}>
@@ -415,21 +484,38 @@ export const FilterSelect = ({
   label,
   value,
   onChange,
-  options, // [{ value, label }]
+  options = [], // [{ value, label }] or ['string']
   fullWidth = false,
   size = 'small',
   minWidth = 150,
+  ...props
 }) => {
+  // Normalize options to { value, label } format
+  const normalizedOptions = options.map(opt => 
+    typeof opt === 'string' ? { value: opt, label: opt } : opt
+  );
+  
+  // Handle MUI Select onChange which passes (event, child)
+  const handleChange = (event) => {
+    const newValue = event.target.value;
+    // If onChange expects just the value (not the event), pass it
+    if (onChange.length <= 1) {
+      onChange(newValue);
+    } else {
+      onChange(event);
+    }
+  };
+  
   return (
-    <FormControl size={size} sx={{ minWidth }} fullWidth={fullWidth}>
+    <FormControl size={size} sx={{ minWidth }} fullWidth={fullWidth} {...props}>
       <InputLabel>{label}</InputLabel>
       <Select
         value={value}
         label={label}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={handleChange}
       >
         <MenuItem value="">All</MenuItem>
-        {options.map((opt) => (
+        {normalizedOptions.map((opt) => (
           <MenuItem key={opt.value} value={opt.value}>
             {opt.label}
           </MenuItem>

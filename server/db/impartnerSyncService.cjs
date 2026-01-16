@@ -30,8 +30,12 @@ const FILTERS = {
   // Account status to exclude
   excludeAccountStatus: ['Inactive'],
   
-  // Contact status to include
-  validContactStatus: ['Active'],
+  // Contact IsActive flag - must be true (filters out IsActive=false)
+  requireActiveContacts: true,
+  
+  // Contact status values to EXCLUDE (custom field Contact_Status__cf)
+  // This explicitly filters out Inactive contacts
+  excludeContactStatus: ['Inactive', 'Terminated', 'Suspended', 'Deactivated'],
   
   // Account names to exclude (case-insensitive contains)
   excludeAccountNames: ['nintex'],
@@ -242,33 +246,67 @@ function filterAccounts(accounts, logDetails = false) {
 
 /**
  * Filter users/contacts based on CRM export rules
+ * Returns { valid: [], filterStats: {} }
  */
-function filterUsers(users) {
-  return users.filter(user => {
+function filterUsers(users, logDetails = false) {
+  const valid = [];
+  const filterStats = {
+    noEmail: 0,
+    isActiveNo: 0,
+    contactStatusInactive: 0,
+    excludedDomain: 0,
+    excludedPattern: 0
+  };
+  
+  for (const user of users) {
     // Must have valid email
     const email = (user.email || '').toLowerCase().trim();
-    if (!email || !email.includes('@')) return false;
+    if (!email || !email.includes('@')) {
+      filterStats.noEmail++;
+      continue;
+    }
     
-    // Filter by contact status (only Active)
-    const status = user.contact_Status__cf || '';
-    if (status && !FILTERS.validContactStatus.some(s => s.toLowerCase() === status.toLowerCase())) {
-      return false;
+    // Filter by IsActive flag (must be true)
+    // Impartner returns isActive as boolean or string
+    const isActive = user.isActive;
+    if (isActive === false || isActive === 'false' || isActive === 0 || isActive === '0') {
+      filterStats.isActiveNo++;
+      if (logDetails && filterStats.isActiveNo <= 5) {
+        console.log(`   ⏭️ Filtered (IsActive=No): ${email}`);
+      }
+      continue;
+    }
+    
+    // Filter by contact status - exclude Inactive contacts
+    // Check both possible field names (Contact_Status__cf and contact_Status__c)
+    const status = user.contact_Status__cf || user.contact_Status__c || '';
+    const statusLower = status.toLowerCase();
+    if (FILTERS.excludeContactStatus.some(s => s.toLowerCase() === statusLower)) {
+      filterStats.contactStatusInactive++;
+      if (logDetails && filterStats.contactStatusInactive <= 5) {
+        console.log(`   ⏭️ Filtered (Contact_Status=${status}): ${email}`);
+      }
+      continue;
     }
     
     // Exclude certain email domains
     const domain = email.split('@')[1] || '';
     if (FILTERS.excludeEmailDomains.some(d => domain.toLowerCase() === d.toLowerCase())) {
-      return false;
+      filterStats.excludedDomain++;
+      continue;
     }
     
     // Exclude certain email patterns (before @)
     const localPart = email.split('@')[0] || '';
     if (FILTERS.excludeEmailPatterns.some(p => localPart.toLowerCase().includes(p.toLowerCase()))) {
-      return false;
+      filterStats.excludedPattern++;
+      continue;
     }
     
-    return true;
-  });
+    valid.push(user);
+  }
+  
+  return { valid, filterStats };
 }
 
 /**
@@ -350,17 +388,72 @@ async function syncPartners(mode = 'incremental') {
       }
     }
     
-    // Fetch accounts from Impartner
+    // Fetch Region lookup table for mapping regionId to name
+    console.log('📍 Fetching Region lookup table...');
+    let regionMap = new Map();
+    try {
+      const regions = await fetchAllRecords('Region', 'Id,Name');
+      regions.forEach(r => regionMap.set(r.id, r.name));
+      console.log(`   Found ${regions.length} regions:`, [...regionMap.entries()].map(([id, name]) => `${id}=${name}`).join(', '));
+    } catch (err) {
+      console.warn('   ⚠️ Could not fetch Region table:', err.message);
+      // Fallback hardcoded mapping (as of Jan 2026)
+      regionMap.set(1785, 'Americas');
+      regionMap.set(1786, 'APAC');
+      regionMap.set(1787, 'EMEA');
+      regionMap.set(2159, 'Emerging Markets');
+      console.log('   Using fallback region mapping');
+    }
+    
+    // Fetch accounts from Impartner (use RegionId not Region)
     const fields = [
       'Id', 'Name', 'Partner_Tier__cf', 'Account_Status__cf',
       'Account_Owner__cf', 'Account_Owner_Email__cf',
       'Partner_Type__cf', 'Website', 'CrmId',
-      'MailingCity', 'MailingCountry', 'Region',
-      'MemberCount', 'Updated', 'ParentAccountId'
+      'MailingCity', 'MailingCountry', 'RegionId',
+      'MemberCount', 'Updated', 'ParentAccountId', 'PrimaryUserId'
     ].join(',');
     
-    const allAccounts = await fetchAllRecords('Account', fields, null, sinceDate);
-    console.log(`📥 Fetched ${allAccounts.length} accounts from Impartner`);
+    // API-level filters to reduce data transfer:
+    // - Only include valid partner tiers (but include ALL statuses including Inactive for offboarding)
+    // Note: We still filter client-side for excluded names (contains check not supported in API)
+    // Note: We fetch inactive accounts too so we can detect them and trigger offboarding
+    const validTiersFilter = FILTERS.validTiers.map(t => `Partner_Tier__cf = '${t}'`).join(' or ');
+    const accountFilter = `(${validTiersFilter})`;
+    
+    const allAccounts = await fetchAllRecords('Account', fields, accountFilter, sinceDate);
+    console.log(`📥 Fetched ${allAccounts.length} accounts from Impartner (API filtered: valid tiers, includes inactive for offboarding)`);
+    
+    // Collect PrimaryUserIds for batch lookup
+    const primaryUserIds = new Set();
+    allAccounts.forEach(a => {
+      if (a.primaryUserId) primaryUserIds.add(a.primaryUserId);
+    });
+    
+    // Batch fetch primary user details
+    console.log(`👤 Fetching ${primaryUserIds.size} primary users...`);
+    const primaryUserMap = new Map();
+    if (primaryUserIds.size > 0) {
+      try {
+        // Fetch users in batches of 50
+        const userIdArray = Array.from(primaryUserIds);
+        for (let i = 0; i < userIdArray.length; i += 50) {
+          const batch = userIdArray.slice(i, i + 50);
+          // Use 'Id in (list)' syntax which Impartner supports
+          const userFilter = `Id in (${batch.join(',')})`;
+          const users = await fetchAllRecords('User', 'Id,Email,FirstName,LastName,FullName', userFilter);
+          users.forEach(u => {
+            primaryUserMap.set(u.id, {
+              name: u.fullName || `${u.firstName || ''} ${u.lastName || ''}`.trim(),
+              email: u.email
+            });
+          });
+        }
+        console.log(`   ✅ Fetched ${primaryUserMap.size} primary user details`);
+      } catch (err) {
+        console.warn(`   ⚠️ Could not fetch primary users: ${err.message}`);
+      }
+    }
     
     // Apply filters with detailed logging
     const filterResult = filterAccounts(allAccounts, true);
@@ -438,13 +531,23 @@ async function syncPartners(mode = 'incremental') {
         }
         
         // Prepare data - map Impartner fields to our schema
+        // Map regionId to region name using lookup table
+        const regionName = account.regionId ? regionMap.get(account.regionId) : null;
+        
+        // Get primary user details
+        const primaryUser = account.primaryUserId ? primaryUserMap.get(account.primaryUserId) : null;
+        
         const partnerData = {
           account_name: accountName,
           partner_tier: account.partner_Tier__cf || null,
           account_status: account.account_Status__cf || 'Active',
-          account_region: account.mailingCountry || null,
+          account_region: regionName,  // Region = Americas, APAC, EMEA, Emerging Markets
+          country: account.mailingCountry || null, // Country = United States, Australia, etc.
           account_owner: account.account_Owner__cf || null,
           owner_email: account.account_Owner_Email__cf || null,
+          primary_user_name: primaryUser?.name || null,
+          primary_user_email: primaryUser?.email || null,
+          primary_user_id: account.primaryUserId || null,
           partner_type: account.partner_Type__cf || null,
           salesforce_id: salesforceId,
           website: account.website || null,
@@ -462,8 +565,12 @@ async function syncPartners(mode = 'incremental') {
                partner_tier = ?,
                account_status = ?,
                account_region = ?,
+               country = ?,
                account_owner = ?,
                owner_email = ?,
+               primary_user_name = ?,
+               primary_user_email = ?,
+               primary_user_id = ?,
                partner_type = ?,
                salesforce_id = ?,
                website = ?,
@@ -477,8 +584,12 @@ async function syncPartners(mode = 'incremental') {
               partnerData.partner_tier,
               partnerData.account_status,
               partnerData.account_region,
+              partnerData.country,
               partnerData.account_owner,
               partnerData.owner_email,
+              partnerData.primary_user_name,
+              partnerData.primary_user_email,
+              partnerData.primary_user_id,
               partnerData.partner_type,
               partnerData.salesforce_id,
               partnerData.website,
@@ -496,15 +607,19 @@ async function syncPartners(mode = 'incremental') {
         } else {
           // Insert new partner
           await query(
-            `INSERT INTO partners (account_name, partner_tier, account_status, account_region, account_owner, owner_email, partner_type, salesforce_id, website, impartner_id, impartner_parent_id, is_active)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)`,
+            `INSERT INTO partners (account_name, partner_tier, account_status, account_region, country, account_owner, owner_email, primary_user_name, primary_user_email, primary_user_id, partner_type, salesforce_id, website, impartner_id, impartner_parent_id, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)`,
             [
               partnerData.account_name,
               partnerData.partner_tier,
               partnerData.account_status,
               partnerData.account_region,
+              partnerData.country,
               partnerData.account_owner,
               partnerData.owner_email,
+              partnerData.primary_user_name,
+              partnerData.primary_user_email,
+              partnerData.primary_user_id,
               partnerData.partner_type,
               partnerData.salesforce_id,
               partnerData.website,
@@ -709,13 +824,25 @@ async function syncContacts(mode = 'incremental') {
       'IsActive', 'CrmId', 'Updated'
     ].join(',');
     
-    const allUsers = await fetchAllRecords('User', fields, null, sinceDate);
-    console.log(`📥 Fetched ${allUsers.length} users from Impartner`);
+    // API-level filters to reduce data transfer:
+    // - Only active users (IsActive = true)
+    // - Exclude inactive contact status
+    // Note: We still filter client-side for excluded email domains/patterns (not supported in API)
+    const userFilter = `IsActive = true and Contact_Status__cf != 'Inactive'`;
+    
+    const allUsers = await fetchAllRecords('User', fields, userFilter, sinceDate);
+    console.log(`📥 Fetched ${allUsers.length} users from Impartner (API filtered: IsActive=true, Contact_Status!=Inactive)`);
     
     // Apply filters
-    const users = filterUsers(allUsers);
+    const { valid: users, filterStats } = filterUsers(allUsers, true);
     const filteredCount = allUsers.length - users.length;
     console.log(`📋 After filtering: ${users.length} valid, ${filteredCount} filtered out`);
+    console.log(`   Filter breakdown:`);
+    console.log(`   - No email: ${filterStats.noEmail}`);
+    console.log(`   - IsActive=No: ${filterStats.isActiveNo}`);
+    console.log(`   - Contact_Status inactive: ${filterStats.contactStatusInactive}`);
+    console.log(`   - Excluded domain: ${filterStats.excludedDomain}`);
+    console.log(`   - Excluded pattern: ${filterStats.excludedPattern}`);
     
     // Build set of valid Impartner IDs for deletion detection (full sync only)
     const validImpartnerIds = new Set();
@@ -1052,14 +1179,17 @@ async function previewSync() {
   console.log(`${'='.repeat(60)}`);
   
   try {
-    // Fetch and filter accounts
+    // Fetch and filter accounts (with API-level filtering)
     const accountFields = 'Id,Name,Partner_Tier__cf,Account_Status__cf';
-    const allAccounts = await fetchAllRecords('Account', accountFields);
+    const validTiersFilter = FILTERS.validTiers.map(t => `Partner_Tier__cf = '${t}'`).join(' or ');
+    const accountApiFilter = `Account_Status__cf != 'Inactive' and (${validTiersFilter})`;
+    const allAccounts = await fetchAllRecords('Account', accountFields, accountApiFilter);
     const accountFilterResult = filterAccounts(allAccounts, false);
     
-    // Fetch and filter users (sample)
+    // Fetch and filter users (with API-level filtering)
     const userFields = 'Id,Email,Contact_Status__cf,AccountName';
-    const allUsers = await fetchAllRecords('User', userFields);
+    const userApiFilter = `IsActive = true and Contact_Status__cf != 'Inactive' and Contact_Status__cf != 'Terminated'`;
+    const allUsers = await fetchAllRecords('User', userFields, userApiFilter);
     const filteredUsers = filterUsers(allUsers);
     
     // Get current database counts
@@ -1117,11 +1247,366 @@ async function previewSync() {
   }
 }
 
+/**
+ * Sync leads from Impartner
+ * Tracks leads associated with partner accounts for reporting
+ */
+async function syncLeads(mode = 'incremental') {
+  const syncType = 'sync_leads';
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`📊 IMPARTNER LEADS SYNC - ${mode.toUpperCase()} MODE`);
+  console.log(`${'='.repeat(60)}`);
+  console.log(`Started at: ${new Date().toISOString()}`);
+  
+  const stats = {
+    processed: 0,
+    created: 0,
+    updated: 0,
+    deleted: 0,
+    skipped: 0,
+    filtered: 0,  // Leads without partner association
+    failed: 0,
+    errors: []
+  };
+  
+  try {
+    // Get last sync time for incremental mode
+    let sinceDate = null;
+    if (mode === 'incremental') {
+      sinceDate = await getLastSyncTime(syncType);
+      if (sinceDate) {
+        console.log(`📅 Incremental sync since: ${sinceDate}`);
+      } else {
+        console.log(`📅 No previous sync found, running full sync`);
+        mode = 'full';
+      }
+    }
+    
+    // Fetch leads from Impartner
+    // Valid fields discovered: Id, FirstName, LastName, Email, Phone, Title, StatusId, Source, Created, Updated, Description, CrmId, PartnerAccountId
+    const fields = [
+      'Id', 'FirstName', 'LastName', 'Email', 'Phone', 'Title',
+      'StatusId', 'Source', 'Description', 'CrmId',
+      'PartnerAccountId', 'Created', 'Updated'
+    ].join(',');
+    
+    // Filter at API level: only fetch leads with a partner account
+    // This reduces API calls from ~72K to ~20K records
+    const leadFilter = 'PartnerAccountId != null';
+    
+    const allLeads = await fetchAllRecords('Lead', fields, leadFilter, sinceDate);
+    console.log(`📥 Fetched ${allLeads.length} leads from Impartner (filtered to partner-linked only)`);
+    
+    // Fetch LeadStatus lookup table
+    console.log('📋 Fetching LeadStatus lookup table...');
+    let statusMap = new Map();
+    try {
+      const statuses = await fetchAllRecords('LeadStatus', 'Id,Name');
+      statuses.forEach(s => statusMap.set(s.id, s.name));
+      console.log(`   Found ${statuses.length} lead statuses`);
+    } catch (err) {
+      console.warn(`   ⚠️ Could not fetch LeadStatus table: ${err.message}`);
+    }
+    
+    // Build partner lookup map (impartner_id -> local id)
+    const partners = await query('SELECT id, impartner_id, account_name FROM partners WHERE impartner_id IS NOT NULL');
+    const partnerByImpartnerId = new Map();
+    partners.forEach(p => partnerByImpartnerId.set(p.impartner_id, p));
+    console.log(`💾 Partner lookup map: ${partners.length} partners with impartner_id`);
+    
+    // Get existing leads for update detection
+    const existingLeads = await query('SELECT id, impartner_id FROM leads');
+    const leadByImpartnerId = new Map();
+    existingLeads.forEach(l => leadByImpartnerId.set(l.impartner_id, l));
+    console.log(`💾 Existing leads in DB: ${existingLeads.length}`);
+    
+    // Filter leads - only include leads attached to a partner we KNOW about in our DB
+    // (API filter removes null PartnerAccountId, but we still need to match our partner list)
+    const leadsWithKnownPartner = allLeads.filter(l => {
+      return l.partnerAccountId && partnerByImpartnerId.has(l.partnerAccountId);
+    });
+    stats.filtered = allLeads.length - leadsWithKnownPartner.length;
+    console.log(`📋 LEAD FILTER RESULTS:`);
+    console.log(`   📥 Leads from API (with PartnerAccountId): ${allLeads.length}`);
+    console.log(`   ✅ Leads matching known partners: ${leadsWithKnownPartner.length}`);
+    console.log(`   ❌ Leads with unknown partner (excluded): ${stats.filtered}`);
+    
+    // Track valid Impartner IDs for deletion detection (only partner-linked leads)
+    const validImpartnerIds = new Set();
+    if (mode === 'full') {
+      leadsWithKnownPartner.forEach(l => validImpartnerIds.add(l.id));
+    }
+    
+    // Process leads (only those with known partners)
+    for (const lead of leadsWithKnownPartner) {
+      stats.processed++;
+      
+      try {
+        const impartnerId = lead.id;
+        const impartnerPartnerId = lead.partnerAccountId || null;
+        
+        // Look up local partner ID
+        let localPartnerId = null;
+        if (impartnerPartnerId) {
+          const partner = partnerByImpartnerId.get(impartnerPartnerId);
+          if (partner) {
+            localPartnerId = partner.id;
+          }
+        }
+        
+        // Parse dates
+        let leadCreatedAt = null;
+        let leadUpdatedAt = null;
+        try {
+          if (lead.created) leadCreatedAt = new Date(lead.created).toISOString().slice(0, 19).replace('T', ' ');
+          if (lead.updated) leadUpdatedAt = new Date(lead.updated).toISOString().slice(0, 19).replace('T', ' ');
+        } catch (e) {
+          // Date parsing failed, leave as null
+        }
+        
+        // Prepare lead data
+        const leadData = {
+          impartner_id: impartnerId,
+          partner_id: localPartnerId,
+          impartner_partner_id: impartnerPartnerId,
+          first_name: lead.firstName || null,
+          last_name: lead.lastName || null,
+          email: lead.email || null,
+          phone: lead.phone || null,
+          title: lead.title || null,
+          company_name: lead.companyName || null,
+          status_id: lead.statusId || null,
+          status_name: lead.statusId ? statusMap.get(lead.statusId) || null : null,
+          source: lead.source || null,
+          description: lead.description || null,
+          crm_id: lead.crmId || null,
+          lead_created_at: leadCreatedAt,
+          lead_updated_at: leadUpdatedAt,
+          synced_at: new Date().toISOString().slice(0, 19).replace('T', ' ')
+        };
+        
+        const existing = leadByImpartnerId.get(impartnerId);
+        
+        if (existing) {
+          // Update existing lead
+          await query(`
+            UPDATE leads SET
+              partner_id = ?,
+              impartner_partner_id = ?,
+              first_name = ?,
+              last_name = ?,
+              email = ?,
+              phone = ?,
+              title = ?,
+              company_name = ?,
+              status_id = ?,
+              status_name = ?,
+              source = ?,
+              description = ?,
+              crm_id = ?,
+              lead_created_at = ?,
+              lead_updated_at = ?,
+              synced_at = ?
+            WHERE impartner_id = ?
+          `, [
+            leadData.partner_id,
+            leadData.impartner_partner_id,
+            leadData.first_name,
+            leadData.last_name,
+            leadData.email,
+            leadData.phone,
+            leadData.title,
+            leadData.company_name,
+            leadData.status_id,
+            leadData.status_name,
+            leadData.source,
+            leadData.description,
+            leadData.crm_id,
+            leadData.lead_created_at,
+            leadData.lead_updated_at,
+            leadData.synced_at,
+            impartnerId
+          ]);
+          stats.updated++;
+        } else {
+          // Insert new lead
+          await query(`
+            INSERT INTO leads (
+              impartner_id, partner_id, impartner_partner_id,
+              first_name, last_name, email, phone, title, company_name,
+              status_id, status_name, source, description, crm_id,
+              lead_created_at, lead_updated_at, synced_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `, [
+            leadData.impartner_id,
+            leadData.partner_id,
+            leadData.impartner_partner_id,
+            leadData.first_name,
+            leadData.last_name,
+            leadData.email,
+            leadData.phone,
+            leadData.title,
+            leadData.company_name,
+            leadData.status_id,
+            leadData.status_name,
+            leadData.source,
+            leadData.description,
+            leadData.crm_id,
+            leadData.lead_created_at,
+            leadData.lead_updated_at,
+            leadData.synced_at
+          ]);
+          stats.created++;
+        }
+        
+        // Progress logging every 1000 records
+        if (stats.processed % 1000 === 0) {
+          console.log(`   Processed ${stats.processed}/${allLeads.length}...`);
+        }
+        
+      } catch (err) {
+        stats.failed++;
+        stats.errors.push({ id: lead.id, error: err.message });
+        if (stats.errors.length <= 5) {
+          console.error(`   ❌ Lead ${lead.id}: ${err.message}`);
+        }
+      }
+    }
+    
+    // Delete leads that no longer exist in Impartner (full sync only)
+    if (mode === 'full' && validImpartnerIds.size > 0) {
+      console.log(`\n🗑️ Checking for deleted leads...`);
+      const leadsToDelete = existingLeads.filter(l => !validImpartnerIds.has(l.impartner_id));
+      
+      if (leadsToDelete.length > 0) {
+        const deleteIds = leadsToDelete.map(l => l.impartner_id);
+        const placeholders = deleteIds.map(() => '?').join(',');
+        await query(`DELETE FROM leads WHERE impartner_id IN (${placeholders})`, deleteIds);
+        stats.deleted = leadsToDelete.length;
+        console.log(`   Deleted ${stats.deleted} leads no longer in Impartner`);
+      }
+    }
+    
+    // Update lead counts on partners table
+    console.log(`\n📊 Updating partner lead counts...`);
+    await updatePartnerLeadCounts();
+    
+    // Log sync completion
+    await logSync(syncType, 'completed', {
+      processed: stats.processed,
+      created: stats.created,
+      updated: stats.updated,
+      deleted: stats.deleted,
+      skipped: stats.filtered,
+      failed: stats.failed
+    });
+    
+    console.log(`\n✅ LEAD SYNC COMPLETE`);
+    console.log(`   Filtered (no partner): ${stats.filtered}`);
+    console.log(`   Processed: ${stats.processed}`);
+    console.log(`   Created: ${stats.created}`);
+    console.log(`   Updated: ${stats.updated}`);
+    console.log(`   Deleted: ${stats.deleted}`);
+    console.log(`   Failed: ${stats.failed}`);
+    
+    return stats;
+    
+  } catch (err) {
+    console.error(`\n❌ LEAD SYNC FAILED: ${err.message}`);
+    await logSync(syncType, 'error', {
+      processed: stats.processed,
+      failed: stats.failed,
+      error: err.message
+    });
+    throw err;
+  }
+}
+
+/**
+ * Update lead counts on partners table for quick aggregation
+ */
+async function updatePartnerLeadCounts() {
+  try {
+    // Update total lead count
+    await query(`
+      UPDATE partners p
+      SET lead_count = (
+        SELECT COUNT(*) FROM leads l WHERE l.partner_id = p.id
+      ),
+      leads_last_30_days = (
+        SELECT COUNT(*) FROM leads l 
+        WHERE l.partner_id = p.id 
+        AND l.lead_created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+      ),
+      leads_updated_at = NOW()
+    `);
+    console.log(`   ✅ Updated partner lead counts`);
+  } catch (err) {
+    console.error(`   ⚠️ Failed to update lead counts: ${err.message}`);
+  }
+}
+
+/**
+ * Get lead statistics
+ */
+async function getLeadStats() {
+  try {
+    const [total] = await query('SELECT COUNT(*) as count FROM leads');
+    const [withPartner] = await query('SELECT COUNT(*) as count FROM leads WHERE partner_id IS NOT NULL');
+    const [last30Days] = await query('SELECT COUNT(*) as count FROM leads WHERE lead_created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)');
+    
+    // Leads by status
+    const byStatus = await query(`
+      SELECT status_name, COUNT(*) as count 
+      FROM leads 
+      WHERE status_name IS NOT NULL
+      GROUP BY status_name 
+      ORDER BY count DESC
+    `);
+    
+    // Leads by source (top 10)
+    const bySource = await query(`
+      SELECT source, COUNT(*) as count 
+      FROM leads 
+      WHERE source IS NOT NULL AND source != ''
+      GROUP BY source 
+      ORDER BY count DESC
+      LIMIT 10
+    `);
+    
+    // Leads by month (last 12 months)
+    const byMonth = await query(`
+      SELECT 
+        DATE_FORMAT(lead_created_at, '%Y-%m') as month,
+        COUNT(*) as count
+      FROM leads
+      WHERE lead_created_at >= DATE_SUB(NOW(), INTERVAL 12 MONTH)
+      GROUP BY month
+      ORDER BY month DESC
+    `);
+    
+    return {
+      total: total.count,
+      withPartner: withPartner.count,
+      last30Days: last30Days.count,
+      byStatus,
+      bySource,
+      byMonth
+    };
+  } catch (err) {
+    console.error('Error getting lead stats:', err.message);
+    throw err;
+  }
+}
+
 module.exports = {
   syncPartners,
   syncContacts,
   syncAll,
   getSyncStatus,
   previewSync,
+  syncLeads,
+  updatePartnerLeadCounts,
+  getLeadStats,
   FILTERS
 };

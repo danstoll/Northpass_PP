@@ -34,11 +34,15 @@ const navigateTo = (path) => {
 };
 
 export default function PamManagement() {
+  // Read URL params to set initial filter state
+  const urlParams = new URLSearchParams(window.location.search);
+  const showActiveOnly = urlParams.get('active') === 'true';
+  
   const [tabValue, setTabValue] = useState(0);
   const [loading, setLoading] = useState(true);
   const [pams, setPams] = useState([]);
   const [stats, setStats] = useState({ totalOwners: 0, activePams: 0, withAccounts: 0, emailEnabled: 0 });
-  const [includeInactive, setIncludeInactive] = useState(true);
+  const [includeInactive, setIncludeInactive] = useState(!showActiveOnly);
   const [searchTerm, setSearchTerm] = useState('');
   
   // Email logs
@@ -78,7 +82,7 @@ export default function PamManagement() {
   // Fetch email logs
   const fetchEmailLogs = useCallback(async () => {
     try {
-      const response = await fetch('/api/db/email-log?limit=50');
+      const response = await fetch('/api/db/pams/email-logs?limit=50');
       const data = await response.json();
       setEmailLogs(data);
     } catch (error) {

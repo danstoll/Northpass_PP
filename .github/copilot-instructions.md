@@ -246,7 +246,7 @@ Routes are split into modular files in `server/routes/` for maintainability:
 - AdminPanel (URL Generator) - Removed January 2025, URLs now in Owner Report
 
 ### Database Sync Architecture
-**Schema Version**: 10 (January 2025)
+**Schema Version**: 19 (January 2026)
 
 **scheduled_tasks table**: Full task scheduler with 11 task types:
 - **Data Sync Tasks**:
@@ -344,7 +344,8 @@ Partners:
 | Partner_Type__cf | partner_type |
 | CrmId | salesforce_id |
 | Website | website |
-| MailingCountry | account_region |
+| Region | account_region | (APAC, EMEA, AMER, MENA, etc.)
+| MailingCountry | country | (United States, Australia, etc.)
 
 Contacts:
 | Impartner Field | MariaDB Field |
@@ -575,6 +576,42 @@ border: 1px solid #ddd;
 
 ## Recent Fixes (December 2025)
 
+### Login History Tracking (January 2026)
+- ✅ **New `login_history` table** (Schema v19) tracks all login attempts (success and failure)
+- ✅ Captures: user_id, email, success, failure_reason, ip_address, user_agent, login_method, session_id
+- ✅ Login methods tracked: `password`, `magic_link`, `sso`
+- ✅ Failure reasons: `invalid_email`, `wrong_password`, `account_disabled`, `invalid_magic_link`
+- ✅ **Service functions** in `authService.cjs`:
+  - `logLoginAttempt()` - Records login attempt
+  - `getLoginHistory()` - Paginated history with filters
+  - `getLoginStats()` - Success rate stats
+  - `getRecentFailedAttempts()` - Security monitoring
+  - `getLoginActivityByDay()` - Chart data
+  - `cleanupLoginHistory()` - Retention policy
+- ✅ **API Endpoints** (require `users.view` permission):
+  - `GET /api/db/auth/login-history` - Get login history (filters: userId, email, success, startDate, endDate)
+  - `GET /api/db/auth/login-stats` - Get login statistics (params: userId, days)
+  - `GET /api/db/auth/failed-attempts` - Security monitoring (params: hours, minAttempts)
+  - `GET /api/db/auth/login-activity` - Daily chart data (params: days, userId)
+  - `POST /api/db/auth/login-history/cleanup` - Delete old records (body: retentionDays)
+
+### Push to Impartner Sync Table Name Fix (January 2026)
+- ✅ Fixed 500 error in Push to Impartner sync task (`POST /api/db/certifications/sync-to-impartner`)
+- ✅ Corrected table name from `sync_log` (singular) to `sync_logs` (plural) throughout codebase
+- ✅ Updated references in: [dbRoutes.cjs](server/dbRoutes.cjs), [taskScheduler.cjs](server/db/taskScheduler.cjs), [syncRoutes.cjs](server/routes/syncRoutes.cjs)
+- ✅ Production database uses `northpass_portal` schema with `sync_logs` table (note: local dev uses `northpass` schema)
+- ✅ Error was: `Table 'northpass_portal.sync_log' doesn't exist` - now resolved
+- ✅ **Changed default mode from "full" to "incremental"** in schema (v13 migration)
+- ✅ **Added sync_logs logging** to both scheduled task and manual endpoint
+- ✅ Sync history now properly tracked in sync_logs table with status, records, and timestamps
+- ✅ **Fixed Salesforce ID matching** to handle both 15-char and 18-char formats with prefix matching
+- ✅ Database has 81 partners with 15-char IDs and 1,409 with 18-char IDs - now all matched correctly
+- ✅ **Added mode toggle UI** on all sync tasks to switch between full/incremental via expandable config section
+- ✅ Mode toggle endpoint: `PUT /api/db/tasks/:taskType/config` with `{"mode": "full"|"incremental"}`
+- ✅ **Fixed "Run Now" button** to read task config and pass mode as query parameter to API endpoint
+- ✅ All sync endpoints now properly log to sync_logs table (users, groups, courses, enrollments, impartner)
+- ✅ Verified comprehensive sync history tracking across all 9 sync task types
+
 ### Analytics - Partner Users Only (January 2025)
 - ✅ Analytics now only track **partner users** (users in partner groups OR linked via contacts)
 - ✅ Non-partner users (customers, internal users) excluded from all trend/KPI metrics
@@ -641,7 +678,23 @@ All endpoints support `?region=&owner=&tier=` filter parameters.
 - ✅ Search box, quick stats display, notifications, and user profile menu
 - ✅ Mobile-responsive hamburger menu integration
 - ✅ Sidebar now positioned below top navbar (64px offset)
-- ✅ Current cache version: **207**
+- ✅ Current cache version: **254**
+
+### Sync Task Logging Improvements (January 2026)
+- ✅ **All sync tasks now log to `sync_logs` table** (not just Impartner)
+- ✅ Task scheduler modified to create sync_logs entries for all tasks except impartner_sync/sync_to_impartner (which handle their own)
+- ✅ Full record counts: records_processed, records_created, records_updated, records_deleted, records_failed
+- ✅ Error handling: Failed tasks also log to sync_logs with error_message
+- ✅ **New endpoint**: `POST /api/db/sync/cleanup-stuck` - Cleans up stuck sync logs (older than 30 min)
+- ✅ Self-logging tasks (handle their own sync_logs): `impartner_sync`, `sync_to_impartner`
+- ✅ Verified: sync_courses now visible in History tab with full details
+
+### Offboarding Schema Fix (January 2026)
+- ✅ Fixed `Unknown column 'g.northpass_id'` error in offboardingService.cjs
+- ✅ `lms_groups` table uses `id` directly as the Northpass ID (no separate `northpass_id` column)
+- ✅ Fixed 6 locations in offboardingService.cjs: getAllPartnersGroupId(), deleteLmsGroup(), offboardContact(), offboardPartner()
+- ✅ Offboarding now works: Successfully deleted LMS groups for Exent, Diggics, S.A. Investment Holdings, etc.
+- ✅ Soft-deleted partners are automatically offboarded during full Impartner syncs
 
 ### CSS Variable Theming System
 - ✅ All 14 CSS files converted to use CSS variables

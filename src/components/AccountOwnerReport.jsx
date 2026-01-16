@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { Box, FormControl, InputLabel, Select, MenuItem } from '@mui/material';
+import { Box, FormControl, InputLabel, Select, MenuItem, Tooltip, IconButton, Typography } from '@mui/material';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { generateEncodedUrl } from '../utils/urlEncoder';
 import {
   PageHeader,
@@ -18,6 +19,115 @@ import {
 import './AccountOwnerReport.css';
 
 const BASE_URL = 'https://ptrlrndb.prod.ntxgallery.com/';
+const SFDC_BASE_URL = 'https://nintex.lightning.force.com/lightning/r/Account/';
+const IMPARTNER_BASE_URL = 'https://prod.impartner.live/en/accounts/addOrUpdate.aspx?id=';
+
+// Metric definitions for info tooltips
+const METRIC_DEFINITIONS = {
+  partners: {
+    title: 'Partners',
+    description: 'Number of partner accounts assigned to this account owner.',
+    details: ['Filtered by current search and filter criteria', 'Each partner may have multiple contacts']
+  },
+  totalContacts: {
+    title: 'Total Contacts',
+    description: 'Total number of contacts across all partners for this owner.',
+    formula: 'Sum of contact_count for all displayed partners',
+    details: ['Includes all contacts in CRM for these partners', 'Not all contacts may be registered in LMS']
+  },
+  inLms: {
+    title: 'In LMS',
+    description: 'Number of contacts who are registered in the Northpass LMS.',
+    formula: 'Sum of contacts_in_lms for all displayed partners',
+    details: ['Users actively registered in learning platform', 'Can access courses and certifications']
+  },
+  totalNpcu: {
+    title: 'Total NPCU',
+    description: 'Sum of all NPCU (Nintex Partner Certification Units) across all partners.',
+    formula: 'Sum of total_npcu for all displayed partners',
+    details: ['Only valid (non-expired) certifications count', 'Higher NPCU indicates more certified staff']
+  },
+  tierBreakdown: {
+    title: 'Tier Breakdown',
+    description: 'Count of partners by partner tier level.',
+    details: [
+      'Premier: Highest tier partners (20+ NPCU required)',
+      'Select: Mid-tier partners (10+ NPCU required)',
+      'Registered: Entry-level partners (5+ NPCU required)',
+      'Certified: Partners with certifications'
+    ]
+  },
+  contacts: {
+    title: 'Contacts',
+    description: 'Number of contacts in CRM for this partner.',
+    details: ['All contacts associated with this partner account', 'Managed through Impartner CRM sync']
+  },
+  contactsInLms: {
+    title: 'In LMS',
+    description: 'Number of this partner\'s contacts registered in Northpass LMS.',
+    details: ['Users who can access learning content', 'Comparison with Contacts shows LMS adoption rate']
+  },
+  partnerNpcu: {
+    title: 'NPCU',
+    description: 'Total NPCU earned by this partner\'s users.',
+    formula: 'Sum of NPCU from valid certifications',
+    details: ['Only non-expired certifications count', 'Determines partner tier qualification']
+  },
+  primaryUser: {
+    title: 'Primary User',
+    description: 'The designated primary contact for this partner account.',
+    details: ['Set in Impartner CRM', 'Main point of contact for the partner', 'Synced automatically from Impartner']
+  },
+  crmLinks: {
+    title: 'CRM Links',
+    description: 'Quick links to the partner account in Salesforce and Impartner.',
+    details: ['SFDC: Opens Salesforce Lightning account page', 'IMP: Opens Impartner company profile page']
+  },
+  dashboardLink: {
+    title: 'Dashboard Link',
+    description: 'Direct link to this partner\'s certification dashboard.',
+    details: ['Opens partner-specific view showing their users', 'Can be shared with partner contacts', 'URL is encoded with company and tier']
+  }
+};
+
+// Info tooltip component
+const InfoTooltip = ({ metricKey }) => {
+  const metric = METRIC_DEFINITIONS[metricKey];
+  if (!metric) return null;
+  
+  return (
+    <Tooltip
+      title={
+        <Box sx={{ p: 1 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
+            {metric.title}
+          </Typography>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            {metric.description}
+          </Typography>
+          {metric.formula && (
+            <Typography variant="body2" sx={{ fontStyle: 'italic', color: 'rgba(255,255,255,0.8)', mb: 1 }}>
+              {metric.formula}
+            </Typography>
+          )}
+          {metric.details && metric.details.length > 0 && (
+            <Box component="ul" sx={{ m: 0, pl: 2, fontSize: '0.75rem' }}>
+              {metric.details.map((detail, i) => (
+                <li key={i}>{detail}</li>
+              ))}
+            </Box>
+          )}
+        </Box>
+      }
+      arrow
+      placement="top"
+    >
+      <IconButton size="small" sx={{ ml: 0.5, p: 0.25, opacity: 0.7, '&:hover': { opacity: 1 } }}>
+        <InfoOutlinedIcon sx={{ fontSize: 16 }} />
+      </IconButton>
+    </Tooltip>
+  );
+};
 
 export default function AccountOwnerReport() {
   const [accountOwners, setAccountOwners] = useState([]);
@@ -228,11 +338,44 @@ export default function AccountOwnerReport() {
       render: (val) => <TierBadge tier={val || 'Unknown'} />
     },
     { id: 'account_region', label: 'Region', render: (val) => val || 'N/A' },
-    { id: 'contact_count', label: 'Contacts', align: 'center', render: (val) => parseInt(val, 10) || 0 },
-    { id: 'contacts_in_lms', label: 'In LMS', align: 'center', render: (val) => parseInt(val, 10) || 0 },
+    {
+      id: 'primary_user',
+      label: <Box sx={{ display: 'flex', alignItems: 'center' }}>Primary User<InfoTooltip metricKey="primaryUser" /></Box>,
+      render: (_, row) => {
+        if (!row.primary_user_name && !row.primary_user_email) {
+          return <span style={{ color: '#999', fontStyle: 'italic' }}>Not set</span>;
+        }
+        return (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+            <span style={{ fontWeight: 500 }}>{row.primary_user_name || 'N/A'}</span>
+            {row.primary_user_email && (
+              <a 
+                href={`mailto:${row.primary_user_email}`} 
+                style={{ color: '#6B4C9A', fontSize: '0.85em', textDecoration: 'none' }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {row.primary_user_email}
+              </a>
+            )}
+          </Box>
+        );
+      }
+    },
+    { 
+      id: 'contact_count', 
+      label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Contacts<InfoTooltip metricKey="contacts" /></Box>, 
+      align: 'center', 
+      render: (val) => parseInt(val, 10) || 0 
+    },
+    { 
+      id: 'contacts_in_lms', 
+      label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>In LMS<InfoTooltip metricKey="contactsInLms" /></Box>, 
+      align: 'center', 
+      render: (val) => parseInt(val, 10) || 0 
+    },
     { 
       id: 'total_npcu', 
-      label: 'NPCU', 
+      label: <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>NPCU<InfoTooltip metricKey="partnerNpcu" /></Box>, 
       align: 'center',
       render: (val) => (
         <span style={{ color: parseInt(val, 10) > 0 ? '#43E97B' : 'inherit', fontWeight: 600 }}>
@@ -241,8 +384,69 @@ export default function AccountOwnerReport() {
       )
     },
     {
+      id: 'crm_links',
+      label: <Box sx={{ display: 'flex', alignItems: 'center' }}>CRM<InfoTooltip metricKey="crmLinks" /></Box>,
+      align: 'center',
+      render: (_, row) => (
+        <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center' }}>
+          {row.salesforce_id ? (
+            <Tooltip title="Open in Salesforce">
+              <a
+                href={`${SFDC_BASE_URL}${row.salesforce_id}/view`}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '4px 8px',
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  color: '#fff',
+                  backgroundColor: '#00A1E0',
+                  borderRadius: '4px',
+                  textDecoration: 'none'
+                }}
+              >
+                SFDC
+              </a>
+            </Tooltip>
+          ) : (
+            <span style={{ color: '#ccc', fontSize: '0.75rem' }}>—</span>
+          )}
+          {row.impartner_id ? (
+            <Tooltip title="Open in Impartner">
+              <a
+                href={`${IMPARTNER_BASE_URL}${row.impartner_id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '4px 8px',
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  color: '#fff',
+                  backgroundColor: '#FF6B35',
+                  borderRadius: '4px',
+                  textDecoration: 'none'
+                }}
+              >
+                IMP
+              </a>
+            </Tooltip>
+          ) : (
+            <span style={{ color: '#ccc', fontSize: '0.75rem' }}>—</span>
+          )}
+        </Box>
+      )
+    },
+    {
       id: 'actions',
-      label: 'Dashboard',
+      label: <Box sx={{ display: 'flex', alignItems: 'center' }}>Dashboard<InfoTooltip metricKey="dashboardLink" /></Box>,
       render: (_, row) => (
         <Box sx={{ display: 'flex', gap: 1 }}>
           <ActionButton
@@ -296,24 +500,30 @@ export default function AccountOwnerReport() {
         <>
           {/* Summary Stats */}
           <StatsRow columns={4}>
-            <StatCard icon="🏢" value={summaryStats.totalAccounts} label="Partners" variant="primary" />
-            <StatCard icon="👥" value={summaryStats.totalContacts} label="Total Contacts" />
-            <StatCard icon="📚" value={summaryStats.contactsInLms} label="In LMS" variant="success" />
-            <StatCard icon="🏆" value={summaryStats.totalNpcu} label="Total NPCU" variant="primary" />
+            <StatCard icon="🏢" value={summaryStats.totalAccounts} label={<>Partners <InfoTooltip metricKey="partners" /></>} variant="primary" />
+            <StatCard icon="👥" value={summaryStats.totalContacts} label={<>Total Contacts <InfoTooltip metricKey="totalContacts" /></>} />
+            <StatCard icon="📚" value={summaryStats.contactsInLms} label={<>In LMS <InfoTooltip metricKey="inLms" /></>} variant="success" />
+            <StatCard icon="🏆" value={summaryStats.totalNpcu} label={<>Total NPCU <InfoTooltip metricKey="totalNpcu" /></>} variant="primary" />
           </StatsRow>
 
           {/* Tier Stats */}
           {Object.keys(summaryStats.tierCounts).length > 0 && (
-            <StatsRow columns={Object.keys(summaryStats.tierCounts).length}>
-              {Object.entries(summaryStats.tierCounts).map(([tier, count]) => (
-                <StatCard 
-                  key={tier} 
-                  value={count} 
-                  label={tier}
-                  variant={tier.toLowerCase() === 'premier' ? 'primary' : 'default'}
-                />
-              ))}
-            </StatsRow>
+            <Box sx={{ mb: 2 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1, pl: 1 }}>
+                <Typography variant="subtitle2" sx={{ color: 'text.secondary' }}>Tier Breakdown</Typography>
+                <InfoTooltip metricKey="tierBreakdown" />
+              </Box>
+              <StatsRow columns={Object.keys(summaryStats.tierCounts).length}>
+                {Object.entries(summaryStats.tierCounts).map(([tier, count]) => (
+                  <StatCard 
+                    key={tier} 
+                    value={count} 
+                    label={tier}
+                    variant={tier.toLowerCase() === 'premier' ? 'primary' : 'default'}
+                  />
+                ))}
+              </StatsRow>
+            </Box>
           )}
 
           {/* Filters */}
@@ -383,9 +593,13 @@ export default function AccountOwnerReport() {
                     'Partner Name': acc.account_name,
                     'Tier': acc.partner_tier || 'N/A',
                     'Region': acc.account_region || 'N/A',
+                    'Primary User': acc.primary_user_name || 'N/A',
+                    'Primary Email': acc.primary_user_email || 'N/A',
                     'Contacts': acc.contact_count || 0,
                     'In LMS': acc.contacts_in_lms || 0,
                     'NPCU': acc.total_npcu || 0,
+                    'Salesforce URL': acc.salesforce_id ? `${SFDC_BASE_URL}${acc.salesforce_id}/view` : 'N/A',
+                    'Impartner URL': acc.impartner_id ? `${IMPARTNER_BASE_URL}${acc.impartner_id}` : 'N/A',
                     'Dashboard URL': generateDashboardLink(acc)
                   }));
                   
@@ -414,9 +628,13 @@ export default function AccountOwnerReport() {
                     partnerName: acc.account_name,
                     tier: acc.partner_tier,
                     region: acc.account_region,
+                    primaryUserName: acc.primary_user_name,
+                    primaryUserEmail: acc.primary_user_email,
                     contacts: acc.contact_count,
                     contactsInLms: acc.contacts_in_lms,
                     npcu: acc.total_npcu,
+                    salesforceUrl: acc.salesforce_id ? `${SFDC_BASE_URL}${acc.salesforce_id}/view` : null,
+                    impartnerUrl: acc.impartner_id ? `${IMPARTNER_BASE_URL}${acc.impartner_id}` : null,
                     dashboardUrl: generateDashboardLink(acc)
                   }));
                   

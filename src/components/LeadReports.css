@@ -1,0 +1,152 @@
+/* Lead Reports Styles */
+
+.lead-reports {
+  min-height: 100%;
+  width: 100%;
+}
+
+.lead-reports .MuiTabs-root {
+  background: var(--admin-bg-card);
+  border-radius: 8px;
+  width: 100%;
+}
+
+.lead-reports .MuiTab-root {
+  text-transform: none;
+  font-weight: 500;
+  min-height: 48px;
+}
+
+.lead-reports .MuiTab-root.Mui-selected {
+  color: var(--nintex-orange);
+}
+
+.lead-reports .MuiTabs-indicator {
+  background-color: var(--nintex-orange);
+}
+
+/* Stats Row */
+.lead-reports .stats-row {
+  margin-bottom: 24px;
+  width: 100%;
+}
+
+/* Section Cards */
+.lead-reports .section-card {
+  background: var(--admin-bg-card);
+  border-radius: 8px;
+  border: 1px solid var(--admin-border-default);
+}
+
+/* Tables - full width */
+.lead-reports .MuiPaper-root {
+  width: 100%;
+}
+
+.lead-reports .MuiTable-root {
+  width: 100%;
+}
+
+.lead-reports .MuiTableHead-root {
+  background: var(--admin-bg-elevated);
+}
+
+.lead-reports .MuiTableCell-head {
+  font-weight: 600;
+  color: var(--admin-text-primary);
+}
+
+.lead-reports .MuiTableRow-root:hover {
+  background: var(--admin-bg-hover);
+}
+
+/* Charts - full width */
+.lead-reports .recharts-responsive-container {
+  min-height: 300px;
+}
+
+.lead-reports .recharts-legend-item-text {
+  color: var(--admin-text-secondary) !important;
+}
+
+/* Grid full width */
+.lead-reports .MuiGrid-container {
+  width: 100%;
+}
+
+/* Progress bars */
+.lead-reports .MuiLinearProgress-root {
+  border-radius: 4px;
+}
+
+/* Pagination */
+.lead-reports .MuiTablePagination-root {
+  border-top: 1px solid var(--admin-border-light);
+}
+
+/* Filters */
+.lead-reports .MuiFormControl-root {
+  background: var(--admin-bg-card);
+}
+
+/* Chips */
+.lead-reports .MuiChip-root {
+  font-size: 12px;
+}
+
+/* Growth indicators */
+.lead-reports .growth-positive {
+  color: var(--admin-success-text);
+  background: var(--admin-success-bg);
+}
+
+.lead-reports .growth-negative {
+  color: var(--admin-error-text);
+  background: var(--admin-error-bg);
+}
+
+/* Card spacing */
+.lead-reports .MuiCard-root {
+  margin-bottom: 16px;
+}
+
+/* Summary boxes */
+.lead-reports .summary-box {
+  padding: 16px;
+  background: var(--admin-bg-elevated);
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+/* Empty state */
+.lead-reports .empty-state {
+  text-align: center;
+  padding: 48px;
+  color: var(--admin-text-muted);
+}
+
+/* Loading */
+.lead-reports .loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px;
+  gap: 16px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .lead-reports .MuiTabs-root {
+    overflow-x: auto;
+  }
+  
+  .lead-reports .MuiTab-root {
+    min-width: auto;
+    padding: 8px 12px;
+  }
+  
+  .lead-reports .stats-row {
+    flex-direction: column;
+  }
+}

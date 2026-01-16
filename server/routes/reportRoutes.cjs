@@ -38,8 +38,19 @@ router.get('/partner-npcu', async (req, res) => {
         p.account_owner,
         COUNT(DISTINCT c.id) as contact_count,
         COUNT(DISTINCT CASE WHEN c.lms_user_id IS NOT NULL THEN c.id END) as lms_users,
-        SUM(CASE WHEN e.status = 'completed' AND c.npcu_value > 0 THEN c.npcu_value ELSE 0 END) as total_npcu,
-        COUNT(DISTINCT CASE WHEN e.status = 'completed' AND c.is_certification = 1 THEN e.id END) as certifications
+        -- Only count NPCU from non-expired certifications
+        SUM(CASE 
+          WHEN e.status = 'completed' AND c.npcu_value > 0 
+               AND (e.expires_at IS NULL OR e.expires_at > NOW()) 
+          THEN c.npcu_value 
+          ELSE 0 
+        END) as total_npcu,
+        -- Only count non-expired certifications
+        COUNT(DISTINCT CASE 
+          WHEN e.status = 'completed' AND c.is_certification = 1 
+               AND (e.expires_at IS NULL OR e.expires_at > NOW()) 
+          THEN e.id 
+        END) as certifications
       FROM partners p
       LEFT JOIN contacts ct ON ct.partner_id = p.id
       LEFT JOIN lms_users u ON u.id = ct.lms_user_id
@@ -227,6 +238,43 @@ router.get('/recent-activity', async (req, res) => {
   }
 });
 
+// Recent certifications (NPCU courses completed) with partner info - PARTNER USERS ONLY
+router.get('/recent-certifications', async (req, res) => {
+  try {
+    const forceRefresh = req.query.refresh === 'true';
+    const cacheKey = `recent-certifications-${req.query.days || 30}-${req.query.limit || 10}`;
+    if (!forceRefresh && isCacheValid(cacheKey)) {
+      return res.json(reportCache[cacheKey].data);
+    }
+    const { days = 30, limit = 10 } = req.query;
+    const results = await query(`
+      SELECT 
+        e.id as enrollment_id,
+        e.completed_at,
+        u.email,
+        CONCAT(u.first_name, ' ', u.last_name) as user_name,
+        c.name as course_name,
+        c.npcu_value,
+        p.id as partner_id,
+        p.account_name as partner_name,
+        p.partner_tier
+      FROM lms_enrollments e
+      INNER JOIN lms_users u ON u.id = e.user_id
+      INNER JOIN lms_courses c ON c.id = e.course_id AND c.npcu_value > 0
+      INNER JOIN contacts ct ON ct.lms_user_id = u.id AND ct.partner_id IS NOT NULL
+      INNER JOIN partners p ON p.id = ct.partner_id
+      WHERE e.status = 'completed'
+        AND e.completed_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+      ORDER BY e.completed_at DESC
+      LIMIT ?
+    `, [parseInt(days), parseInt(limit)]);
+    setCache(cacheKey, results);
+    res.json(results);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/expiring-certifications', async (req, res) => {
   try {
     const forceRefresh = req.query.refresh === 'true';
@@ -394,8 +442,19 @@ router.get('/user-certifications', async (req, res) => {
         u.id as lms_user_id,
         u.status as lms_status,
         COUNT(DISTINCT CASE WHEN e.status = 'completed' THEN e.id END) as completed_courses,
-        COUNT(DISTINCT CASE WHEN e.status = 'completed' AND co.is_certification = 1 THEN e.id END) as certifications,
-        COALESCE(SUM(CASE WHEN e.status = 'completed' THEN co.npcu_value ELSE 0 END), 0) as total_npcu,
+        -- Only count non-expired certifications
+        COUNT(DISTINCT CASE 
+          WHEN e.status = 'completed' AND co.is_certification = 1 
+               AND (e.expires_at IS NULL OR e.expires_at > NOW()) 
+          THEN e.id 
+        END) as certifications,
+        -- Only count NPCU from non-expired certifications
+        COALESCE(SUM(CASE 
+          WHEN e.status = 'completed' AND co.npcu_value > 0 
+               AND (e.expires_at IS NULL OR e.expires_at > NOW()) 
+          THEN co.npcu_value 
+          ELSE 0 
+        END), 0) as total_npcu,
         MAX(e.completed_at) as last_completion
       FROM contacts c
       INNER JOIN partners p ON p.id = c.partner_id
@@ -564,11 +623,13 @@ router.get('/lms-users-not-in-crm', async (req, res) => {
 
 router.get('/owners', async (req, res) => {
   try {
+    // Only return owners that are active PAMs in the partner_managers table
     const owners = await query(`
       SELECT 
         p.account_owner,
         COUNT(DISTINCT p.id) as partner_count
       FROM partners p
+      INNER JOIN partner_managers pm ON pm.owner_name = p.account_owner AND pm.is_active_pam = TRUE
       WHERE p.account_owner IS NOT NULL 
         AND p.account_owner != ''
       GROUP BY p.account_owner
@@ -600,6 +661,10 @@ router.get('/owner-accounts', async (req, res) => {
         p.partner_tier,
         p.account_region,
         p.account_owner,
+        p.primary_user_name,
+        p.primary_user_email,
+        p.salesforce_id,
+        p.impartner_id,
         (SELECT COUNT(*) FROM contacts c WHERE c.partner_id = p.id) as contact_count,
         (SELECT COUNT(*) FROM contacts c WHERE c.partner_id = p.id AND c.lms_user_id IS NOT NULL) as contacts_in_lms,
         COALESCE(g.user_count, 0) as lms_users,
@@ -637,6 +702,13 @@ router.get('/filters', async (req, res) => {
       WHERE account_region IS NOT NULL AND account_region != ''
       ORDER BY account_region
     `);
+
+    const countries = await query(`
+      SELECT DISTINCT country as value 
+      FROM partners 
+      WHERE country IS NOT NULL AND country != ''
+      ORDER BY country
+    `);
     
     const owners = await query(`
       SELECT DISTINCT account_owner as value 
@@ -645,12 +717,960 @@ router.get('/filters', async (req, res) => {
       ORDER BY account_owner
     `);
 
+    const partners = await query(`
+      SELECT id as value, account_name as label 
+      FROM partners 
+      WHERE is_active = TRUE AND account_name IS NOT NULL AND account_name != ''
+      ORDER BY account_name
+    `);
+
     res.json({ 
       tiers: tiers.map(t => t.value),
       regions: regions.map(r => r.value),
-      owners: owners.map(o => o.value)
+      countries: countries.map(c => c.value),
+      owners: owners.map(o => o.value),
+      partners: partners.map(p => ({ value: p.value, label: p.label }))
     });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// Activity Timeline Report
+// Time-series data for enrollments/certifications with anomaly detection
+// Use case: Identify leading indicators like activity drops or spikes
+// ============================================
+
+router.get('/activity-timeline', async (req, res) => {
+  try {
+    const { 
+      partnerId, tier, region, country, owner, 
+      months = 12, 
+      granularity = 'month' // month, week
+    } = req.query;
+
+    // Build filter conditions
+    let filterConditions = ['p.is_active = TRUE'];
+    const filterParams = [];
+
+    if (partnerId) {
+      filterConditions.push('p.id = ?');
+      filterParams.push(partnerId);
+    }
+    if (tier) {
+      filterConditions.push('p.partner_tier = ?');
+      filterParams.push(tier);
+    }
+    if (region) {
+      filterConditions.push('p.account_region = ?');
+      filterParams.push(region);
+    }
+    if (country) {
+      filterConditions.push('p.country = ?');
+      filterParams.push(country);
+    }
+    if (owner) {
+      filterConditions.push('p.account_owner = ?');
+      filterParams.push(owner);
+    }
+
+    const filterClause = filterConditions.join(' AND ');
+
+    // Date format based on granularity
+    const dateFormat = granularity === 'week' ? '%Y-W%v' : '%Y-%m';
+    const dateLabel = granularity === 'week' ? 'week' : 'month';
+    const interval = granularity === 'week' ? `${months * 4} WEEK` : `${months} MONTH`;
+
+    // Partner users subquery
+    const partnerUserSubquery = `
+      SELECT DISTINCT gm.user_id, g.partner_id
+      FROM lms_group_members gm
+      INNER JOIN lms_groups g ON g.id = gm.group_id
+      WHERE g.partner_id IS NOT NULL
+    `;
+
+    // Get enrollment activity timeline
+    const enrollmentSql = `
+      SELECT 
+        DATE_FORMAT(e.enrolled_at, '${dateFormat}') as period,
+        COUNT(*) as enrollments,
+        COUNT(DISTINCT e.user_id) as unique_users,
+        COUNT(DISTINCT pu.partner_id) as partners_active
+      FROM lms_enrollments e
+      INNER JOIN (${partnerUserSubquery}) pu ON pu.user_id = e.user_id
+      INNER JOIN partners p ON p.id = pu.partner_id
+      WHERE e.enrolled_at >= DATE_SUB(CURDATE(), INTERVAL ${interval})
+        AND e.enrolled_at IS NOT NULL
+        AND ${filterClause}
+      GROUP BY DATE_FORMAT(e.enrolled_at, '${dateFormat}')
+      ORDER BY period ASC
+    `;
+
+    // Get completion/certification activity timeline  
+    const completionSql = `
+      SELECT 
+        DATE_FORMAT(e.completed_at, '${dateFormat}') as period,
+        COUNT(*) as completions,
+        COUNT(DISTINCT CASE WHEN co.npcu_value > 0 THEN e.id END) as certifications,
+        SUM(CASE WHEN co.npcu_value > 0 THEN co.npcu_value ELSE 0 END) as npcu_earned,
+        COUNT(DISTINCT e.user_id) as unique_completers,
+        COUNT(DISTINCT pu.partner_id) as partners_completing
+      FROM lms_enrollments e
+      INNER JOIN (${partnerUserSubquery}) pu ON pu.user_id = e.user_id
+      INNER JOIN partners p ON p.id = pu.partner_id
+      LEFT JOIN lms_courses co ON co.id = e.course_id
+      WHERE e.completed_at >= DATE_SUB(CURDATE(), INTERVAL ${interval})
+        AND e.completed_at IS NOT NULL
+        AND e.status = 'completed'
+        AND ${filterClause}
+      GROUP BY DATE_FORMAT(e.completed_at, '${dateFormat}')
+      ORDER BY period ASC
+    `;
+
+    // Get partner-level activity for anomaly detection
+    const partnerActivitySql = `
+      SELECT 
+        p.id as partner_id,
+        p.account_name,
+        p.partner_tier,
+        p.account_region,
+        p.country,
+        p.account_owner,
+        DATE_FORMAT(e.completed_at, '${dateFormat}') as period,
+        COUNT(*) as completions,
+        COUNT(DISTINCT CASE WHEN co.npcu_value > 0 THEN e.id END) as certifications
+      FROM lms_enrollments e
+      INNER JOIN (${partnerUserSubquery}) pu ON pu.user_id = e.user_id
+      INNER JOIN partners p ON p.id = pu.partner_id
+      LEFT JOIN lms_courses co ON co.id = e.course_id
+      WHERE e.completed_at >= DATE_SUB(CURDATE(), INTERVAL ${interval})
+        AND e.completed_at IS NOT NULL
+        AND e.status = 'completed'
+        AND ${filterClause}
+      GROUP BY p.id, p.account_name, p.partner_tier, p.account_region, p.country, p.account_owner,
+               DATE_FORMAT(e.completed_at, '${dateFormat}')
+      ORDER BY period ASC, completions DESC
+    `;
+
+    const [enrollments, completions, partnerActivity] = await Promise.all([
+      query(enrollmentSql, [...filterParams]),
+      query(completionSql, [...filterParams]),
+      query(partnerActivitySql, [...filterParams])
+    ]);
+
+    // Merge enrollment and completion data by period
+    const periodMap = new Map();
+    
+    enrollments.forEach(e => {
+      periodMap.set(e.period, {
+        period: e.period,
+        enrollments: e.enrollments,
+        unique_enrollers: e.unique_users,
+        partners_enrolling: e.partners_active,
+        completions: 0,
+        certifications: 0,
+        npcu_earned: 0,
+        unique_completers: 0,
+        partners_completing: 0
+      });
+    });
+
+    completions.forEach(c => {
+      if (periodMap.has(c.period)) {
+        const existing = periodMap.get(c.period);
+        existing.completions = c.completions;
+        existing.certifications = c.certifications;
+        existing.npcu_earned = parseInt(c.npcu_earned) || 0;
+        existing.unique_completers = c.unique_completers;
+        existing.partners_completing = c.partners_completing;
+      } else {
+        periodMap.set(c.period, {
+          period: c.period,
+          enrollments: 0,
+          unique_enrollers: 0,
+          partners_enrolling: 0,
+          completions: c.completions,
+          certifications: c.certifications,
+          npcu_earned: parseInt(c.npcu_earned) || 0,
+          unique_completers: c.unique_completers,
+          partners_completing: c.partners_completing
+        });
+      }
+    });
+
+    // Convert to sorted array and calculate trends
+    const timeline = Array.from(periodMap.values()).sort((a, b) => a.period.localeCompare(b.period));
+    
+    // Calculate moving averages and anomaly scores
+    for (let i = 0; i < timeline.length; i++) {
+      const current = timeline[i];
+      
+      // Calculate 3-period moving average
+      if (i >= 2) {
+        const prev3 = timeline.slice(i - 2, i + 1);
+        current.enrollments_ma3 = Math.round(prev3.reduce((sum, p) => sum + p.enrollments, 0) / 3);
+        current.completions_ma3 = Math.round(prev3.reduce((sum, p) => sum + p.completions, 0) / 3);
+        current.certifications_ma3 = Math.round(prev3.reduce((sum, p) => sum + p.certifications, 0) / 3);
+      }
+      
+      // Calculate period-over-period change
+      if (i > 0) {
+        const prev = timeline[i - 1];
+        current.enrollments_change = current.enrollments - prev.enrollments;
+        current.completions_change = current.completions - prev.completions;
+        current.certifications_change = current.certifications - prev.certifications;
+        
+        // Calculate percentage change
+        current.enrollments_pct = prev.enrollments > 0 
+          ? Math.round((current.enrollments_change / prev.enrollments) * 100) 
+          : null;
+        current.completions_pct = prev.completions > 0 
+          ? Math.round((current.completions_change / prev.completions) * 100) 
+          : null;
+        current.certifications_pct = prev.certifications > 0 
+          ? Math.round((current.certifications_change / prev.certifications) * 100) 
+          : null;
+      }
+    }
+
+    // Calculate anomalies (significant deviations from average)
+    const avgEnrollments = timeline.reduce((sum, p) => sum + p.enrollments, 0) / timeline.length;
+    const avgCompletions = timeline.reduce((sum, p) => sum + p.completions, 0) / timeline.length;
+    const avgCertifications = timeline.reduce((sum, p) => sum + p.certifications, 0) / timeline.length;
+
+    // Standard deviation
+    const stdEnrollments = Math.sqrt(timeline.reduce((sum, p) => sum + Math.pow(p.enrollments - avgEnrollments, 2), 0) / timeline.length);
+    const stdCompletions = Math.sqrt(timeline.reduce((sum, p) => sum + Math.pow(p.completions - avgCompletions, 2), 0) / timeline.length);
+    const stdCertifications = Math.sqrt(timeline.reduce((sum, p) => sum + Math.pow(p.certifications - avgCertifications, 2), 0) / timeline.length);
+
+    // Mark anomalies (> 1.5 std from mean)
+    const anomalies = [];
+    timeline.forEach(p => {
+      p.isAnomalyEnrollments = stdEnrollments > 0 && Math.abs(p.enrollments - avgEnrollments) > 1.5 * stdEnrollments;
+      p.isAnomalyCompletions = stdCompletions > 0 && Math.abs(p.completions - avgCompletions) > 1.5 * stdCompletions;
+      p.isAnomalyCertifications = stdCertifications > 0 && Math.abs(p.certifications - avgCertifications) > 1.5 * stdCertifications;
+      
+      if (p.isAnomalyEnrollments || p.isAnomalyCompletions || p.isAnomalyCertifications) {
+        anomalies.push({
+          period: p.period,
+          type: p.isAnomalyEnrollments ? 'enrollments' : p.isAnomalyCompletions ? 'completions' : 'certifications',
+          direction: (p.isAnomalyEnrollments && p.enrollments > avgEnrollments) ||
+                     (p.isAnomalyCompletions && p.completions > avgCompletions) ||
+                     (p.isAnomalyCertifications && p.certifications > avgCertifications) ? 'spike' : 'drop',
+          value: p.isAnomalyEnrollments ? p.enrollments : p.isAnomalyCompletions ? p.completions : p.certifications
+        });
+      }
+    });
+
+    // Aggregate partner activity to find most/least active
+    const partnerTotals = new Map();
+    partnerActivity.forEach(pa => {
+      if (!partnerTotals.has(pa.partner_id)) {
+        partnerTotals.set(pa.partner_id, {
+          partner_id: pa.partner_id,
+          account_name: pa.account_name,
+          partner_tier: pa.partner_tier,
+          account_region: pa.account_region,
+          country: pa.country,
+          account_owner: pa.account_owner,
+          total_completions: 0,
+          total_certifications: 0,
+          active_periods: 0,
+          last_active: null,
+          periods: []
+        });
+      }
+      const partner = partnerTotals.get(pa.partner_id);
+      partner.total_completions += pa.completions;
+      partner.total_certifications += pa.certifications;
+      partner.active_periods++;
+      partner.periods.push({ period: pa.period, completions: pa.completions, certifications: pa.certifications });
+      if (!partner.last_active || pa.period > partner.last_active) {
+        partner.last_active = pa.period;
+      }
+    });
+
+    const partnerSummary = Array.from(partnerTotals.values());
+    
+    // Find partners with declining activity (recent periods lower than earlier)
+    const decliningPartners = partnerSummary.filter(p => {
+      if (p.periods.length < 3) return false;
+      const sorted = [...p.periods].sort((a, b) => a.period.localeCompare(b.period));
+      const firstHalf = sorted.slice(0, Math.floor(sorted.length / 2));
+      const secondHalf = sorted.slice(Math.floor(sorted.length / 2));
+      const firstAvg = firstHalf.reduce((sum, x) => sum + x.completions, 0) / firstHalf.length;
+      const secondAvg = secondHalf.reduce((sum, x) => sum + x.completions, 0) / secondHalf.length;
+      return secondAvg < firstAvg * 0.5; // 50% decline
+    }).sort((a, b) => b.total_completions - a.total_completions).slice(0, 10);
+
+    // Find partners with surging activity
+    const surgingPartners = partnerSummary.filter(p => {
+      if (p.periods.length < 3) return false;
+      const sorted = [...p.periods].sort((a, b) => a.period.localeCompare(b.period));
+      const firstHalf = sorted.slice(0, Math.floor(sorted.length / 2));
+      const secondHalf = sorted.slice(Math.floor(sorted.length / 2));
+      const firstAvg = firstHalf.reduce((sum, x) => sum + x.completions, 0) / firstHalf.length;
+      const secondAvg = secondHalf.reduce((sum, x) => sum + x.completions, 0) / secondHalf.length;
+      return secondAvg > firstAvg * 1.5; // 50% increase
+    }).sort((a, b) => b.total_completions - a.total_completions).slice(0, 10);
+
+    // Regional activity breakdown
+    const regionalActivity = new Map();
+    partnerActivity.forEach(pa => {
+      const key = pa.account_region || 'Unknown';
+      if (!regionalActivity.has(key)) {
+        regionalActivity.set(key, { 
+          region: key, 
+          completions: 0, 
+          certifications: 0, 
+          partners: new Set(),
+          topPartners: []
+        });
+      }
+      const region = regionalActivity.get(key);
+      region.completions += pa.completions;
+      region.certifications += pa.certifications;
+      region.partners.add(pa.partner_id);
+    });
+
+    // Calculate additional regional metrics and top partners per region
+    const regionalSummary = Array.from(regionalActivity.values())
+      .map(r => {
+        const partnerCount = r.partners.size;
+        return {
+          region: r.region,
+          partners: partnerCount,
+          completions: r.completions,
+          certifications: r.certifications,
+          avgCompletionsPerPartner: partnerCount > 0 ? Math.round(r.completions / partnerCount * 10) / 10 : 0,
+          avgCertsPerPartner: partnerCount > 0 ? Math.round(r.certifications / partnerCount * 10) / 10 : 0,
+          certificationRate: r.completions > 0 ? Math.round((r.certifications / r.completions) * 100) : 0
+        };
+      })
+      .sort((a, b) => b.completions - a.completions);
+
+    // Get top partners by region
+    const topPartnersByRegion = {};
+    partnerSummary.forEach(p => {
+      const region = p.account_region || 'Unknown';
+      if (!topPartnersByRegion[region]) {
+        topPartnersByRegion[region] = [];
+      }
+      topPartnersByRegion[region].push({
+        partner_id: p.partner_id,
+        account_name: p.account_name,
+        partner_tier: p.partner_tier,
+        total_completions: p.total_completions,
+        total_certifications: p.total_certifications
+      });
+    });
+    // Sort and limit to top 5 per region
+    Object.keys(topPartnersByRegion).forEach(region => {
+      topPartnersByRegion[region] = topPartnersByRegion[region]
+        .sort((a, b) => b.total_certifications - a.total_certifications)
+        .slice(0, 5);
+    });
+
+    // Get NPCU by region from completion data (must be before regionalNpcuTotals calculation)
+    const regionalNpcuSql = `
+      SELECT 
+        p.account_region as region,
+        DATE_FORMAT(e.completed_at, '${dateFormat}') as period,
+        SUM(CASE WHEN co.npcu_value > 0 THEN co.npcu_value ELSE 0 END) as npcu_earned
+      FROM lms_enrollments e
+      INNER JOIN (${partnerUserSubquery}) pu ON pu.user_id = e.user_id
+      INNER JOIN partners p ON p.id = pu.partner_id
+      LEFT JOIN lms_courses co ON co.id = e.course_id
+      WHERE e.completed_at >= DATE_SUB(CURDATE(), INTERVAL ${interval})
+        AND e.completed_at IS NOT NULL
+        AND e.status = 'completed'
+        AND ${filterClause}
+      GROUP BY p.account_region, DATE_FORMAT(e.completed_at, '${dateFormat}')
+      ORDER BY period ASC
+    `;
+    const regionalNpcu = await query(regionalNpcuSql, [...filterParams]);
+
+    // Calculate regional NPCU totals
+    const regionalNpcuTotals = {};
+    regionalNpcu.forEach(rn => {
+      const region = rn.region || 'Unknown';
+      if (!regionalNpcuTotals[region]) {
+        regionalNpcuTotals[region] = 0;
+      }
+      regionalNpcuTotals[region] += parseInt(rn.npcu_earned) || 0;
+    });
+
+    // Add NPCU to regional summary
+    regionalSummary.forEach(r => {
+      r.npcu = regionalNpcuTotals[r.region] || 0;
+      r.avgNpcuPerPartner = r.partners > 0 ? Math.round(r.npcu / r.partners * 10) / 10 : 0;
+    });
+
+    // Build regional timeline for trend lines (certifications and NPCU by region over time)
+    const regionalTimelineMap = new Map();
+    partnerActivity.forEach(pa => {
+      const regionKey = pa.account_region || 'Unknown';
+      if (!regionalTimelineMap.has(regionKey)) {
+        regionalTimelineMap.set(regionKey, new Map());
+      }
+      const regionPeriods = regionalTimelineMap.get(regionKey);
+      if (!regionPeriods.has(pa.period)) {
+        regionPeriods.set(pa.period, { period: pa.period, certifications: 0, completions: 0, npcu_earned: 0 });
+      }
+      const periodData = regionPeriods.get(pa.period);
+      periodData.certifications += pa.certifications || 0;
+      periodData.completions += pa.completions || 0;
+    });
+
+    // Merge NPCU into regional timeline
+    regionalNpcu.forEach(rn => {
+      const regionKey = rn.region || 'Unknown';
+      if (!regionalTimelineMap.has(regionKey)) {
+        regionalTimelineMap.set(regionKey, new Map());
+      }
+      const regionPeriods = regionalTimelineMap.get(regionKey);
+      if (!regionPeriods.has(rn.period)) {
+        regionPeriods.set(rn.period, { period: rn.period, certifications: 0, completions: 0, npcu_earned: 0 });
+      }
+      const periodData = regionPeriods.get(rn.period);
+      periodData.npcu_earned = parseInt(rn.npcu_earned) || 0;
+    });
+
+    // Convert to final regional timeline structure
+    const regionalTimeline = {};
+    regionalTimelineMap.forEach((periods, regionKey) => {
+      regionalTimeline[regionKey] = Array.from(periods.values()).sort((a, b) => a.period.localeCompare(b.period));
+    });
+
+    // Merge regional data into main timeline for proper chart alignment
+    timeline.forEach(t => {
+      // Add regional certifications
+      Object.keys(regionalTimeline).forEach(regionKey => {
+        const regionData = regionalTimeline[regionKey].find(r => r.period === t.period);
+        const safeKey = regionKey.replace(/\s+/g, '_'); // Replace spaces with underscores
+        t[`cert_${safeKey}`] = regionData?.certifications || 0;
+        t[`npcu_${safeKey}`] = regionData?.npcu_earned || 0;
+      });
+    });
+
+    // Calculate linear trend lines for certifications and NPCU
+    const calcTrendLine = (data, field) => {
+      const n = data.length;
+      if (n < 2) return data.map(() => null);
+      
+      const values = data.map(d => d[field] || 0);
+      const sumX = (n * (n - 1)) / 2;
+      const sumY = values.reduce((a, b) => a + b, 0);
+      const sumXY = values.reduce((sum, y, x) => sum + x * y, 0);
+      const sumX2 = (n * (n - 1) * (2 * n - 1)) / 6;
+      
+      const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+      const intercept = (sumY - slope * sumX) / n;
+      
+      return data.map((_, i) => Math.round(intercept + slope * i));
+    };
+
+    const certTrend = calcTrendLine(timeline, 'certifications');
+    const npcuTrend = calcTrendLine(timeline, 'npcu_earned');
+    
+    timeline.forEach((t, i) => {
+      t.certifications_trend = certTrend[i];
+      t.npcu_trend = npcuTrend[i];
+    });
+
+    // Summary stats
+    const totalEnrollments = timeline.reduce((sum, p) => sum + p.enrollments, 0);
+    const totalCompletions = timeline.reduce((sum, p) => sum + p.completions, 0);
+    const totalCertifications = timeline.reduce((sum, p) => sum + p.certifications, 0);
+    const totalNpcu = timeline.reduce((sum, p) => sum + (p.npcu_earned || 0), 0);
+
+    res.json({
+      summary: {
+        totalEnrollments,
+        totalCompletions,
+        totalCertifications,
+        totalNpcu,
+        avgEnrollments: Math.round(avgEnrollments),
+        avgCompletions: Math.round(avgCompletions),
+        avgCertifications: Math.round(avgCertifications),
+        periodsAnalyzed: timeline.length,
+        granularity,
+        dateLabel
+      },
+      timeline,
+      regionalTimeline,
+      anomalies,
+      insights: {
+        decliningPartners,
+        surgingPartners,
+        regionalSummary,
+        topPartnersByRegion
+      }
+    });
+  } catch (error) {
+    console.error('Activity timeline error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// Partner Users Report with Detailed Stats
+// ============================================
+
+router.get('/partner-users', async (req, res) => {
+  try {
+    const { partnerId, tier, region, owner, search, sortBy = 'total_npcu', sortDir = 'DESC', limit = 50, offset = 0 } = req.query;
+    
+    // Build WHERE conditions for partner filters
+    let partnerConditions = ['p.is_active = TRUE'];
+    const partnerParams = [];
+
+    if (partnerId) {
+      partnerConditions.push('p.id = ?');
+      partnerParams.push(partnerId);
+    }
+    if (tier) {
+      partnerConditions.push('p.partner_tier = ?');
+      partnerParams.push(tier);
+    }
+    if (region) {
+      partnerConditions.push('p.account_region = ?');
+      partnerParams.push(region);
+    }
+    if (owner) {
+      partnerConditions.push('p.account_owner = ?');
+      partnerParams.push(owner);
+    }
+
+    // Build search condition (applies to outer query)
+    let searchCondition = '';
+    const searchParams = [];
+    if (search) {
+      searchCondition = 'AND (u.email LIKE ? OR u.first_name LIKE ? OR u.last_name LIKE ? OR p.account_name LIKE ?)';
+      const term = `%${search}%`;
+      searchParams.push(term, term, term, term);
+    }
+
+    // Subquery to get ONE partner per user (pick partner with lowest ID for consistency)
+    // This prevents users from appearing multiple times if they're in multiple partner groups
+    const userPartnerSubquery = `
+      SELECT 
+        gm.user_id,
+        MIN(p.id) as partner_id
+      FROM lms_group_members gm
+      INNER JOIN lms_groups g ON g.id = gm.group_id AND g.partner_id IS NOT NULL
+      INNER JOIN partners p ON p.id = g.partner_id
+      WHERE ${partnerConditions.join(' AND ')}
+      GROUP BY gm.user_id
+    `;
+
+    // Get total count first (unique users)
+    const countSql = `
+      SELECT COUNT(DISTINCT up.user_id) as total
+      FROM (${userPartnerSubquery}) up
+      INNER JOIN lms_users u ON u.id = up.user_id
+      INNER JOIN partners p ON p.id = up.partner_id
+      WHERE 1=1 ${searchCondition}
+    `;
+    const countParams = [...partnerParams, ...searchParams];
+    const [countResult] = await query(countSql, countParams);
+    const total = countResult?.total || 0;
+
+    // Validate sort column
+    const validSortColumns = ['email', 'first_name', 'last_name', 'account_name', 'partner_tier', 'enrollments', 'completions', 'certifications', 'total_npcu', 'expired_certs', 'last_activity'];
+    const sortColumn = validSortColumns.includes(sortBy) ? sortBy : 'total_npcu';
+    const sortDirection = sortDir.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+
+    // Main query with stats - each user appears only once
+    // Calculate expiry: GTM = 12 months, others = 24 months from completion
+    const sql = `
+      SELECT 
+        u.id as user_id,
+        u.email,
+        u.first_name,
+        u.last_name,
+        u.status as lms_status,
+        u.created_at_lms as registered_at,
+        p.id as partner_id,
+        p.account_name,
+        p.partner_tier,
+        p.account_region,
+        p.account_owner,
+        COUNT(DISTINCT e.id) as enrollments,
+        COUNT(DISTINCT CASE WHEN e.status = 'completed' THEN e.id END) as completions,
+        COUNT(DISTINCT CASE WHEN e.status = 'completed' AND co.npcu_value > 0 THEN e.id END) as certifications,
+        COALESCE(SUM(CASE 
+          WHEN e.status = 'completed' AND co.npcu_value > 0 AND (
+            COALESCE(e.expires_at, DATE_ADD(e.completed_at, INTERVAL IF(co.certification_category = 'go_to_market', 12, 24) MONTH)) > NOW()
+          ) THEN co.npcu_value 
+          ELSE 0 
+        END), 0) as total_npcu,
+        COUNT(DISTINCT CASE 
+          WHEN e.status = 'completed' AND co.npcu_value > 0 AND (
+            COALESCE(e.expires_at, DATE_ADD(e.completed_at, INTERVAL IF(co.certification_category = 'go_to_market', 12, 24) MONTH)) < NOW()
+          ) THEN e.id 
+        END) as expired_certs,
+        MAX(e.completed_at) as last_activity
+      FROM (${userPartnerSubquery}) up
+      INNER JOIN lms_users u ON u.id = up.user_id
+      INNER JOIN partners p ON p.id = up.partner_id
+      LEFT JOIN lms_enrollments e ON e.user_id = u.id
+      LEFT JOIN lms_courses co ON co.id = e.course_id
+      WHERE 1=1 ${searchCondition}
+      GROUP BY u.id, u.email, u.first_name, u.last_name, u.status, u.created_at_lms,
+               p.id, p.account_name, p.partner_tier, p.account_region, p.account_owner
+      ORDER BY ${sortColumn} ${sortDirection}
+      LIMIT ? OFFSET ?
+    `;
+    const mainParams = [...partnerParams, ...searchParams, parseInt(limit), parseInt(offset)];
+
+    const results = await query(sql, mainParams);
+    
+    res.json({
+      data: results,
+      pagination: {
+        total,
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+  } catch (error) {
+    console.error('Partner users report error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get detailed stats for a specific user
+router.get('/partner-users/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Get user info
+    const [user] = await query(`
+      SELECT 
+        u.id as user_id,
+        u.email,
+        u.first_name,
+        u.last_name,
+        u.status as lms_status,
+        u.created_at_lms as registered_at,
+        p.id as partner_id,
+        p.account_name,
+        p.partner_tier,
+        p.account_region,
+        p.account_owner
+      FROM lms_users u
+      INNER JOIN lms_group_members gm ON gm.user_id = u.id
+      INNER JOIN lms_groups g ON g.id = gm.group_id AND g.partner_id IS NOT NULL
+      INNER JOIN partners p ON p.id = g.partner_id
+      WHERE u.id = ?
+      LIMIT 1
+    `, [userId]);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Get all enrollments with course details
+    // Calculate expiry: GTM = 12 months, others = 24 months from completion
+    const enrollments = await query(`
+      SELECT 
+        e.id,
+        e.status,
+        e.progress_percent,
+        e.completed_at,
+        COALESCE(
+          e.expires_at,
+          CASE 
+            WHEN e.status = 'completed' AND e.completed_at IS NOT NULL THEN
+              DATE_ADD(e.completed_at, INTERVAL IF(co.certification_category = 'go_to_market', 12, 24) MONTH)
+            ELSE NULL
+          END
+        ) as expires_at,
+        co.id as course_id,
+        co.name as course_name,
+        co.npcu_value,
+        co.is_certification,
+        co.certification_category,
+        CASE 
+          WHEN e.status = 'completed' AND co.npcu_value > 0 AND (
+            COALESCE(e.expires_at, DATE_ADD(e.completed_at, INTERVAL IF(co.certification_category = 'go_to_market', 12, 24) MONTH)) < NOW()
+          ) THEN 'expired'
+          WHEN e.status = 'completed' THEN 'completed'
+          ELSE 'in_progress'
+        END as cert_status
+      FROM lms_enrollments e
+      INNER JOIN lms_courses co ON co.id = e.course_id
+      WHERE e.user_id = ?
+      ORDER BY e.completed_at DESC, co.name
+    `, [userId]);
+    
+    // Calculate summary stats
+    const stats = {
+      total_enrollments: enrollments.length,
+      completions: enrollments.filter(e => e.status === 'completed').length,
+      certifications: enrollments.filter(e => e.status === 'completed' && e.npcu_value > 0).length,
+      active_npcu: enrollments
+        .filter(e => e.status === 'completed' && (e.expires_at === null || new Date(e.expires_at) > new Date()))
+        .reduce((sum, e) => sum + (e.npcu_value || 0), 0),
+      expired_certs: enrollments.filter(e => e.cert_status === 'expired').length,
+      in_progress: enrollments.filter(e => e.status !== 'completed').length
+    };
+    
+    res.json({
+      user,
+      stats,
+      enrollments
+    });
+  } catch (error) {
+    console.error('User details error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Send user report email
+router.post('/partner-users/:userId/send-report', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { ccEmail } = req.body;
+    const { sendEmail } = require('../db/notificationService.cjs');
+    
+    // Get user details
+    const [user] = await query(`
+      SELECT 
+        u.id as user_id,
+        u.email,
+        u.first_name,
+        u.last_name,
+        p.account_name,
+        p.partner_tier
+      FROM lms_users u
+      INNER JOIN lms_group_members gm ON gm.user_id = u.id
+      INNER JOIN lms_groups g ON g.id = gm.group_id AND g.partner_id IS NOT NULL
+      INNER JOIN partners p ON p.id = g.partner_id
+      WHERE u.id = ?
+      LIMIT 1
+    `, [userId]);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Get enrollments
+    const enrollments = await query(`
+      SELECT 
+        e.status,
+        e.completed_at,
+        e.expires_at,
+        co.name as course_name,
+        co.npcu_value,
+        CASE 
+          WHEN e.expires_at IS NOT NULL AND e.expires_at < NOW() THEN 'expired'
+          WHEN e.status = 'completed' THEN 'completed'
+          ELSE 'in_progress'
+        END as cert_status
+      FROM lms_enrollments e
+      INNER JOIN lms_courses co ON co.id = e.course_id
+      WHERE e.user_id = ?
+      ORDER BY e.completed_at DESC
+    `, [userId]);
+    
+    // Build email HTML
+    const completedCerts = enrollments.filter(e => e.status === 'completed' && e.npcu_value > 0);
+    const expiredCerts = enrollments.filter(e => e.cert_status === 'expired');
+    const activeNpcu = completedCerts
+      .filter(e => e.cert_status !== 'expired')
+      .reduce((sum, e) => sum + (e.npcu_value || 0), 0);
+    
+    const htmlContent = `
+      <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 700px; margin: 0 auto; padding: 20px;">
+        <div style="background: linear-gradient(135deg, #6B4C9A 0%, #FF6B35 100%); padding: 30px; border-radius: 12px 12px 0 0; color: white;">
+          <h1 style="margin: 0; font-size: 24px;">Learning Progress Report</h1>
+          <p style="margin: 10px 0 0; opacity: 0.9;">Nintex Partner Portal</p>
+        </div>
+        
+        <div style="background: #f8f9fa; padding: 25px; border-radius: 0 0 12px 12px;">
+          <p style="margin: 0 0 20px;">Hello <strong>${user.first_name || 'Partner'}</strong>,</p>
+          <p style="margin: 0 0 25px;">Here is your current learning progress summary:</p>
+          
+          <div style="background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+            <h3 style="margin: 0 0 15px; color: #333;">📊 Your Stats</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 8px 0; color: #666;">Partner:</td>
+                <td style="padding: 8px 0; font-weight: 600;">${user.account_name}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #666;">Total Courses Completed:</td>
+                <td style="padding: 8px 0; font-weight: 600;">${enrollments.filter(e => e.status === 'completed').length}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #666;">Active Certifications:</td>
+                <td style="padding: 8px 0; font-weight: 600; color: #28a745;">${completedCerts.filter(c => c.cert_status !== 'expired').length}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #666;">Active NPCU:</td>
+                <td style="padding: 8px 0; font-weight: 600; color: #FF6B35;">${activeNpcu}</td>
+              </tr>
+              ${expiredCerts.length > 0 ? `
+              <tr>
+                <td style="padding: 8px 0; color: #dc3545;">Expired Certifications:</td>
+                <td style="padding: 8px 0; font-weight: 600; color: #dc3545;">${expiredCerts.length}</td>
+              </tr>` : ''}
+            </table>
+          </div>
+          
+          ${completedCerts.length > 0 ? `
+          <div style="background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+            <h3 style="margin: 0 0 15px; color: #333;">🏆 Your Certifications</h3>
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+              <thead>
+                <tr style="background: #f1f1f1;">
+                  <th style="padding: 10px; text-align: left; border-bottom: 2px solid #ddd;">Course</th>
+                  <th style="padding: 10px; text-align: center; border-bottom: 2px solid #ddd;">NPCU</th>
+                  <th style="padding: 10px; text-align: center; border-bottom: 2px solid #ddd;">Status</th>
+                  <th style="padding: 10px; text-align: center; border-bottom: 2px solid #ddd;">Expires</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${completedCerts.map(cert => `
+                <tr>
+                  <td style="padding: 10px; border-bottom: 1px solid #eee;">${cert.course_name}</td>
+                  <td style="padding: 10px; text-align: center; border-bottom: 1px solid #eee;">${cert.npcu_value}</td>
+                  <td style="padding: 10px; text-align: center; border-bottom: 1px solid #eee;">
+                    <span style="padding: 2px 8px; border-radius: 4px; font-size: 12px; ${cert.cert_status === 'expired' ? 'background: #f8d7da; color: #721c24;' : 'background: #d4edda; color: #155724;'}">
+                      ${cert.cert_status === 'expired' ? 'Expired' : 'Active'}
+                    </span>
+                  </td>
+                  <td style="padding: 10px; text-align: center; border-bottom: 1px solid #eee; ${cert.cert_status === 'expired' ? 'color: #dc3545;' : ''}">
+                    ${cert.expires_at ? new Date(cert.expires_at).toLocaleDateString() : 'Never'}
+                  </td>
+                </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>` : ''}
+          
+          ${expiredCerts.length > 0 ? `
+          <div style="background: #fff3cd; border-radius: 8px; padding: 15px; border-left: 4px solid #856404; margin-bottom: 20px;">
+            <p style="margin: 0; color: #856404;">
+              <strong>⚠️ Action Required:</strong> You have ${expiredCerts.length} expired certification(s). 
+              Please log in to Northpass to renew them and maintain your NPCU standing.
+            </p>
+          </div>` : ''}
+          
+          <div style="text-align: center; margin-top: 25px;">
+            <a href="https://learn.nintex.com" style="display: inline-block; background: linear-gradient(135deg, #FF6B35 0%, #E55A2B 100%); color: white; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-weight: 600;">
+              Continue Learning →
+            </a>
+          </div>
+          
+          <p style="margin: 25px 0 0; color: #666; font-size: 12px; text-align: center;">
+            This report was generated by the Nintex Partner Portal on ${new Date().toLocaleDateString()}.
+          </p>
+        </div>
+      </div>
+    `;
+    
+    const result = await sendEmail(
+      user.email,
+      `Your Learning Progress Report - ${user.account_name}`,
+      htmlContent,
+      '',
+      ccEmail || ''
+    );
+    
+    res.json({
+      success: true,
+      message: `Report sent to ${user.email}${ccEmail ? ` (CC: ${ccEmail})` : ''}`,
+      ...result
+    });
+  } catch (error) {
+    console.error('Send report error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Send bulk reports to multiple users
+router.post('/partner-users/send-bulk-reports', async (req, res) => {
+  try {
+    const { userIds, ccEmail } = req.body;
+    
+    if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({ error: 'userIds array is required' });
+    }
+    
+    const results = [];
+    for (const userId of userIds) {
+      try {
+        // Reuse the single user endpoint logic
+        const response = await new Promise((resolve, reject) => {
+          const mockReq = { params: { userId }, body: { ccEmail } };
+          const mockRes = {
+            json: (data) => resolve(data),
+            status: () => ({ json: (data) => reject(data) })
+          };
+          // Call the handler directly - simplified approach
+        });
+        results.push({ userId, success: true });
+      } catch (err) {
+        results.push({ userId, success: false, error: err.message });
+      }
+    }
+    
+    // For bulk, send emails one by one
+    const { sendEmail } = require('../db/notificationService.cjs');
+    const sentResults = [];
+    
+    for (const userId of userIds) {
+      try {
+        // Get user
+        const [user] = await query(`
+          SELECT u.id, u.email, u.first_name, u.last_name, p.account_name
+          FROM lms_users u
+          INNER JOIN lms_group_members gm ON gm.user_id = u.id
+          INNER JOIN lms_groups g ON g.id = gm.group_id AND g.partner_id IS NOT NULL
+          INNER JOIN partners p ON p.id = g.partner_id
+          WHERE u.id = ?
+          LIMIT 1
+        `, [userId]);
+        
+        if (user) {
+          // Simplified email for bulk
+          const htmlContent = `
+            <div style="font-family: Arial, sans-serif; padding: 20px;">
+              <h2 style="color: #6B4C9A;">Learning Progress Update</h2>
+              <p>Hello ${user.first_name || 'Partner'},</p>
+              <p>This is a reminder to review your learning progress on the Nintex Partner Portal.</p>
+              <p>Visit <a href="https://learn.nintex.com">learn.nintex.com</a> to view your certifications and continue learning.</p>
+              <p style="color: #666; font-size: 12px;">- Nintex Partner Team</p>
+            </div>
+          `;
+          
+          await sendEmail(
+            user.email,
+            `Learning Progress Update - ${user.account_name}`,
+            htmlContent,
+            '',
+            ccEmail || ''
+          );
+          sentResults.push({ userId, email: user.email, success: true });
+        }
+      } catch (err) {
+        sentResults.push({ userId, success: false, error: err.message });
+      }
+    }
+    
+    res.json({
+      success: true,
+      sent: sentResults.filter(r => r.success).length,
+      failed: sentResults.filter(r => !r.success).length,
+      results: sentResults
+    });
+  } catch (error) {
+    console.error('Bulk send error:', error);
     res.status(500).json({ error: error.message });
   }
 });

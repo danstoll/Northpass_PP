@@ -17,6 +17,21 @@ import {
   Chip,
   LinearProgress,
   TableSortLabel,
+  TablePagination,
+  TextField,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
+  Divider,
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText,
+  Autocomplete,
+  CircularProgress,
+  Tooltip,
 } from '@mui/material';
 import {
   PersonSearch,
@@ -34,6 +49,17 @@ import {
   Build as BuildIcon,
   Public as PublicIcon,
   PersonOff as PersonOffIcon,
+  School as SchoolIcon,
+  Badge as BadgeIcon,
+  Email as EmailIcon,
+  AccessTime as AccessTimeIcon,
+  Folder as FolderIcon,
+  Add as AddIcon,
+  SyncAlt as SyncAltIcon,
+  Error as ErrorIcon,
+  PersonAdd as PersonAddIcon,
+  Delete as DeleteIcon,
+  Person as PersonIcon,
 } from '@mui/icons-material';
 import {
   PageHeader,
@@ -495,6 +521,7 @@ const DomainRow = ({
                       <th>Name</th>
                       <th>Status</th>
                       <th>Groups</th>
+                      <th>CRM Partner</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -526,12 +553,39 @@ const DomainRow = ({
                         </td>
                         <td>
                           {user.groupNames?.length > 0 ? (
-                            <span className="opacity-70">
-                              {user.groupNames.slice(0, 3).join(', ')}
-                              {user.groupNames.length > 3 && ` +${user.groupNames.length - 3} more`}
-                            </span>
+                            <Tooltip title={user.groupNames.join('\n')}>
+                              <span className="opacity-70">
+                                {user.groupNames.slice(0, 2).join(', ')}
+                                {user.groupNames.length > 2 && ` +${user.groupNames.length - 2} more`}
+                              </span>
+                            </Tooltip>
                           ) : (
                             <span className="opacity-50">No groups</span>
+                          )}
+                        </td>
+                        <td>
+                          {user.crmAssociation ? (
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                              <Tooltip title={`CRM Partner: ${user.crmAssociation.partnerName}${user.crmPartnerMismatch ? ' (differs from domain match!)' : ''}`}>
+                                <Chip 
+                                  icon={<BusinessIcon sx={{ fontSize: '14px !important' }} />}
+                                  label={user.crmAssociation.partnerName.length > 20 
+                                    ? user.crmAssociation.partnerName.substring(0, 20) + '...' 
+                                    : user.crmAssociation.partnerName}
+                                  size="small"
+                                  color={user.crmPartnerMismatch ? 'warning' : 'success'}
+                                  variant="outlined"
+                                  sx={{ fontSize: '0.7rem', height: 22 }}
+                                />
+                              </Tooltip>
+                              {user.crmPartnerMismatch && (
+                                <Tooltip title="CRM partner differs from domain-matched partner">
+                                  <WarningIcon sx={{ fontSize: 14, color: 'warning.main' }} />
+                                </Tooltip>
+                              )}
+                            </Box>
+                          ) : (
+                            <span style={{ opacity: 0.4, fontSize: '0.75rem' }}>Not in CRM</span>
                           )}
                         </td>
                       </tr>
@@ -583,6 +637,8 @@ const UserManagement = () => {
   const [domainFilter, setDomainFilter] = useState('all'); // all, matched, unmatched, hasUngrouped
   const [domainOrderBy, setDomainOrderBy] = useState('userCount'); // column to sort by
   const [domainOrder, setDomainOrder] = useState('desc'); // 'asc' or 'desc'
+  const [domainPage, setDomainPage] = useState(0); // pagination - current page
+  const [domainRowsPerPage, setDomainRowsPerPage] = useState(50); // rows per page
   const [expandedDomains, setExpandedDomains] = useState(new Set());
   const [domainSelectionMode, setDomainSelectionMode] = useState(false);
   const [selectedDomainUsers, setSelectedDomainUsers] = useState(new Map()); // userId -> user object
@@ -602,6 +658,12 @@ const UserManagement = () => {
   const [bulkCreating, setBulkCreating] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0, currentPartner: '' });
   const [bulkResults, setBulkResults] = useState(null);
+  const [deletingPartner, setDeletingPartner] = useState(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [partnerToDelete, setPartnerToDelete] = useState(null);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeleteResults, setBulkDeleteResults] = useState(null);
+  const [expandedPartnerRow, setExpandedPartnerRow] = useState(null);
 
   // Tab 3: Contact Group Audit state
   const [auditLoading, setAuditLoading] = useState(false);
@@ -611,6 +673,7 @@ const UserManagement = () => {
   const [fixing, setFixing] = useState(false);
   const [fixProgress, setFixProgress] = useState(null);
   const [fixResults, setFixResults] = useState(null);
+  const [renaming, setRenaming] = useState(null); // groupId being renamed
   
   // Tab 4: All Partners Sync state
   const [syncLoading, setSyncLoading] = useState(false);
@@ -619,6 +682,18 @@ const UserManagement = () => {
   const [syncFixing, setSyncFixing] = useState(false);
   const [syncProgress, setSyncProgress] = useState(null);
   const [syncResults, setSyncResults] = useState(null);
+  // Tab 4 additional: Add to partner groups, domain matching, Impartner add
+  const [addingToPartnerGroups, setAddingToPartnerGroups] = useState(false);
+  const [partnerGroupResults, setPartnerGroupResults] = useState(null);
+  const [domainMatching, setDomainMatching] = useState(false);
+  const [domainMatches, setDomainMatches] = useState(null);
+  const [unmatchedUsers, setUnmatchedUsers] = useState(null);
+  const [addingToImpartner, setAddingToImpartner] = useState(false);
+  const [impartnerResults, setImpartnerResults] = useState(null);
+  const [manualPartnerSelect, setManualPartnerSelect] = useState({});
+  // Tab 4 remove users from All Partners
+  const [removingFromAllPartners, setRemovingFromAllPartners] = useState(false);
+  const [removeResults, setRemoveResults] = useState(null);
 
   // Tab 5: Orphan Discovery state
   const [orphanLoading, setOrphanLoading] = useState(false);
@@ -633,6 +708,23 @@ const UserManagement = () => {
   const [linkingOrphan, setLinkingOrphan] = useState(null);
   const [linkOrphanResults, setLinkOrphanResults] = useState(null);
   const [showDismissed, setShowDismissed] = useState(false);
+
+  // Tab 6: User Search state
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [userSearchResults, setUserSearchResults] = useState(null);
+  const [userSearchLoading, setUserSearchLoading] = useState(false);
+  const [selectedUserProfile, setSelectedUserProfile] = useState(null);
+  const [userProfileLoading, setUserProfileLoading] = useState(false);
+  const [showCreateLmsDialog, setShowCreateLmsDialog] = useState(false);
+  const [showCreateCrmDialog, setShowCreateCrmDialog] = useState(false);
+  const [createUserData, setCreateUserData] = useState({ email: '', firstName: '', lastName: '', partnerId: null, title: '' });
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [createUserResult, setCreateUserResult] = useState(null);
+  const [partnersList, setPartnersList] = useState([]);
+  const [showAddToGroupDialog, setShowAddToGroupDialog] = useState(false);
+  const [addToGroupUserId, setAddToGroupUserId] = useState(null);
+  const [selectedGroupToAdd, setSelectedGroupToAdd] = useState(null);
+  const [addingToGroup, setAddingToGroup] = useState(false);
 
   // Load CRM contacts on mount
   useEffect(() => {
@@ -947,6 +1039,74 @@ const UserManagement = () => {
     setSelectedPartnersForGroup(new Set());
   };
 
+  // Delete a single partner
+  const deletePartner = async (partner) => {
+    setDeletingPartner(partner.id);
+    try {
+      const response = await fetch(`/api/db/group-analysis/partners/${partner.id}`, {
+        method: 'DELETE'
+      });
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Delete failed');
+      }
+      
+      // Remove from local state
+      setPartnersWithoutGroups(prev => prev.filter(p => p.id !== partner.id));
+      setDeleteConfirmOpen(false);
+      setPartnerToDelete(null);
+    } catch (error) {
+      console.error('Delete partner error:', error);
+      alert(`Failed to delete ${partner.account_name}: ${error.message}`);
+    } finally {
+      setDeletingPartner(null);
+    }
+  };
+
+  // Bulk delete selected partners
+  const bulkDeletePartners = async () => {
+    const selectedIds = Array.from(selectedPartnersForGroup);
+    if (selectedIds.length === 0) return;
+    
+    if (!window.confirm(`Are you sure you want to delete ${selectedIds.length} partners and their contacts? This cannot be undone.`)) {
+      return;
+    }
+    
+    setBulkDeleting(true);
+    setBulkDeleteResults(null);
+    
+    try {
+      const response = await fetch('/api/db/group-analysis/partners/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ partnerIds: selectedIds })
+      });
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Bulk delete failed');
+      }
+      
+      setBulkDeleteResults(data);
+      
+      // Remove deleted from local state
+      const deletedIds = new Set(data.deleted.map(d => d.id));
+      setPartnersWithoutGroups(prev => prev.filter(p => !deletedIds.has(p.id)));
+      setSelectedPartnersForGroup(new Set());
+    } catch (error) {
+      console.error('Bulk delete error:', error);
+      alert(`Bulk delete failed: ${error.message}`);
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  // Toggle expanded row to show partner details
+  const togglePartnerDetails = (partnerId) => {
+    setExpandedPartnerRow(prev => prev === partnerId ? null : partnerId);
+  };
+
   // Load domain analysis when tab changes
   useEffect(() => {
     if (activeTab === 1 && !domainData && !domainLoading) {
@@ -1066,11 +1226,27 @@ const UserManagement = () => {
     return filtered;
   }, [domainData, domainSearchTerm, domainFilter, domainOrderBy, domainOrder]);
 
+  // Reset pagination when filters change
+  useEffect(() => {
+    setDomainPage(0);
+  }, [domainSearchTerm, domainFilter]);
+
   // Handle sort request for domain table
   const handleDomainSortRequest = (property) => {
     const isAsc = domainOrderBy === property && domainOrder === 'asc';
     setDomainOrder(isAsc ? 'desc' : 'asc');
     setDomainOrderBy(property);
+    setDomainPage(0); // Reset to first page on sort change
+  };
+
+  // Handle pagination
+  const handleDomainPageChange = (event, newPage) => {
+    setDomainPage(newPage);
+  };
+
+  const handleDomainRowsPerPageChange = (event) => {
+    setDomainRowsPerPage(parseInt(event.target.value, 10));
+    setDomainPage(0);
   };
 
   // Filter partners without groups
@@ -1527,6 +1703,68 @@ const UserManagement = () => {
     }
   };
 
+  // Rename a partner group to use ptr_ prefix
+  const renamePartnerGroup = async (groupId, newName) => {
+    setRenaming(groupId);
+    try {
+      await northpassApi.updateGroupName(groupId, newName);
+      
+      // Update local database
+      await fetch(`/api/db/lms/groups/${groupId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName })
+      });
+      
+      // Refresh audit to reflect the change
+      await runAudit();
+      setAuditError(null);
+    } catch (err) {
+      setAuditError(`Failed to rename group: ${err.message}`);
+    } finally {
+      setRenaming(null);
+    }
+  };
+
+  // Rename all groups that need ptr_ prefix
+  const renameAllGroups = async () => {
+    if (!audit?.groupsToRename?.length) return;
+    
+    setRenaming('all');
+    const results = { success: 0, failed: 0, errors: [] };
+    
+    try {
+      for (const group of audit.groupsToRename) {
+        try {
+          await northpassApi.updateGroupName(group.groupId, group.suggestedName);
+          
+          // Update local database
+          await fetch(`/api/db/lms/groups/${group.groupId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: group.suggestedName })
+          });
+          
+          results.success++;
+        } catch (err) {
+          results.failed++;
+          results.errors.push({ group: group.groupName, error: err.message });
+        }
+      }
+      
+      // Refresh audit
+      await runAudit();
+      
+      if (results.failed > 0) {
+        setAuditError(`Renamed ${results.success} groups. ${results.failed} failed.`);
+      }
+    } catch (err) {
+      setAuditError('Bulk rename failed: ' + err.message);
+    } finally {
+      setRenaming(null);
+    }
+  };
+
   // ============================================
   // Tab 4: All Partners Sync Functions
   // ============================================
@@ -1593,6 +1831,198 @@ const UserManagement = () => {
     } finally {
       setSyncFixing(false);
       setSyncProgress(null);
+    }
+  };
+
+  // Remove users from All Partners group (users from deactivated partners or not in CRM)
+  const removeFromAllPartners = async (userIds, reason) => {
+    if (!userIds?.length) return;
+    
+    if (!window.confirm(`Are you sure you want to remove ${userIds.length} user(s) from the "All Partners" group?\n\nReason: ${reason || 'Manual removal'}`)) {
+      return;
+    }
+    
+    setRemovingFromAllPartners(true);
+    setRemoveResults(null);
+    
+    try {
+      const response = await fetch('/api/db/maintenance/remove-from-all-partners', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userIds })
+      });
+      
+      const result = await response.json();
+      
+      if (response.ok) {
+        setRemoveResults({
+          removed: result.results.apiRemoved,
+          failed: result.results.apiFailed,
+          errors: result.results.errors
+        });
+        // Refresh audit
+        setTimeout(() => runSyncAudit(), 1000);
+      } else {
+        setSyncError(result.error || 'Failed to remove users');
+      }
+    } catch (err) {
+      setSyncError('Remove failed: ' + err.message);
+    } finally {
+      setRemovingFromAllPartners(false);
+    }
+  };
+
+  // Add users to their expected partner groups
+  const addUsersToPartnerGroups = async () => {
+    const users = syncAudit?.usersWithMissingPartnerGroupList?.filter(u => u.expectedGroupId);
+    if (!users?.length) return;
+    
+    setAddingToPartnerGroups(true);
+    setPartnerGroupResults(null);
+    
+    try {
+      const response = await fetch('/api/db/maintenance/add-to-partner-groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          users: users.map(u => ({ userId: u.userId, expectedGroupId: u.expectedGroupId }))
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (response.ok) {
+        setPartnerGroupResults(result.results);
+        setTimeout(() => runSyncAudit(), 1000);
+      } else {
+        setSyncError(result.error || 'Failed to add users to partner groups');
+      }
+    } catch (err) {
+      setSyncError('Add to partner groups failed: ' + err.message);
+    } finally {
+      setAddingToPartnerGroups(false);
+    }
+  };
+
+  // Match users not in CRM by domain
+  const matchUsersByDomain = async () => {
+    const users = syncAudit?.usersNotInCRMList;
+    if (!users?.length) return;
+    
+    setDomainMatching(true);
+    setDomainMatches(null);
+    setUnmatchedUsers(null);
+    
+    try {
+      const response = await fetch('/api/db/maintenance/match-users-by-domain', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          users: users.map(u => ({ userId: u.userId, email: u.email, name: u.name }))
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (response.ok) {
+        setDomainMatches(result.matches);
+        setUnmatchedUsers(result.unmatched);
+        // Auto-load partners for selection
+        loadPartnersForSelection();
+      } else {
+        setSyncError(result.error || 'Failed to match users by domain');
+      }
+    } catch (err) {
+      setSyncError('Domain matching failed: ' + err.message);
+    } finally {
+      setDomainMatching(false);
+    }
+  };
+
+  // Load partners for manual selection
+  const loadPartnersForSelection = async () => {
+    try {
+      const response = await fetch('/api/db/maintenance/partners-for-selection');
+      if (response.ok) {
+        const data = await response.json();
+        setPartnersList(data.partners || []);
+      }
+    } catch (err) {
+      console.error('Failed to load partners:', err);
+    }
+  };
+
+  // Add matched users to Impartner and their partner groups
+  const addMatchedUsersToImpartner = async () => {
+    const usersToAdd = domainMatches?.filter(u => u.matchedPartner?.partnerId);
+    if (!usersToAdd?.length) return;
+    
+    setAddingToImpartner(true);
+    setImpartnerResults(null);
+    
+    try {
+      const response = await fetch('/api/db/maintenance/add-users-to-impartner', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          users: usersToAdd.map(u => ({
+            userId: u.userId,
+            email: u.email,
+            firstName: u.name?.split(' ')[0] || '',
+            lastName: u.name?.split(' ').slice(1).join(' ') || '',
+            partnerId: u.matchedPartner.partnerId
+          }))
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (response.ok) {
+        setImpartnerResults(result.results);
+        setTimeout(() => runSyncAudit(), 1000);
+      } else {
+        setSyncError(result.error || 'Failed to add users to Impartner');
+      }
+    } catch (err) {
+      setSyncError('Add to Impartner failed: ' + err.message);
+    } finally {
+      setAddingToImpartner(false);
+    }
+  };
+
+  // Add a single user to Impartner with manually selected partner
+  const addSingleUserToImpartner = async (user, partnerId) => {
+    if (!user || !partnerId) return;
+    
+    setAddingToImpartner(true);
+    
+    try {
+      const response = await fetch('/api/db/maintenance/add-users-to-impartner', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          users: [{
+            userId: user.userId,
+            email: user.email,
+            firstName: user.name?.split(' ')[0] || '',
+            lastName: user.name?.split(' ').slice(1).join(' ') || '',
+            partnerId: partnerId
+          }]
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (response.ok && result.results.added > 0) {
+        // Remove from unmatched list
+        setUnmatchedUsers(prev => prev?.filter(u => u.userId !== user.userId));
+      } else {
+        setSyncError(result.results?.errors?.[0]?.error || 'Failed to add user');
+      }
+    } catch (err) {
+      setSyncError('Add to Impartner failed: ' + err.message);
+    } finally {
+      setAddingToImpartner(false);
     }
   };
 
@@ -1670,17 +2100,37 @@ const UserManagement = () => {
         return;
       }
       
-      // Add user to the partner group via Northpass API
-      const addResult = await northpassApi.addUserToGroup(partnerGroup.id, userId);
+      // Add user to the partner group via server-side API (syncs to both Northpass AND local DB)
+      const addResponse = await fetch('/api/db/users/add-to-group', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, groupId: partnerGroup.id })
+      });
       
-      if (addResult) {
-        setLinkOrphanResults({ success: true, message: `Added user to ${partnerGroup.name}` });
-        // Refresh the details
+      if (addResponse.ok) {
+        const result = await addResponse.json();
+        setLinkOrphanResults({ success: true, message: result.message || `Added user to ${partnerGroup.name}` });
+        // Refresh the details for this specific partner
         await loadOrphanPartnerDetails(partnerId);
-        // Refresh summary after a short delay
-        setTimeout(() => loadOrphanSummary(), 1000);
+        // Update the summary counts locally instead of full rescan
+        setOrphanSummary(prev => {
+          if (!prev) return prev;
+          const updatedPartners = prev.partners.map(p => {
+            if (p.partner_id === partnerId) {
+              return { ...p, orphan_count: Math.max(0, p.orphan_count - 1) };
+            }
+            return p;
+          }).filter(p => p.orphan_count > 0); // Remove partners with 0 orphans
+          return {
+            ...prev,
+            totalOrphans: Math.max(0, prev.totalOrphans - 1),
+            partnersWithOrphans: updatedPartners.length,
+            partners: updatedPartners
+          };
+        });
       } else {
-        setLinkOrphanResults({ success: false, message: 'Failed to add user to group' });
+        const errorData = await addResponse.json().catch(() => ({}));
+        setLinkOrphanResults({ success: false, message: errorData.error || 'Failed to add user to group' });
       }
     } catch (err) {
       console.error('Error linking orphan:', err);
@@ -1711,12 +2161,22 @@ const UserManagement = () => {
         return;
       }
       
-      // Add all users
+      // Add all users via server-side API (syncs to both Northpass AND local DB)
       const results = { success: 0, failed: 0, errors: [] };
       for (const orphan of orphans) {
         try {
-          await northpassApi.addUserToGroup(partnerGroup.id, orphan.user_id);
-          results.success++;
+          const addResponse = await fetch('/api/db/users/add-to-group', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: orphan.user_id, groupId: partnerGroup.id })
+          });
+          if (addResponse.ok) {
+            results.success++;
+          } else {
+            const errorData = await addResponse.json().catch(() => ({}));
+            results.failed++;
+            results.errors.push({ email: orphan.email, error: errorData.error || 'Failed to add' });
+          }
         } catch (err) {
           results.failed++;
           results.errors.push({ email: orphan.email, error: err.message });
@@ -1728,9 +2188,25 @@ const UserManagement = () => {
         message: `Added ${results.success} users to ${partnerGroup.name}${results.failed > 0 ? ` (${results.failed} failed)` : ''}`
       });
       
-      // Refresh
+      // Refresh the details for this partner
       await loadOrphanPartnerDetails(partnerId);
-      setTimeout(() => loadOrphanSummary(), 1000);
+      // Update summary counts locally instead of full rescan
+      const linkedCount = results.success;
+      setOrphanSummary(prev => {
+        if (!prev) return prev;
+        const updatedPartners = prev.partners.map(p => {
+          if (p.partner_id === partnerId) {
+            return { ...p, orphan_count: Math.max(0, p.orphan_count - linkedCount) };
+          }
+          return p;
+        }).filter(p => p.orphan_count > 0);
+        return {
+          ...prev,
+          totalOrphans: Math.max(0, prev.totalOrphans - linkedCount),
+          partnersWithOrphans: updatedPartners.length,
+          partners: updatedPartners
+        };
+      });
     } catch (err) {
       setLinkOrphanResults({ success: false, message: err.message });
     } finally {
@@ -1753,9 +2229,24 @@ const UserManagement = () => {
       
       setLinkOrphanResults({ success: true, message: 'User dismissed from orphan list' });
       
-      // Refresh the details
+      // Refresh the details for this partner
       await loadOrphanPartnerDetails(partnerId);
-      setTimeout(() => loadOrphanSummary(), 500);
+      // Update summary counts locally instead of full rescan
+      setOrphanSummary(prev => {
+        if (!prev) return prev;
+        const updatedPartners = prev.partners.map(p => {
+          if (p.partner_id === partnerId) {
+            return { ...p, orphan_count: Math.max(0, p.orphan_count - 1) };
+          }
+          return p;
+        }).filter(p => p.orphan_count > 0);
+        return {
+          ...prev,
+          totalOrphans: Math.max(0, prev.totalOrphans - 1),
+          partnersWithOrphans: updatedPartners.length,
+          partners: updatedPartners
+        };
+      });
     } catch (err) {
       console.error('Error dismissing orphan:', err);
       setLinkOrphanResults({ success: false, message: err.message });
@@ -1790,7 +2281,23 @@ const UserManagement = () => {
       });
       
       await loadOrphanPartnerDetails(partnerId);
-      setTimeout(() => loadOrphanSummary(), 500);
+      // Update summary counts locally instead of full rescan
+      const dismissedCount = result.dismissed;
+      setOrphanSummary(prev => {
+        if (!prev) return prev;
+        const updatedPartners = prev.partners.map(p => {
+          if (p.partner_id === partnerId) {
+            return { ...p, orphan_count: Math.max(0, p.orphan_count - dismissedCount) };
+          }
+          return p;
+        }).filter(p => p.orphan_count > 0);
+        return {
+          ...prev,
+          totalOrphans: Math.max(0, prev.totalOrphans - dismissedCount),
+          partnersWithOrphans: updatedPartners.length,
+          partners: updatedPartners
+        };
+      });
     } catch (err) {
       setLinkOrphanResults({ success: false, message: err.message });
     } finally {
@@ -1812,14 +2319,204 @@ const UserManagement = () => {
       if (!response.ok) throw new Error('Failed to restore orphan');
       
       setLinkOrphanResults({ success: true, message: 'User restored to orphan list' });
-      await loadOrphanPartnerDetails(partnerId);
-      setTimeout(() => loadOrphanSummary(), 500);
+      await loadOrphanPartnerDetails(partnerId, true); // Include dismissed to show it's restored
+      // Restore doesn't change orphan count (user was already counted but dismissed)
     } catch (err) {
       console.error('Error restoring orphan:', err);
       setLinkOrphanResults({ success: false, message: err.message });
     } finally {
       setLinkingOrphan(null);
     }
+  };
+
+  // ============================================
+  // Tab 6: User Search Functions
+  // ============================================
+
+  // Search for users across LMS and CRM
+  const searchUsers = async () => {
+    if (!userSearchQuery || userSearchQuery.length < 3) return;
+    
+    setUserSearchLoading(true);
+    setUserSearchResults(null);
+    setSelectedUserProfile(null);
+    
+    try {
+      const response = await fetch(`/api/db/users/search?q=${encodeURIComponent(userSearchQuery)}`);
+      if (!response.ok) throw new Error('Search failed');
+      const data = await response.json();
+      setUserSearchResults(data);
+    } catch (err) {
+      console.error('User search error:', err);
+      setUserSearchResults({ error: err.message, results: [] });
+    } finally {
+      setUserSearchLoading(false);
+    }
+  };
+
+  // Load user profile details
+  const loadUserProfile = async (email) => {
+    setUserProfileLoading(true);
+    setSelectedUserProfile(null);
+    
+    try {
+      const response = await fetch(`/api/db/users/profile/${encodeURIComponent(email)}`);
+      if (!response.ok) throw new Error('Failed to load profile');
+      const data = await response.json();
+      setSelectedUserProfile(data.profile);
+    } catch (err) {
+      console.error('Profile load error:', err);
+    } finally {
+      setUserProfileLoading(false);
+    }
+  };
+
+  // Load partners list for dropdown
+  const loadPartnersList = async () => {
+    if (partnersList.length > 0) return;
+    try {
+      const response = await fetch('/api/db/users/partners-list');
+      if (response.ok) {
+        const data = await response.json();
+        setPartnersList(data);
+      }
+    } catch (err) {
+      console.error('Failed to load partners list:', err);
+    }
+  };
+
+  // Create user in LMS
+  const createLmsUser = async () => {
+    if (!createUserData.email) return;
+    
+    setCreatingUser(true);
+    setCreateUserResult(null);
+    
+    try {
+      const response = await fetch('/api/db/users/create-lms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: createUserData.email,
+          firstName: createUserData.firstName,
+          lastName: createUserData.lastName,
+          partnerId: createUserData.partnerId
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create user');
+      }
+      
+      setCreateUserResult({ success: true, message: `User ${data.user.email} created in LMS`, data });
+      
+      // Refresh profile and search results
+      if (createUserData.email) {
+        setTimeout(() => loadUserProfile(createUserData.email), 500);
+      }
+      if (userSearchQuery) {
+        setTimeout(() => searchUsers(), 1000);
+      }
+    } catch (err) {
+      setCreateUserResult({ success: false, message: err.message });
+    } finally {
+      setCreatingUser(false);
+    }
+  };
+
+  // Create contact in CRM
+  const createCrmContact = async () => {
+    if (!createUserData.email) return;
+    
+    setCreatingUser(true);
+    setCreateUserResult(null);
+    
+    try {
+      const response = await fetch('/api/db/users/create-crm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: createUserData.email,
+          firstName: createUserData.firstName,
+          lastName: createUserData.lastName,
+          partnerId: createUserData.partnerId,
+          title: createUserData.title
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create contact');
+      }
+      
+      setCreateUserResult({ success: true, message: `Contact ${data.contact.email} created in CRM`, data });
+      
+      // Refresh profile and search results
+      if (createUserData.email) {
+        setTimeout(() => loadUserProfile(createUserData.email), 500);
+      }
+      if (userSearchQuery) {
+        setTimeout(() => searchUsers(), 1000);
+      }
+    } catch (err) {
+      setCreateUserResult({ success: false, message: err.message });
+    } finally {
+      setCreatingUser(false);
+    }
+  };
+
+  // Add user to a group
+  const addUserToGroupAction = async () => {
+    if (!addToGroupUserId || !selectedGroupToAdd) return;
+    
+    setAddingToGroup(true);
+    
+    try {
+      const response = await fetch('/api/db/users/add-to-group', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: addToGroupUserId,
+          groupId: selectedGroupToAdd.id
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to add to group');
+      }
+      
+      // Refresh profile
+      if (selectedUserProfile) {
+        setTimeout(() => loadUserProfile(selectedUserProfile.email), 500);
+      }
+      
+      setShowAddToGroupDialog(false);
+      setSelectedGroupToAdd(null);
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    } finally {
+      setAddingToGroup(false);
+    }
+  };
+
+  // Open create dialogs with prefilled data
+  const openCreateLmsDialog = (email, firstName, lastName, partnerId) => {
+    loadPartnersList();
+    setCreateUserData({ email, firstName, lastName, partnerId, title: '' });
+    setCreateUserResult(null);
+    setShowCreateLmsDialog(true);
+  };
+
+  const openCreateCrmDialog = (email, firstName, lastName, partnerId) => {
+    loadPartnersList();
+    setCreateUserData({ email, firstName, lastName, partnerId, title: '' });
+    setCreateUserResult(null);
+    setShowCreateCrmDialog(true);
   };
 
   // Filter orphan partners
@@ -1933,6 +2630,11 @@ const UserManagement = () => {
             icon={<PersonOffIcon />} 
             iconPosition="start" 
             label={`Orphan Discovery${orphanSummary?.totalOrphans > 0 ? ` (${orphanSummary.totalOrphans})` : ''}`}
+          />
+          <Tab 
+            icon={<PersonSearch />} 
+            iconPosition="start" 
+            label="User Search" 
           />
         </Tabs>
       </Box>
@@ -2382,7 +3084,9 @@ const UserManagement = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredDomains.slice(0, 100).map(domainInfo => (
+                    {filteredDomains
+                      .slice(domainPage * domainRowsPerPage, domainPage * domainRowsPerPage + domainRowsPerPage)
+                      .map(domainInfo => (
                       <DomainRow
                         key={domainInfo.domain}
                         domainData={domainInfo}
@@ -2401,11 +3105,16 @@ const UserManagement = () => {
                   </tbody>
                 </table>
                 
-                {filteredDomains.length > 100 && (
-                  <div className="table-footer text-center py-3 opacity-70">
-                    Showing first 100 of {filteredDomains.length} domains. Use filters to narrow down.
-                  </div>
-                )}
+                <TablePagination
+                  component="div"
+                  count={filteredDomains.length}
+                  page={domainPage}
+                  onPageChange={handleDomainPageChange}
+                  rowsPerPage={domainRowsPerPage}
+                  onRowsPerPageChange={handleDomainRowsPerPageChange}
+                  rowsPerPageOptions={[25, 50, 100, 250]}
+                  sx={{ borderTop: '1px solid var(--admin-border-light)' }}
+                />
               </div>
             </>
           )}
@@ -2549,7 +3258,7 @@ const UserManagement = () => {
                         checked={selectedPartnersForGroup.size > 0 && selectedPartnersForGroup.size === Math.min(filteredPartnersWithoutGroups.length, 100)}
                         indeterminate={selectedPartnersForGroup.size > 0 && selectedPartnersForGroup.size < Math.min(filteredPartnersWithoutGroups.length, 100)}
                         onChange={(e) => e.target.checked ? selectAllPartners() : clearPartnerSelection()}
-                        disabled={bulkCreating}
+                        disabled={bulkCreating || bulkDeleting}
                       />
                     }
                     label={<Typography variant="body2">Select All ({Math.min(filteredPartnersWithoutGroups.length, 100)})</Typography>}
@@ -2565,18 +3274,50 @@ const UserManagement = () => {
                 </Box>
                 
                 {selectedPartnersForGroup.size > 0 && (
-                  <ActionButton
-                    variant="contained"
-                    color="primary"
-                    onClick={bulkCreateGroups}
-                    loading={bulkCreating}
-                    disabled={bulkCreating}
-                  >
-                    <GroupAddIcon sx={{ mr: 1 }} />
-                    Create {selectedPartnersForGroup.size} Groups
-                  </ActionButton>
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <ActionButton
+                      variant="contained"
+                      color="primary"
+                      onClick={bulkCreateGroups}
+                      loading={bulkCreating}
+                      disabled={bulkCreating || bulkDeleting}
+                    >
+                      <GroupAddIcon sx={{ mr: 1 }} />
+                      Create {selectedPartnersForGroup.size} Groups
+                    </ActionButton>
+                    <ActionButton
+                      variant="outlined"
+                      color="error"
+                      onClick={bulkDeletePartners}
+                      loading={bulkDeleting}
+                      disabled={bulkCreating || bulkDeleting}
+                    >
+                      <DeleteIcon sx={{ mr: 1 }} />
+                      Delete {selectedPartnersForGroup.size}
+                    </ActionButton>
+                  </Box>
                 )}
               </Box>
+
+              {/* Bulk Delete Results */}
+              {bulkDeleteResults && (
+                <Alert 
+                  severity={bulkDeleteResults.failed?.length === 0 ? 'success' : 'warning'} 
+                  onClose={() => setBulkDeleteResults(null)} 
+                  sx={{ mb: 3 }}
+                >
+                  <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
+                    🗑️ Bulk Delete Complete
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                    <span>Deleted: <strong style={{ color: '#28a745' }}>{bulkDeleteResults.deleted?.length || 0}</strong></span>
+                    <span>Contacts Removed: <strong>{bulkDeleteResults.contactsDeleted || 0}</strong></span>
+                    {bulkDeleteResults.failed?.length > 0 && (
+                      <span>Failed: <strong style={{ color: '#dc3545' }}>{bulkDeleteResults.failed.length}</strong></span>
+                    )}
+                  </Box>
+                </Alert>
+              )}
 
               <Typography variant="body2" sx={{ mb: 2, opacity: 0.7 }}>
                 Showing {filteredPartnersWithoutGroups.length} of {partnersWithoutGroups.length} partners
@@ -2588,51 +3329,139 @@ const UserManagement = () => {
                   <thead>
                     <tr>
                       <th style={{ width: 40 }}></th>
+                      <th style={{ width: 30 }}></th>
                       <th>Partner Name</th>
                       <th style={{ textAlign: 'center' }}>Tier</th>
                       <th style={{ textAlign: 'center' }}>Region</th>
-                      <th style={{ textAlign: 'center' }}>Action</th>
+                      <th style={{ textAlign: 'center' }}>Contacts</th>
+                      <th style={{ textAlign: 'center' }}>Status</th>
+                      <th style={{ textAlign: 'center' }}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredPartnersWithoutGroups.slice(0, 100).map(partner => (
-                      <tr key={partner.id}>
-                        <td>
-                          <Checkbox
-                            size="small"
-                            checked={selectedPartnersForGroup.has(partner.id)}
-                            onChange={() => togglePartnerSelection(partner.id)}
-                            disabled={bulkCreating}
-                          />
-                        </td>
-                        <td>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <BusinessIcon sx={{ color: 'text.secondary', fontSize: 18 }} />
-                            <strong>{partner.account_name}</strong>
-                          </Box>
-                        </td>
-                        <td style={{ textAlign: 'center' }}>
-                          {partner.partner_tier ? (
-                            <TierBadge tier={partner.partner_tier} size="small" />
-                          ) : (
-                            <span style={{ opacity: 0.5 }}>-</span>
-                          )}
-                        </td>
-                        <td style={{ textAlign: 'center' }}>{partner.account_region || '-'}</td>
-                        <td style={{ textAlign: 'center' }}>
-                          <ActionButton
-                            size="small"
-                            variant="outlined"
-                            color="primary"
-                            onClick={() => createGroupForPartner(partner)}
-                            loading={creatingGroupFor?.partnerId === partner.id}
-                            disabled={creatingGroupFor !== null || bulkCreating}
-                            sx={{ fontSize: '0.75rem', py: 0.5, px: 1.5 }}
-                          >
-                            Create
-                          </ActionButton>
-                        </td>
-                      </tr>
+                      <React.Fragment key={partner.id}>
+                        <tr style={{ backgroundColor: expandedPartnerRow === partner.id ? 'var(--admin-bg-elevated)' : 'inherit' }}>
+                          <td>
+                            <Checkbox
+                              size="small"
+                              checked={selectedPartnersForGroup.has(partner.id)}
+                              onChange={() => togglePartnerSelection(partner.id)}
+                              disabled={bulkCreating || bulkDeleting}
+                            />
+                          </td>
+                          <td>
+                            <IconButton 
+                              size="small" 
+                              onClick={() => togglePartnerDetails(partner.id)}
+                              sx={{ p: 0.5 }}
+                            >
+                              {expandedPartnerRow === partner.id ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+                            </IconButton>
+                          </td>
+                          <td>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <BusinessIcon sx={{ color: 'text.secondary', fontSize: 18 }} />
+                              <Box>
+                                <strong>{partner.account_name}</strong>
+                                {partner.account_owner && (
+                                  <Typography variant="caption" sx={{ display: 'block', opacity: 0.6 }}>
+                                    Owner: {partner.account_owner}
+                                  </Typography>
+                                )}
+                              </Box>
+                            </Box>
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            {partner.partner_tier ? (
+                              <TierBadge tier={partner.partner_tier} size="small" />
+                            ) : (
+                              <span style={{ opacity: 0.5 }}>-</span>
+                            )}
+                          </td>
+                          <td style={{ textAlign: 'center' }}>{partner.account_region || '-'}</td>
+                          <td style={{ textAlign: 'center' }}>
+                            <Tooltip title={`${partner.active_contact_count || 0} active, ${partner.lms_user_count || 0} in LMS`}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
+                                <PersonIcon fontSize="small" sx={{ opacity: 0.6 }} />
+                                <span>{partner.contact_count || 0}</span>
+                              </Box>
+                            </Tooltip>
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            {partner.is_active === false ? (
+                              <Chip label="Inactive" size="small" color="error" variant="outlined" />
+                            ) : partner.impartner_id ? (
+                              <Chip label="Impartner" size="small" color="success" variant="outlined" />
+                            ) : (
+                              <Chip label="Local Only" size="small" variant="outlined" />
+                            )}
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center' }}>
+                              <ActionButton
+                                size="small"
+                                variant="outlined"
+                                color="primary"
+                                onClick={() => createGroupForPartner(partner)}
+                                loading={creatingGroupFor?.partnerId === partner.id}
+                                disabled={creatingGroupFor !== null || bulkCreating || bulkDeleting}
+                                sx={{ fontSize: '0.75rem', py: 0.5, px: 1 }}
+                              >
+                                Create
+                              </ActionButton>
+                              <IconButton
+                                size="small"
+                                color="error"
+                                onClick={() => { setPartnerToDelete(partner); setDeleteConfirmOpen(true); }}
+                                disabled={bulkCreating || bulkDeleting || deletingPartner === partner.id}
+                              >
+                                {deletingPartner === partner.id ? <CircularProgress size={16} /> : <DeleteIcon fontSize="small" />}
+                              </IconButton>
+                            </Box>
+                          </td>
+                        </tr>
+                        {/* Expanded details row */}
+                        {expandedPartnerRow === partner.id && (
+                          <tr>
+                            <td colSpan={8} style={{ backgroundColor: 'var(--admin-bg-elevated)', padding: '12px 16px' }}>
+                              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 2 }}>
+                                <Box>
+                                  <Typography variant="caption" sx={{ fontWeight: 600, opacity: 0.7 }}>Contacts</Typography>
+                                  <Typography variant="body2">
+                                    Total: {partner.contact_count || 0} | Active: {partner.active_contact_count || 0} | In LMS: {partner.lms_user_count || 0}
+                                  </Typography>
+                                </Box>
+                                <Box>
+                                  <Typography variant="caption" sx={{ fontWeight: 600, opacity: 0.7 }}>Impartner</Typography>
+                                  <Typography variant="body2">
+                                    {partner.impartner_id ? `ID: ${partner.impartner_id}` : 'Not linked'}
+                                    {partner.account_status && ` | Status: ${partner.account_status}`}
+                                  </Typography>
+                                </Box>
+                                <Box>
+                                  <Typography variant="caption" sx={{ fontWeight: 600, opacity: 0.7 }}>Leads</Typography>
+                                  <Typography variant="body2">
+                                    Total: {partner.lead_count || 0} | Last 30d: {partner.leads_last_30_days || 0}
+                                  </Typography>
+                                </Box>
+                                <Box>
+                                  <Typography variant="caption" sx={{ fontWeight: 600, opacity: 0.7 }}>Salesforce ID</Typography>
+                                  <Typography variant="body2">
+                                    {partner.salesforce_id || 'Not linked'}
+                                  </Typography>
+                                </Box>
+                                <Box>
+                                  <Typography variant="caption" sx={{ fontWeight: 600, opacity: 0.7 }}>Created</Typography>
+                                  <Typography variant="body2">
+                                    {partner.created_at ? new Date(partner.created_at).toLocaleDateString() : '-'}
+                                  </Typography>
+                                </Box>
+                              </Box>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
                     ))}
                   </tbody>
                 </table>
@@ -2643,6 +3472,36 @@ const UserManagement = () => {
                   </div>
                 )}
               </div>
+
+              {/* Delete Confirmation Dialog */}
+              <Dialog open={deleteConfirmOpen} onClose={() => setDeleteConfirmOpen(false)}>
+                <DialogTitle>Delete Partner?</DialogTitle>
+                <DialogContent>
+                  <Typography variant="body1" sx={{ mb: 2 }}>
+                    Are you sure you want to delete <strong>{partnerToDelete?.account_name}</strong>?
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: 'error.main' }}>
+                    This will also delete {partnerToDelete?.contact_count || 0} associated contacts. This action cannot be undone.
+                  </Typography>
+                  {partnerToDelete?.impartner_id && (
+                    <Alert severity="warning" sx={{ mt: 2 }}>
+                      This partner is synced from Impartner (ID: {partnerToDelete.impartner_id}). 
+                      Deleting it locally will not remove it from Impartner, and it may be recreated on next sync.
+                    </Alert>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button onClick={() => setDeleteConfirmOpen(false)}>Cancel</Button>
+                  <Button 
+                    variant="contained" 
+                    color="error" 
+                    onClick={() => deletePartner(partnerToDelete)}
+                    disabled={deletingPartner !== null}
+                  >
+                    {deletingPartner ? <CircularProgress size={20} /> : 'Delete'}
+                  </Button>
+                </DialogActions>
+              </Dialog>
             </>
           )}
         </>
@@ -2744,6 +3603,61 @@ const UserManagement = () => {
                 </Alert>
               )}
 
+              {/* Groups Needing Rename Section */}
+              {audit.groupsToRename?.length > 0 && (
+                <SectionCard title={`Groups Needing ptr_ Prefix (${audit.groupsNeedingRename || audit.groupsToRename.length})`} icon="✏️">
+                  <Box sx={{ mb: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
+                    <Typography variant="body2" sx={{ opacity: 0.7 }}>
+                      Partner groups should use the <code style={{ background: '#f5f5f5', padding: '2px 6px', borderRadius: 4 }}>ptr_</code> prefix for consistency and identification.
+                    </Typography>
+                    <ActionButton 
+                      onClick={renameAllGroups}
+                      loading={renaming === 'all'}
+                      disabled={renaming !== null}
+                      size="small"
+                    >
+                      ✏️ Rename All to ptr_ Prefix
+                    </ActionButton>
+                  </Box>
+                  
+                  <Box sx={{ maxHeight: 400, overflow: 'auto' }}>
+                    {audit.groupsToRename.map(group => (
+                      <Box 
+                        key={group.groupId}
+                        sx={{ 
+                          display: 'flex', 
+                          justifyContent: 'space-between', 
+                          alignItems: 'center',
+                          py: 1.5,
+                          px: 2,
+                          mb: 1,
+                          borderRadius: 1,
+                          bgcolor: 'var(--admin-bg-elevated)',
+                          border: '1px solid var(--admin-border-light)',
+                        }}
+                      >
+                        <Box>
+                          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                            {group.groupName}
+                          </Typography>
+                          <Typography variant="caption" sx={{ opacity: 0.6 }}>
+                            → {group.suggestedName}
+                          </Typography>
+                        </Box>
+                        <ActionButton 
+                          onClick={() => renamePartnerGroup(group.groupId, group.suggestedName)}
+                          loading={renaming === group.groupId}
+                          disabled={renaming !== null && renaming !== group.groupId}
+                          size="small"
+                        >
+                          ✏️ Rename
+                        </ActionButton>
+                      </Box>
+                    ))}
+                  </Box>
+                </SectionCard>
+              )}
+
               {/* Fix All Button */}
               {audit.partnersWithIssues?.length > 0 && (
                 <SectionCard>
@@ -2794,6 +3708,9 @@ const UserManagement = () => {
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                           <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>{partner.partnerName}</Typography>
                           <TierBadge tier={partner.tier || 'Unknown'} size="small" />
+                          {partner.needsRename && (
+                            <StatusChip status="warning" label="needs rename" size="small" />
+                          )}
                         </Box>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                           {partner.missingPartnerGroup.length > 0 && (
@@ -2859,7 +3776,7 @@ const UserManagement = () => {
                             </Box>
                           )}
                           
-                          <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid var(--admin-border-light)' }}>
+                          <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid var(--admin-border-light)', display: 'flex', gap: 2, flexWrap: 'wrap' }}>
                             <ActionButton 
                               size="small"
                               onClick={() => fixPartnerMemberships(partner.partnerId)}
@@ -2867,6 +3784,16 @@ const UserManagement = () => {
                             >
                               🔧 Fix This Partner's Memberships
                             </ActionButton>
+                            {partner.needsRename && partner.partnerGroupId && (
+                              <ActionButton 
+                                size="small"
+                                onClick={() => renamePartnerGroup(partner.partnerGroupId, partner.suggestedName)}
+                                loading={renaming === partner.partnerGroupId}
+                                disabled={renaming !== null && renaming !== partner.partnerGroupId}
+                              >
+                                ✏️ Rename to {partner.suggestedName}
+                              </ActionButton>
+                            )}
                           </Box>
                         </Box>
                       </Collapse>
@@ -2961,15 +3888,40 @@ const UserManagement = () => {
             </Alert>
           )}
 
+          {/* Remove Results */}
+          {removeResults && (
+            <Alert 
+              severity={removeResults.failed === 0 ? 'success' : 'warning'} 
+              onClose={() => setRemoveResults(null)} 
+              sx={{ mb: 3 }}
+            >
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>🗑️ Removal Complete</Typography>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                <span>Removed: <strong style={{ color: '#28a745' }}>{removeResults.removed}</strong></span>
+                {removeResults.failed > 0 && (
+                  <span>Failed: <strong style={{ color: '#dc3545' }}>{removeResults.failed}</strong></span>
+                )}
+              </Box>
+              {removeResults.errors?.length > 0 && (
+                <Box sx={{ mt: 1, fontSize: '12px', opacity: 0.8, maxHeight: 100, overflowY: 'auto' }}>
+                  {removeResults.errors.slice(0, 5).map((err, i) => (
+                    <div key={i}>• {err.userId}: {err.error}</div>
+                  ))}
+                </Box>
+              )}
+            </Alert>
+          )}
+
           {/* Sync Audit Results */}
           {syncAudit && (
             <>
               {/* Summary Stats */}
-              <StatsRow columns={5}>
+              <StatsRow columns={6}>
                 <StatCard icon="🏢" value={syncAudit.totalPartnerGroups} label="Partner Groups" />
                 <StatCard icon="👥" value={syncAudit.totalUsersChecked} label="Users Checked" />
                 <StatCard icon="✅" value={syncAudit.usersAlreadyInAllPartners} label="Already Synced" variant="success" />
                 <StatCard icon="⚠️" value={syncAudit.usersMissingFromAllPartners} label="Missing (Need to Add)" variant={syncAudit.usersMissingFromAllPartners > 0 ? 'error' : 'success'} />
+                <StatCard icon="💀" value={syncAudit.usersFromDeactivatedPartners || 0} label="From Inactive Partners" variant={syncAudit.usersFromDeactivatedPartners > 0 ? 'error' : 'success'} />
                 <StatCard icon="🚫" value={syncAudit.usersToRemoveFromAllPartners || 0} label="Shouldn't Be In (Remove)" variant={syncAudit.usersToRemoveFromAllPartners > 0 ? 'warning' : 'success'} />
               </StatsRow>
 
@@ -3049,40 +4001,424 @@ const UserManagement = () => {
                 />
               ) : null}
 
-              {/* Users who shouldn't be in All Partners */}
-              {syncAudit.usersToRemoveFromAllPartners > 0 && (
-                <SectionCard title="Users to Remove from All Partners" icon="🚫">
-                  <Box sx={{ mb: 2 }}>
-                    <Alert severity="warning" sx={{ mb: 2 }}>
-                      <Typography variant="body2">
-                        <strong>{syncAudit.usersToRemoveFromAllPartners} users</strong> are in the "All Partners" group but are <strong>not</strong> members of any partner group.
-                        These users may have access to partner-only content without being affiliated with a partner.
-                      </Typography>
-                    </Alert>
+              {/* Users from Deactivated Partners - Need Removal */}
+              {syncAudit.usersFromDeactivatedPartners > 0 && syncAudit.usersFromDeactivatedPartnersList?.length > 0 && (
+                <SectionCard title="Users from Inactive/Deactivated Partners" icon="💀">
+                  <Alert severity="error" sx={{ mb: 2 }}>
+                    <Typography variant="body2">
+                      <strong>{syncAudit.usersFromDeactivatedPartners} users</strong> are in the "All Partners" group but their partner is <strong>inactive</strong> or <strong>deactivated</strong> in the CRM.
+                      These users should be removed to maintain data integrity.
+                    </Typography>
+                  </Alert>
+                  
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 2 }}>
+                    <Typography variant="body2" sx={{ opacity: 0.7 }}>
+                      Showing {Math.min(syncAudit.usersFromDeactivatedPartnersList.length, 100)} of {syncAudit.usersFromDeactivatedPartners} users
+                    </Typography>
+                    <ActionButton
+                      onClick={() => removeFromAllPartners(
+                        syncAudit.usersFromDeactivatedPartnersList.map(u => u.userId),
+                        'Partner is inactive/deactivated'
+                      )}
+                      loading={removingFromAllPartners}
+                      variant="outlined"
+                      sx={{ 
+                        color: '#dc3545', 
+                        borderColor: '#dc3545',
+                        '&:hover': { bgcolor: 'rgba(220, 53, 69, 0.1)', borderColor: '#dc3545' }
+                      }}
+                    >
+                      🗑️ Remove All from "All Partners"
+                    </ActionButton>
                   </Box>
-                  <Box sx={{ maxHeight: 400, overflowY: 'auto' }}>
+                  
+                  <Box sx={{ maxHeight: 400, overflowY: 'auto', border: '1px solid var(--admin-border-light)', borderRadius: 1 }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                       <thead>
-                        <tr style={{ borderBottom: '2px solid var(--admin-border-default)' }}>
+                        <tr style={{ borderBottom: '2px solid var(--admin-border-default)', background: 'var(--admin-bg-elevated)', position: 'sticky', top: 0, zIndex: 1 }}>
                           <th style={{ padding: '8px', textAlign: 'left' }}>Email</th>
                           <th style={{ padding: '8px', textAlign: 'left' }}>Name</th>
+                          <th style={{ padding: '8px', textAlign: 'left' }}>Partner</th>
+                          <th style={{ padding: '8px', textAlign: 'left' }}>Partner Status</th>
+                          <th style={{ padding: '8px', textAlign: 'center' }}>Action</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {syncAudit.allUsersToRemove?.slice(0, 100).map(user => (
+                        {syncAudit.usersFromDeactivatedPartnersList.slice(0, 100).map(user => (
                           <tr key={user.userId} style={{ borderBottom: '1px solid var(--admin-border-light)' }}>
-                            <td style={{ padding: '8px' }}>{user.email}</td>
-                            <td style={{ padding: '8px' }}>{user.name?.trim() || '-'}</td>
+                            <td style={{ padding: '8px', fontSize: '13px' }}>{user.email}</td>
+                            <td style={{ padding: '8px', fontSize: '13px' }}>{user.name || '-'}</td>
+                            <td style={{ padding: '8px', fontSize: '13px' }}>{user.partnerName || '-'}</td>
+                            <td style={{ padding: '8px', fontSize: '13px' }}>
+                              <span style={{ 
+                                display: 'inline-flex', 
+                                alignItems: 'center', 
+                                gap: 4, 
+                                padding: '2px 8px', 
+                                borderRadius: 4, 
+                                fontSize: '11px',
+                                bgcolor: '#f8d7da',
+                                background: '#f8d7da',
+                                color: '#721c24'
+                              }}>
+                                {user.partnerStatus || 'Inactive'} {!user.partnerActive && '(Deactivated)'}
+                              </span>
+                            </td>
+                            <td style={{ padding: '8px', textAlign: 'center' }}>
+                              <button
+                                onClick={() => removeFromAllPartners([user.userId], `Partner ${user.partnerName} is inactive`)}
+                                disabled={removingFromAllPartners}
+                                style={{
+                                  padding: '4px 10px',
+                                  borderRadius: '4px',
+                                  border: '1px solid #dc3545',
+                                  background: 'transparent',
+                                  color: '#dc3545',
+                                  cursor: 'pointer',
+                                  fontSize: '11px'
+                                }}
+                              >
+                                Remove
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
-                    {syncAudit.allUsersToRemove?.length > 100 && (
-                      <Typography variant="caption" sx={{ display: 'block', mt: 1, opacity: 0.6, textAlign: 'center' }}>
-                        Showing first 100 of {syncAudit.allUsersToRemove.length} users
-                      </Typography>
-                    )}
                   </Box>
+                </SectionCard>
+              )}
+
+              {/* Users who shouldn't be in All Partners */}
+              {syncAudit.usersToRemoveFromAllPartners > 0 && (
+                <SectionCard title="Users to Review in All Partners" icon="🔍">
+                  <Box sx={{ mb: 2 }}>
+                    <Alert severity="warning" sx={{ mb: 2 }}>
+                      <Typography variant="body2">
+                        <strong>{syncAudit.usersToRemoveFromAllPartners} users</strong> are in the "All Partners" group but are <strong>not</strong> members of any partner group.
+                        (Excludes @nintex.com users)
+                      </Typography>
+                    </Alert>
+                    
+                    {/* Summary breakdown */}
+                    <Box sx={{ display: 'flex', gap: 2, mb: 2, flexWrap: 'wrap' }}>
+                      <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'var(--admin-warning-bg)', border: '1px solid #ffc107', flex: 1, minWidth: 200 }}>
+                        <Typography variant="h5" sx={{ fontWeight: 700, color: 'var(--admin-warning-text)' }}>
+                          {syncAudit.usersWithMissingPartnerGroup || 0}
+                        </Typography>
+                        <Typography variant="body2" sx={{ color: 'var(--admin-warning-text)' }}>
+                          Should be in partner group (found in CRM)
+                        </Typography>
+                      </Box>
+                      <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'var(--admin-error-bg)', border: '1px solid #dc3545', flex: 1, minWidth: 200 }}>
+                        <Typography variant="h5" sx={{ fontWeight: 700, color: 'var(--admin-error-text)' }}>
+                          {syncAudit.usersNotInCRM || 0}
+                        </Typography>
+                        <Typography variant="body2" sx={{ color: 'var(--admin-error-text)' }}>
+                          Not in CRM (may need removal)
+                        </Typography>
+                      </Box>
+                    </Box>
+                  </Box>
+                  
+                  {/* Users who should be in a partner group */}
+                  {syncAudit.usersWithMissingPartnerGroupList?.length > 0 && (
+                    <Box sx={{ mb: 3 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                        <Box>
+                          <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'var(--admin-warning-text)' }}>
+                            ⚠️ Users who SHOULD be in a partner group ({syncAudit.usersWithMissingPartnerGroupList.length})
+                          </Typography>
+                          <Typography variant="caption" sx={{ opacity: 0.7 }}>
+                            These users exist in CRM with a partner but aren't in the partner's LMS group
+                          </Typography>
+                        </Box>
+                        <ActionButton
+                          onClick={addUsersToPartnerGroups}
+                          loading={addingToPartnerGroups}
+                          disabled={!syncAudit.usersWithMissingPartnerGroupList?.some(u => u.expectedGroupId)}
+                          size="small"
+                        >
+                          ➕ Add All to Partner Groups
+                        </ActionButton>
+                      </Box>
+                      
+                      {/* Results */}
+                      {partnerGroupResults && (
+                        <Box sx={{ mb: 2 }}>
+                          <Alert severity={partnerGroupResults.apiFailed > 0 ? 'warning' : 'success'}>
+                            Added {partnerGroupResults.apiAdded} users to partner groups.
+                            {partnerGroupResults.apiFailed > 0 && ` ${partnerGroupResults.apiFailed} failed.`}
+                          </Alert>
+                          {partnerGroupResults.errors?.length > 0 && (
+                            <Box sx={{ mt: 1, p: 1, bgcolor: '#fff3cd', borderRadius: 1, maxHeight: 150, overflowY: 'auto' }}>
+                              <Typography variant="body2" fontWeight="bold" sx={{ mb: 0.5 }}>Error Details:</Typography>
+                              {partnerGroupResults.errors.slice(0, 10).map((e, i) => (
+                                <Typography key={i} variant="body2" sx={{ fontSize: '0.75rem', color: '#856404' }}>
+                                  • User {e.userId}: {e.error}
+                                </Typography>
+                              ))}
+                              {partnerGroupResults.errors.length > 10 && (
+                                <Typography variant="body2" sx={{ fontSize: '0.75rem', fontStyle: 'italic' }}>
+                                  ... and {partnerGroupResults.errors.length - 10} more errors
+                                </Typography>
+                              )}
+                            </Box>
+                          )}
+                        </Box>
+                      )}
+                      
+                      <Box sx={{ maxHeight: 300, overflowY: 'auto', border: '1px solid var(--admin-border-light)', borderRadius: 1 }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                          <thead>
+                            <tr style={{ borderBottom: '2px solid var(--admin-border-default)', background: 'var(--admin-bg-elevated)' }}>
+                              <th style={{ padding: '8px', textAlign: 'left' }}>Email</th>
+                              <th style={{ padding: '8px', textAlign: 'left' }}>Name</th>
+                              <th style={{ padding: '8px', textAlign: 'left' }}>Should Be In Partner</th>
+                              <th style={{ padding: '8px', textAlign: 'left' }}>Expected Group</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {syncAudit.usersWithMissingPartnerGroupList.slice(0, 50).map(user => (
+                              <tr key={user.userId} style={{ borderBottom: '1px solid var(--admin-border-light)' }}>
+                                <td style={{ padding: '8px' }}>{user.email}</td>
+                                <td style={{ padding: '8px' }}>{user.name || '-'}</td>
+                                <td style={{ padding: '8px' }}>
+                                  {user.shouldBeInPartner}
+                                  {!user.partnerActive && <span style={{ color: '#dc3545', marginLeft: 4 }}>(Inactive)</span>}
+                                </td>
+                                <td style={{ padding: '8px' }}>{user.expectedGroupName || <span style={{ color: '#dc3545' }}>No group exists!</span>}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {syncAudit.usersWithMissingPartnerGroupList.length > 50 && (
+                          <Typography variant="caption" sx={{ display: 'block', p: 1, opacity: 0.6, textAlign: 'center' }}>
+                            Showing first 50 of {syncAudit.usersWithMissingPartnerGroupList.length} users
+                          </Typography>
+                        )}
+                      </Box>
+                    </Box>
+                  )}
+                  
+                  {/* Users not in CRM */}
+                  {syncAudit.usersNotInCRMList?.length > 0 && !domainMatches && (
+                    <Box>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                        <Box>
+                          <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'var(--admin-error-text)' }}>
+                            🚫 Users NOT in CRM ({syncAudit.usersNotInCRMList.length})
+                          </Typography>
+                          <Typography variant="caption" sx={{ opacity: 0.7 }}>
+                            These users are in All Partners but not found in our CRM
+                          </Typography>
+                        </Box>
+                        <ActionButton
+                          onClick={matchUsersByDomain}
+                          loading={domainMatching}
+                          size="small"
+                          variant="outlined"
+                        >
+                          🔍 Match by Domain
+                        </ActionButton>
+                      </Box>
+                      <Box sx={{ maxHeight: 300, overflowY: 'auto', border: '1px solid var(--admin-border-light)', borderRadius: 1 }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                          <thead>
+                            <tr style={{ borderBottom: '2px solid var(--admin-border-default)', background: 'var(--admin-bg-elevated)' }}>
+                              <th style={{ padding: '8px', textAlign: 'left' }}>Email</th>
+                              <th style={{ padding: '8px', textAlign: 'left' }}>Name</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {syncAudit.usersNotInCRMList.slice(0, 50).map(user => (
+                              <tr key={user.userId} style={{ borderBottom: '1px solid var(--admin-border-light)' }}>
+                                <td style={{ padding: '8px' }}>{user.email}</td>
+                                <td style={{ padding: '8px' }}>{user.name || '-'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {syncAudit.usersNotInCRMList.length > 50 && (
+                          <Typography variant="caption" sx={{ display: 'block', p: 1, opacity: 0.6, textAlign: 'center' }}>
+                            Showing first 50 of {syncAudit.usersNotInCRMList.length} users
+                          </Typography>
+                        )}
+                      </Box>
+                    </Box>
+                  )}
+                  
+                  {/* Domain Match Results */}
+                  {domainMatches && (
+                    <Box>
+                      {/* Matched users */}
+                      {domainMatches.length > 0 && (
+                        <Box sx={{ mb: 3 }}>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                            <Box>
+                              <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'var(--admin-success-text)' }}>
+                                ✅ Domain Matched Users ({domainMatches.length})
+                              </Typography>
+                              <Typography variant="caption" sx={{ opacity: 0.7 }}>
+                                These users can be added to Impartner CRM based on their email domain. Click a partner name to change.
+                              </Typography>
+                            </Box>
+                            <ActionButton
+                              onClick={addMatchedUsersToImpartner}
+                              loading={addingToImpartner}
+                              size="small"
+                            >
+                              ➕ Add All to Impartner
+                            </ActionButton>
+                          </Box>
+                          
+                          {impartnerResults && (
+                            <Alert severity={impartnerResults.failed > 0 ? 'warning' : 'success'} sx={{ mb: 2 }}>
+                              Added {impartnerResults.added} users to Impartner.
+                              {impartnerResults.failed > 0 && ` ${impartnerResults.failed} failed.`}
+                            </Alert>
+                          )}
+                          
+                          <Box sx={{ maxHeight: 250, overflowY: 'auto', border: '1px solid var(--admin-border-light)', borderRadius: 1 }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                              <thead>
+                                <tr style={{ borderBottom: '2px solid var(--admin-border-default)', background: 'var(--admin-bg-elevated)' }}>
+                                  <th style={{ padding: '8px', textAlign: 'left' }}>Email</th>
+                                  <th style={{ padding: '8px', textAlign: 'left' }}>Name</th>
+                                  <th style={{ padding: '8px', textAlign: 'left' }}>Domain</th>
+                                  <th style={{ padding: '8px', textAlign: 'left' }}>Matched Partner</th>
+                                  <th style={{ padding: '8px', textAlign: 'center' }}>Action</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {domainMatches.slice(0, 50).map(user => (
+                                  <tr key={user.userId} style={{ borderBottom: '1px solid var(--admin-border-light)' }}>
+                                    <td style={{ padding: '8px', fontSize: '13px' }}>{user.email}</td>
+                                    <td style={{ padding: '8px', fontSize: '13px' }}>{user.name || '-'}</td>
+                                    <td style={{ padding: '8px', fontSize: '13px', opacity: 0.6 }}>{user.domain}</td>
+                                    <td style={{ padding: '8px', fontSize: '13px' }}>
+                                      {manualPartnerSelect[user.userId] 
+                                        ? partnersList.find(p => p.id == manualPartnerSelect[user.userId])?.account_name || 'Selected'
+                                        : user.matchedPartner?.partnerName}
+                                    </td>
+                                    <td style={{ padding: '8px', textAlign: 'center' }}>
+                                      <button
+                                        onClick={() => addSingleUserToImpartner(user, manualPartnerSelect[user.userId] || user.matchedPartner?.partnerId)}
+                                        disabled={!(manualPartnerSelect[user.userId] || user.matchedPartner?.partnerId) || addingToImpartner}
+                                        style={{
+                                          padding: '4px 12px',
+                                          borderRadius: '4px',
+                                          border: 'none',
+                                          background: (manualPartnerSelect[user.userId] || user.matchedPartner?.partnerId) ? 'var(--nintex-orange)' : '#ccc',
+                                          color: 'white',
+                                          cursor: (manualPartnerSelect[user.userId] || user.matchedPartner?.partnerId) ? 'pointer' : 'not-allowed',
+                                          fontSize: '12px'
+                                        }}
+                                      >
+                                        Add
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                            {domainMatches.length > 50 && (
+                              <Typography variant="caption" sx={{ display: 'block', p: 1, opacity: 0.6, textAlign: 'center' }}>
+                                Showing first 50 of {domainMatches.length} users
+                              </Typography>
+                            )}
+                          </Box>
+                        </Box>
+                      )}
+                      
+                      {/* Unmatched users - need manual selection */}
+                      {unmatchedUsers?.length > 0 && (
+                        <Box>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1, gap: 2, flexWrap: 'wrap' }}>
+                            <Box>
+                              <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'var(--admin-error-text)' }}>
+                                ❓ No Domain Match ({unmatchedUsers.length})
+                              </Typography>
+                              <Typography variant="caption" sx={{ opacity: 0.7 }}>
+                                Public email domains (gmail, yahoo, etc.) or domains not found in CRM.
+                              </Typography>
+                            </Box>
+                            {/* Single partner selector for bulk assignment */}
+                            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                              <Autocomplete
+                                size="small"
+                                options={partnersList}
+                                getOptionLabel={(option) => `${option.account_name} (${option.partner_tier || 'N/A'})`}
+                                value={partnersList.find(p => p.id == manualPartnerSelect['bulk']) || null}
+                                onChange={(e, newValue) => setManualPartnerSelect(prev => ({ ...prev, bulk: newValue?.id || '' }))}
+                                renderInput={(params) => (
+                                  <TextField {...params} placeholder="Search partner..." size="small" sx={{ width: 280 }} />
+                                )}
+                                isOptionEqualToValue={(option, value) => option.id === value.id}
+                              />
+                            </Box>
+                          </Box>
+                          <Box sx={{ maxHeight: 300, overflowY: 'auto', border: '1px solid var(--admin-border-light)', borderRadius: 1 }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                              <thead>
+                                <tr style={{ borderBottom: '2px solid var(--admin-border-default)', background: 'var(--admin-bg-elevated)' }}>
+                                  <th style={{ padding: '8px', textAlign: 'left' }}>Email</th>
+                                  <th style={{ padding: '8px', textAlign: 'left' }}>Name</th>
+                                  <th style={{ padding: '8px', textAlign: 'left' }}>Domain</th>
+                                  <th style={{ padding: '8px', textAlign: 'center' }}>Action</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {unmatchedUsers.slice(0, 50).map(user => (
+                                  <tr key={user.userId} style={{ borderBottom: '1px solid var(--admin-border-light)' }}>
+                                    <td style={{ padding: '8px', fontSize: '13px' }}>{user.email}</td>
+                                    <td style={{ padding: '8px', fontSize: '13px' }}>{user.name || '-'}</td>
+                                    <td style={{ padding: '8px', fontSize: '13px', opacity: 0.6 }}>
+                                      {user.domain}
+                                      {user.isPublicDomain && <span style={{ color: '#dc3545', marginLeft: 4, fontSize: '11px' }}>(public)</span>}
+                                    </td>
+                                    <td style={{ padding: '8px', textAlign: 'center' }}>
+                                      <button
+                                        onClick={() => addSingleUserToImpartner(user, manualPartnerSelect['bulk'])}
+                                        disabled={!manualPartnerSelect['bulk'] || addingToImpartner}
+                                        style={{
+                                          padding: '4px 12px',
+                                          borderRadius: '4px',
+                                          border: 'none',
+                                          background: manualPartnerSelect['bulk'] ? 'var(--nintex-orange)' : '#ccc',
+                                          color: 'white',
+                                          cursor: manualPartnerSelect['bulk'] ? 'pointer' : 'not-allowed',
+                                          fontSize: '12px'
+                                        }}
+                                      >
+                                        Add
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                            {unmatchedUsers.length > 50 && (
+                              <Typography variant="caption" sx={{ display: 'block', p: 1, opacity: 0.6, textAlign: 'center' }}>
+                                Showing first 50 of {unmatchedUsers.length} users
+                              </Typography>
+                            )}
+                          </Box>
+                        </Box>
+                      )}
+                      
+                      {/* Back button */}
+                      <Box sx={{ mt: 2 }}>
+                        <ActionButton
+                          onClick={() => { setDomainMatches(null); setUnmatchedUsers(null); setImpartnerResults(null); }}
+                          variant="outlined"
+                          size="small"
+                        >
+                          ← Back to Original List
+                        </ActionButton>
+                      </Box>
+                    </Box>
+                  )}
                 </SectionCard>
               )}
             </>
@@ -3455,6 +4791,613 @@ const UserManagement = () => {
           )}
         </>
       )}
+
+      {/* Tab 6: User Search */}
+      {activeTab === 6 && (
+        <>
+          {/* Search Input */}
+          <Card sx={{ p: 3, mb: 3 }}>
+            <Typography variant="h6" sx={{ mb: 2 }}>
+              <PersonSearch sx={{ mr: 1, verticalAlign: 'middle' }} />
+              Search for Users
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Search across both LMS (Northpass) and CRM (Impartner) systems by email, first name, or last name.
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
+              <TextField
+                fullWidth
+                label="Search by email or name"
+                placeholder="Enter email address or name (min 3 characters)"
+                value={userSearchQuery}
+                onChange={(e) => setUserSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && searchUsers()}
+                InputProps={{
+                  startAdornment: <SearchIcon sx={{ mr: 1, color: 'text.secondary' }} />
+                }}
+              />
+              <ActionButton
+                variant="contained"
+                color="primary"
+                onClick={searchUsers}
+                loading={userSearchLoading}
+                disabled={userSearchQuery.length < 3}
+              >
+                Search
+              </ActionButton>
+            </Box>
+          </Card>
+
+          {/* Search Results and Profile side by side */}
+          <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+            {/* Search Results */}
+            <Box sx={{ flex: '1 1 400px', minWidth: 350 }}>
+              {userSearchLoading && <LoadingState message="Searching..." />}
+              
+              {userSearchResults && !userSearchLoading && (
+                <SectionCard 
+                  title={`Search Results (${userSearchResults.totalResults || 0})`}
+                  icon="🔍"
+                >
+                  {userSearchResults.results?.length > 0 ? (
+                    <Box sx={{ maxHeight: 500, overflowY: 'auto' }}>
+                      {userSearchResults.results.map((user, idx) => (
+                        <Card 
+                          key={idx} 
+                          sx={{ 
+                            p: 2, 
+                            mb: 1, 
+                            cursor: 'pointer',
+                            bgcolor: selectedUserProfile?.email === user.email ? 'action.selected' : 'background.paper',
+                            '&:hover': { bgcolor: 'action.hover' }
+                          }}
+                          onClick={() => loadUserProfile(user.email)}
+                        >
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <Box>
+                              <Typography variant="subtitle2">
+                                {user.firstName} {user.lastName}
+                              </Typography>
+                              <Typography variant="body2" color="text.secondary">
+                                {user.email}
+                              </Typography>
+                            </Box>
+                            <Box sx={{ display: 'flex', gap: 0.5 }}>
+                              <Chip 
+                                size="small" 
+                                icon={user.inLms ? <CheckCircleIcon /> : <ErrorIcon />}
+                                label="LMS" 
+                                color={user.inLms ? 'success' : 'default'}
+                                variant={user.inLms ? 'filled' : 'outlined'}
+                              />
+                              <Chip 
+                                size="small" 
+                                icon={user.inCrm ? <CheckCircleIcon /> : <ErrorIcon />}
+                                label="CRM" 
+                                color={user.inCrm ? 'success' : 'default'}
+                                variant={user.inCrm ? 'filled' : 'outlined'}
+                              />
+                            </Box>
+                          </Box>
+                          {user.crmContact?.account_name && (
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                              <BusinessIcon sx={{ fontSize: 12, mr: 0.5, verticalAlign: 'middle' }} />
+                              {user.crmContact.account_name}
+                            </Typography>
+                          )}
+                        </Card>
+                      ))}
+                    </Box>
+                  ) : (
+                    <EmptyState
+                      icon="🔍"
+                      title="No results found"
+                      message={`No users found matching "${userSearchResults.query}"`}
+                    />
+                  )}
+                </SectionCard>
+              )}
+            </Box>
+
+            {/* User Profile Details */}
+            <Box sx={{ flex: '2 1 500px', minWidth: 400 }}>
+              {userProfileLoading && <LoadingState message="Loading profile..." />}
+              
+              {selectedUserProfile && !userProfileLoading && (
+                <Card sx={{ p: 3 }}>
+                  {/* Profile Header */}
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 3 }}>
+                    <Box>
+                      <Typography variant="h5">
+                        {selectedUserProfile.firstName} {selectedUserProfile.lastName}
+                      </Typography>
+                      <Typography variant="body1" color="text.secondary">
+                        <EmailIcon sx={{ fontSize: 16, mr: 0.5, verticalAlign: 'middle' }} />
+                        {selectedUserProfile.email}
+                      </Typography>
+                    </Box>
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      {selectedUserProfile.inLms ? (
+                        <Chip icon={<CheckCircleIcon />} label="In LMS" color="success" />
+                      ) : (
+                        <Chip 
+                          icon={<AddIcon />} 
+                          label="Add to LMS" 
+                          color="warning" 
+                          onClick={() => openCreateLmsDialog(
+                            selectedUserProfile.email,
+                            selectedUserProfile.firstName,
+                            selectedUserProfile.lastName,
+                            selectedUserProfile.crmContact?.partner_id
+                          )}
+                          sx={{ cursor: 'pointer' }}
+                        />
+                      )}
+                      {selectedUserProfile.inCrm ? (
+                        <Chip icon={<CheckCircleIcon />} label="In CRM" color="success" />
+                      ) : (
+                        <Chip 
+                          icon={<AddIcon />} 
+                          label="Add to CRM" 
+                          color="warning" 
+                          onClick={() => openCreateCrmDialog(
+                            selectedUserProfile.email,
+                            selectedUserProfile.firstName,
+                            selectedUserProfile.lastName,
+                            null
+                          )}
+                          sx={{ cursor: 'pointer' }}
+                        />
+                      )}
+                    </Box>
+                  </Box>
+
+                  <Divider sx={{ mb: 3 }} />
+
+                  {/* Stats Row */}
+                  <StatsRow columns={4}>
+                    <StatCard
+                      title="Enrollments"
+                      value={selectedUserProfile.stats?.totalEnrollments || 0}
+                      icon={<SchoolIcon />}
+                    />
+                    <StatCard
+                      title="Completed"
+                      value={selectedUserProfile.stats?.completedCourses || 0}
+                      icon={<CheckCircleIcon />}
+                      variant="success"
+                    />
+                    <StatCard
+                      title="Certifications"
+                      value={selectedUserProfile.stats?.certificationCount || 0}
+                      icon={<BadgeIcon />}
+                    />
+                    <StatCard
+                      title="NPCU"
+                      value={selectedUserProfile.stats?.totalNpcu || 0}
+                      icon={<SchoolIcon />}
+                      variant={selectedUserProfile.stats?.totalNpcu > 0 ? 'success' : 'default'}
+                    />
+                  </StatsRow>
+
+                  {/* CRM Info */}
+                  {selectedUserProfile.crmContact && (
+                    <Box sx={{ mt: 3 }}>
+                      <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 600 }}>
+                        <BusinessIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+                        CRM Details
+                      </Typography>
+                      <Card variant="outlined" sx={{ p: 2 }}>
+                        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 2 }}>
+                          <Box>
+                            <Typography variant="caption" color="text.secondary">Partner</Typography>
+                            <Typography variant="body2">{selectedUserProfile.crmContact.account_name || '-'}</Typography>
+                          </Box>
+                          <Box>
+                            <Typography variant="caption" color="text.secondary">Tier</Typography>
+                            <Typography variant="body2">
+                              {selectedUserProfile.crmContact.partner_tier && (
+                                <TierBadge tier={selectedUserProfile.crmContact.partner_tier} />
+                              )}
+                            </Typography>
+                          </Box>
+                          <Box>
+                            <Typography variant="caption" color="text.secondary">Region</Typography>
+                            <Typography variant="body2">{selectedUserProfile.crmContact.account_region || '-'}</Typography>
+                          </Box>
+                          <Box>
+                            <Typography variant="caption" color="text.secondary">Title</Typography>
+                            <Typography variant="body2">{selectedUserProfile.crmContact.title || '-'}</Typography>
+                          </Box>
+                          <Box>
+                            <Typography variant="caption" color="text.secondary">Account Owner</Typography>
+                            <Typography variant="body2">{selectedUserProfile.crmContact.account_owner || '-'}</Typography>
+                          </Box>
+                          <Box>
+                            <Typography variant="caption" color="text.secondary">Phone</Typography>
+                            <Typography variant="body2">{selectedUserProfile.crmContact.phone || '-'}</Typography>
+                          </Box>
+                          <Box sx={{ gridColumn: 'span 2' }}>
+                            <Typography variant="caption" color="text.secondary">Partner LMS Group</Typography>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                              {selectedUserProfile.crmContact.lms_group_id ? (
+                                <>
+                                  <Chip 
+                                    icon={<FolderIcon />} 
+                                    label={selectedUserProfile.crmContact.lms_group_name || 'Group exists'} 
+                                    color="success" 
+                                    size="small"
+                                    variant="outlined"
+                                  />
+                                  {/* Check if user is in partner's group */}
+                                  {selectedUserProfile.inLms && 
+                                   !selectedUserProfile.groups?.some(g => g.id === selectedUserProfile.crmContact.lms_group_id) && (
+                                    <Chip 
+                                      icon={<WarningIcon />}
+                                      label="User not in this group"
+                                      color="warning"
+                                      size="small"
+                                    />
+                                  )}
+                                </>
+                              ) : (
+                                <Chip icon={<WarningIcon />} label="No LMS group" color="error" size="small" />
+                              )}
+                            </Box>
+                          </Box>
+                        </Box>
+                      </Card>
+                    </Box>
+                  )}
+
+                  {/* Warning if user is in LMS but not in partner group - enrollments won't sync */}
+                  {selectedUserProfile.inLms && 
+                   selectedUserProfile.crmContact?.lms_group_id && 
+                   !selectedUserProfile.groups?.some(g => g.id === selectedUserProfile.crmContact.lms_group_id) && (
+                    <Alert severity="warning" sx={{ mt: 2 }}>
+                      <strong>User not in partner group!</strong> This user is in the LMS but not assigned to their partner's group 
+                      ("{selectedUserProfile.crmContact.lms_group_name}"). Enrollment data is only synced for users in partner groups.
+                      <Button 
+                        size="small" 
+                        variant="contained"
+                        color="warning"
+                        sx={{ ml: 2 }}
+                        onClick={() => {
+                          setAddToGroupUserId(selectedUserProfile.lmsUser?.id);
+                          setSelectedGroupToAdd(selectedUserProfile.crmContact.lms_group_id);
+                          setShowAddToGroupDialog(true);
+                        }}
+                      >
+                        Add to Partner Group
+                      </Button>
+                    </Alert>
+                  )}
+
+                  {/* LMS Groups */}
+                  {selectedUserProfile.groups?.length > 0 && (
+                    <Box sx={{ mt: 3 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                          <FolderIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+                          LMS Groups ({selectedUserProfile.groups.length})
+                        </Typography>
+                        {selectedUserProfile.inLms && (
+                          <Button 
+                            size="small" 
+                            startIcon={<AddIcon />}
+                            onClick={() => {
+                              setAddToGroupUserId(selectedUserProfile.lmsUser?.id);
+                              setShowAddToGroupDialog(true);
+                            }}
+                          >
+                            Add to Group
+                          </Button>
+                        )}
+                      </Box>
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                        {selectedUserProfile.groups.map((group, idx) => (
+                          <Chip 
+                            key={idx}
+                            icon={<FolderIcon />}
+                            label={group.name}
+                            variant="outlined"
+                            size="small"
+                          />
+                        ))}
+                      </Box>
+                    </Box>
+                  )}
+
+                  {selectedUserProfile.inLms && selectedUserProfile.groups?.length === 0 && (
+                    <Box sx={{ mt: 3 }}>
+                      <Alert severity="warning">
+                        This user is not in any LMS groups.
+                        <Button 
+                          size="small" 
+                          sx={{ ml: 2 }}
+                          onClick={() => {
+                            setAddToGroupUserId(selectedUserProfile.lmsUser?.id);
+                            setShowAddToGroupDialog(true);
+                          }}
+                        >
+                          Add to Group
+                        </Button>
+                      </Alert>
+                    </Box>
+                  )}
+
+                  {/* Certifications */}
+                  {selectedUserProfile.certifications?.length > 0 && (
+                    <Box sx={{ mt: 3 }}>
+                      <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 600 }}>
+                        <BadgeIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+                        Certifications ({selectedUserProfile.certifications.length})
+                      </Typography>
+                      <Box sx={{ maxHeight: 200, overflowY: 'auto' }}>
+                        {selectedUserProfile.certifications.map((cert, idx) => (
+                          <Card key={idx} variant="outlined" sx={{ p: 1.5, mb: 1 }}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <Box>
+                                <Typography variant="body2">{cert.course_name}</Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                  <AccessTimeIcon sx={{ fontSize: 12, mr: 0.5, verticalAlign: 'middle' }} />
+                                  {cert.completed_at ? new Date(cert.completed_at).toLocaleDateString() : '-'}
+                                </Typography>
+                              </Box>
+                              <Chip 
+                                size="small" 
+                                label={`${cert.npcu_value} NPCU`}
+                                color="primary"
+                              />
+                            </Box>
+                          </Card>
+                        ))}
+                      </Box>
+                    </Box>
+                  )}
+
+                  {/* Recent Enrollments */}
+                  {selectedUserProfile.enrollments?.length > 0 && (
+                    <Box sx={{ mt: 3 }}>
+                      <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 600 }}>
+                        <SchoolIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+                        Recent Enrollments
+                      </Typography>
+                      <Box sx={{ maxHeight: 300, overflowY: 'auto' }}>
+                        {selectedUserProfile.enrollments.slice(0, 10).map((enrollment, idx) => (
+                          <Card key={idx} variant="outlined" sx={{ p: 1.5, mb: 1 }}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <Box sx={{ flex: 1 }}>
+                                <Typography variant="body2" sx={{ fontWeight: enrollment.is_certification ? 600 : 400 }}>
+                                  {enrollment.course_name}
+                                  {enrollment.is_certification && (
+                                    <BadgeIcon sx={{ fontSize: 14, ml: 0.5, color: 'primary.main' }} />
+                                  )}
+                                </Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                  {enrollment.category || 'Uncategorized'}
+                                </Typography>
+                              </Box>
+                              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                                {enrollment.progress_percent !== null && enrollment.status !== 'completed' && (
+                                  <Typography variant="caption" color="text.secondary">
+                                    {enrollment.progress_percent}%
+                                  </Typography>
+                                )}
+                                <Chip 
+                                  size="small" 
+                                  label={enrollment.status}
+                                  color={enrollment.status === 'completed' ? 'success' : enrollment.status === 'in_progress' ? 'warning' : 'default'}
+                                  variant={enrollment.status === 'completed' ? 'filled' : 'outlined'}
+                                />
+                              </Box>
+                            </Box>
+                          </Card>
+                        ))}
+                        {selectedUserProfile.enrollments.length > 10 && (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center', mt: 1 }}>
+                            ... and {selectedUserProfile.enrollments.length - 10} more enrollments
+                          </Typography>
+                        )}
+                      </Box>
+                    </Box>
+                  )}
+
+                  {/* No LMS data message */}
+                  {!selectedUserProfile.inLms && (
+                    <Box sx={{ mt: 3 }}>
+                      <Alert severity="info">
+                        <Typography variant="body2">
+                          This user does not exist in the LMS (Northpass). 
+                          Click "Add to LMS" to create their account.
+                        </Typography>
+                      </Alert>
+                    </Box>
+                  )}
+                </Card>
+              )}
+
+              {/* Empty state when no profile selected */}
+              {!selectedUserProfile && !userProfileLoading && userSearchResults && (
+                <Card sx={{ p: 4, textAlign: 'center' }}>
+                  <PersonSearch sx={{ fontSize: 60, color: 'text.secondary', mb: 2 }} />
+                  <Typography variant="h6" color="text.secondary">
+                    Select a user to view details
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Click on any search result to see their full profile, enrollments, and group memberships.
+                  </Typography>
+                </Card>
+              )}
+            </Box>
+          </Box>
+        </>
+      )}
+
+      {/* Create LMS User Dialog */}
+      <Dialog open={showCreateLmsDialog} onClose={() => setShowCreateLmsDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          <PersonAddIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+          Create User in LMS (Northpass)
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <TextField
+              label="Email"
+              value={createUserData.email}
+              onChange={(e) => setCreateUserData({ ...createUserData, email: e.target.value })}
+              fullWidth
+              required
+            />
+            <Box sx={{ display: 'flex', gap: 2 }}>
+              <TextField
+                label="First Name"
+                value={createUserData.firstName}
+                onChange={(e) => setCreateUserData({ ...createUserData, firstName: e.target.value })}
+                fullWidth
+              />
+              <TextField
+                label="Last Name"
+                value={createUserData.lastName}
+                onChange={(e) => setCreateUserData({ ...createUserData, lastName: e.target.value })}
+                fullWidth
+              />
+            </Box>
+            <Autocomplete
+              options={partnersList}
+              getOptionLabel={(option) => `${option.account_name} (${option.partner_tier || 'No Tier'})`}
+              value={partnersList.find(p => p.id === createUserData.partnerId) || null}
+              onChange={(_, newValue) => setCreateUserData({ ...createUserData, partnerId: newValue?.id || null })}
+              renderInput={(params) => (
+                <TextField {...params} label="Partner (optional)" placeholder="Select partner to add to group" />
+              )}
+              isOptionEqualToValue={(option, value) => option.id === value.id}
+            />
+            <Alert severity="info" sx={{ mt: 1 }}>
+              Creating a user in LMS will:
+              <ul style={{ margin: '8px 0 0 0', paddingLeft: 20 }}>
+                <li>Create account in Northpass</li>
+                {createUserData.partnerId && <li>Add to partner's LMS group</li>}
+                {createUserData.partnerId && <li>Add to "All Partners" group</li>}
+              </ul>
+            </Alert>
+            {createUserResult && (
+              <Alert severity={createUserResult.success ? 'success' : 'error'}>
+                {createUserResult.message}
+              </Alert>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowCreateLmsDialog(false)}>Cancel</Button>
+          <Button 
+            variant="contained" 
+            onClick={createLmsUser}
+            disabled={!createUserData.email || creatingUser}
+            startIcon={creatingUser ? <CircularProgress size={16} /> : <PersonAddIcon />}
+          >
+            {creatingUser ? 'Creating...' : 'Create User'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Create CRM Contact Dialog */}
+      <Dialog open={showCreateCrmDialog} onClose={() => setShowCreateCrmDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          <PersonAddIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+          Create Contact in CRM (Database)
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <TextField
+              label="Email"
+              value={createUserData.email}
+              onChange={(e) => setCreateUserData({ ...createUserData, email: e.target.value })}
+              fullWidth
+              required
+            />
+            <Box sx={{ display: 'flex', gap: 2 }}>
+              <TextField
+                label="First Name"
+                value={createUserData.firstName}
+                onChange={(e) => setCreateUserData({ ...createUserData, firstName: e.target.value })}
+                fullWidth
+              />
+              <TextField
+                label="Last Name"
+                value={createUserData.lastName}
+                onChange={(e) => setCreateUserData({ ...createUserData, lastName: e.target.value })}
+                fullWidth
+              />
+            </Box>
+            <TextField
+              label="Title"
+              value={createUserData.title}
+              onChange={(e) => setCreateUserData({ ...createUserData, title: e.target.value })}
+              fullWidth
+            />
+            <Autocomplete
+              options={partnersList}
+              getOptionLabel={(option) => `${option.account_name} (${option.partner_tier || 'No Tier'})`}
+              value={partnersList.find(p => p.id === createUserData.partnerId) || null}
+              onChange={(_, newValue) => setCreateUserData({ ...createUserData, partnerId: newValue?.id || null })}
+              renderInput={(params) => (
+                <TextField {...params} label="Partner" placeholder="Select partner company" />
+              )}
+              isOptionEqualToValue={(option, value) => option.id === value.id}
+            />
+            {createUserResult && (
+              <Alert severity={createUserResult.success ? 'success' : 'error'}>
+                {createUserResult.message}
+              </Alert>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowCreateCrmDialog(false)}>Cancel</Button>
+          <Button 
+            variant="contained" 
+            onClick={createCrmContact}
+            disabled={!createUserData.email || creatingUser}
+            startIcon={creatingUser ? <CircularProgress size={16} /> : <PersonAddIcon />}
+          >
+            {creatingUser ? 'Creating...' : 'Create Contact'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Add to Group Dialog */}
+      <Dialog open={showAddToGroupDialog} onClose={() => setShowAddToGroupDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          <GroupAddIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+          Add User to LMS Group
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 1 }}>
+            <Autocomplete
+              options={Array.from(groups.values()).filter(g => g.name !== 'All Partners')}
+              getOptionLabel={(option) => option.name}
+              value={selectedGroupToAdd}
+              onChange={(_, newValue) => setSelectedGroupToAdd(newValue)}
+              renderInput={(params) => (
+                <TextField {...params} label="Select Group" placeholder="Search for a group..." />
+              )}
+              isOptionEqualToValue={(option, value) => option.id === value.id}
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowAddToGroupDialog(false)}>Cancel</Button>
+          <Button 
+            variant="contained" 
+            onClick={addUserToGroupAction}
+            disabled={!selectedGroupToAdd || addingToGroup}
+            startIcon={addingToGroup ? <CircularProgress size={16} /> : <GroupAddIcon />}
+          >
+            {addingToGroup ? 'Adding...' : 'Add to Group'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Add Users Modal (Tab 0) */}
       <AddUsersModal

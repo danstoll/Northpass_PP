@@ -22,7 +22,8 @@ const safeJsonParse = async (response) => {
 const TASK_CATEGORIES = {
   sync: { name: 'Data Sync', icon: '🔄', description: 'Sync data from Northpass LMS' },
   analysis: { name: 'Analysis', icon: '🔍', description: 'Analyze and match data' },
-  maintenance: { name: 'Maintenance', icon: '🔧', description: 'System maintenance tasks' }
+  maintenance: { name: 'Maintenance', icon: '🔧', description: 'System maintenance tasks' },
+  notifications: { name: 'Notifications', icon: '📧', description: 'Email and notification tasks' }
 };
 
 // Task type metadata
@@ -32,12 +33,14 @@ const TASK_METADATA = {
   sync_courses: { icon: '📚', name: 'Courses', category: 'sync', description: 'Course catalog', apiEndpoint: '/api/db/sync/courses' },
   sync_npcu: { icon: '🎓', name: 'NPCU', category: 'sync', description: 'Course certification values', apiEndpoint: '/api/db/sync/course-properties' },
   sync_enrollments: { icon: '📊', name: 'Enrollments', category: 'sync', description: 'User completions & progress', apiEndpoint: '/api/db/sync/enrollments' },
+  sync_leads: { icon: '🎯', name: 'Leads', category: 'sync', description: 'Partner leads from Impartner', apiEndpoint: '/api/db/leads/sync' },
   lms_sync: { icon: '📦', name: 'LMS Bundle', category: 'sync', description: 'All syncs combined (Users, Groups, Courses, NPCU, Enrollments)', apiEndpoint: null },
-  impartner_sync: { icon: '🔄', name: 'Impartner CRM', category: 'sync', description: 'Sync partners & contacts from Impartner PRM', apiEndpoint: '/api/impartner/sync/all' },
+  impartner_sync: { icon: '🔄', name: 'Impartner CRM', category: 'sync', description: 'Sync partners, contacts & leads from Impartner PRM', apiEndpoint: '/api/impartner/sync/all' },
   sync_to_impartner: { icon: '📤', name: 'Push to Impartner', category: 'sync', description: 'Push cert counts, NPCU & training URLs to Impartner', apiEndpoint: '/api/db/certifications/sync-to-impartner' },
   group_analysis: { icon: '🔍', name: 'Group Analysis', category: 'analysis', description: 'Find potential users by domain', apiEndpoint: null },
   group_members_sync: { icon: '👥', name: 'Member Sync', category: 'analysis', description: 'Confirm pending group members', apiEndpoint: null },
-  cleanup: { icon: '🧹', name: 'Cleanup', category: 'maintenance', description: 'Remove old logs and data', apiEndpoint: null }
+  cleanup: { icon: '🧹', name: 'Cleanup', category: 'maintenance', description: 'Remove old logs and data', apiEndpoint: null },
+  pam_weekly_report: { icon: '📧', name: 'PAM Weekly Reports', category: 'notifications', description: 'Send weekly reports to Partner Account Managers', apiEndpoint: '/api/db/pams/send-all-reports' }
 };
 
 function SyncDashboard() {
@@ -156,7 +159,23 @@ function SyncDashboard() {
       
       // For sync tasks, use their direct API endpoint
       if (meta.apiEndpoint) {
-        response = await fetch(meta.apiEndpoint, { method: 'POST' });
+        // Get the task config to pass mode parameter
+        const task = tasks.find(t => t.task_type === taskType);
+        let url = meta.apiEndpoint;
+        
+        // If task has a mode config, pass it as query parameter
+        if (task && task.config) {
+          try {
+            const config = JSON.parse(task.config);
+            if (config.mode) {
+              url += `?mode=${config.mode}`;
+            }
+          } catch {
+            // Ignore parse errors
+          }
+        }
+        
+        response = await fetch(url, { method: 'POST' });
       } else {
         // For other tasks, use the scheduler trigger
         response = await fetch(`/api/db/tasks/${taskType}/run`, { method: 'POST' });
@@ -169,7 +188,20 @@ function SyncDashboard() {
       }
       
       if (response.ok) {
-        setSuccessMessage(`${meta.name} started successfully`);
+        // Check if this is a background task (returns status: 'running')
+        if (data.status === 'running') {
+          setSuccessMessage(`${meta.name} started in background`);
+          // Keep task in running state and poll for completion
+          pollForCompletion(taskType, data.logId);
+        } else {
+          setSuccessMessage(`${meta.name} completed successfully`);
+          // Task completed synchronously, remove from running
+          setRunningTasks(prev => {
+            const next = new Set(prev);
+            next.delete(taskType);
+            return next;
+          });
+        }
         // Refresh data
         setTimeout(fetchTasks, 1000);
         setTimeout(fetchSyncHistory, 2000);
@@ -189,6 +221,65 @@ function SyncDashboard() {
         return next;
       });
     }
+  };
+
+  // Poll for background task completion
+  const pollForCompletion = (taskType, logId) => {
+    const meta = TASK_METADATA[taskType];
+    let attempts = 0;
+    const maxAttempts = 60; // 5 minutes max (5s intervals)
+    
+    const checkStatus = async () => {
+      attempts++;
+      try {
+        // Fetch sync history and check if our log entry is completed
+        const response = await fetch('/api/db/sync/history?limit=10');
+        if (response.ok) {
+          const history = await response.json();
+          const entry = history.find(h => h.id === logId && h.source !== 'scheduled_task');
+          
+          if (entry && entry.status !== 'running') {
+            // Task completed
+            setRunningTasks(prev => {
+              const next = new Set(prev);
+              next.delete(taskType);
+              return next;
+            });
+            
+            if (entry.status === 'completed') {
+              setSuccessMessage(`${meta.name} completed: ${entry.records_processed || 0} records`);
+            } else if (entry.status === 'failed') {
+              setError(`${meta.name} failed: ${entry.error_message || 'Unknown error'}`);
+            }
+            
+            fetchSyncHistory();
+            fetchTasks();
+            return; // Stop polling
+          }
+        }
+        
+        // Continue polling if not done and under max attempts
+        if (attempts < maxAttempts) {
+          setTimeout(checkStatus, 5000);
+        } else {
+          // Timeout - remove from running state
+          setRunningTasks(prev => {
+            const next = new Set(prev);
+            next.delete(taskType);
+            return next;
+          });
+          setError(`${meta.name} is taking longer than expected. Check History tab for status.`);
+        }
+      } catch {
+        // On error, continue polling
+        if (attempts < maxAttempts) {
+          setTimeout(checkStatus, 5000);
+        }
+      }
+    };
+    
+    // Start polling after 3 seconds
+    setTimeout(checkStatus, 3000);
   };
 
   // Toggle task enabled/disabled
@@ -237,6 +328,27 @@ function SyncDashboard() {
       }
     } catch {
       setError('Failed to update interval');
+    }
+  };
+
+  // Update task mode (full/incremental)
+  const updateTaskMode = async (taskType, mode) => {
+    try {
+      const response = await fetch(`/api/db/tasks/${taskType}/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode })
+      });
+      
+      if (response.ok) {
+        setSuccessMessage(`Mode updated to ${mode}`);
+        fetchTasks();
+      } else {
+        const { data } = await safeJsonParse(response);
+        setError(data?.error || 'Failed to update mode');
+      }
+    } catch {
+      setError('Failed to update mode');
     }
   };
 
@@ -304,8 +416,8 @@ function SyncDashboard() {
   }, {});
 
   // Format sync summary for readability
-  const formatSyncSummary = (details) => {
-    if (!details) return null;
+  const formatSyncSummary = (details, log) => {
+    if (!details && !log) return <span className="summary-text empty">No details available</span>;
     
     let data = details;
     if (typeof details === 'string') {
@@ -317,42 +429,167 @@ function SyncDashboard() {
     }
     
     if (!data || typeof data !== 'object') {
-      return <span className="summary-text">{String(data)}</span>;
+      data = {};
     }
     
+    // Build metrics array with consistent ordering
     const metrics = [];
-    if (data.total !== undefined) metrics.push({ label: 'Total', value: data.total });
-    if (data.processed !== undefined) metrics.push({ label: 'Processed', value: data.processed });
-    if (data.created !== undefined) metrics.push({ label: 'Created', value: data.created, highlight: data.created > 0 });
-    if (data.updated !== undefined) metrics.push({ label: 'Updated', value: data.updated, highlight: data.updated > 0 });
-    if (data.synced !== undefined) metrics.push({ label: 'Synced', value: data.synced });
-    if (data.errors !== undefined) metrics.push({ label: 'Errors', value: data.errors, error: data.errors > 0 });
-    if (data.skipped !== undefined) metrics.push({ label: 'Skipped', value: data.skipped });
-    if (data.recordsProcessed !== undefined) metrics.push({ label: 'Processed', value: data.recordsProcessed });
     
-    // Handle nested details
-    if (data.details && typeof data.details === 'object') {
-      Object.entries(data.details).forEach(([key, val]) => {
-        if (val && typeof val === 'object' && val.processed !== undefined) {
-          metrics.push({ label: key, value: val.processed });
+    // Primary metrics (from log object or data)
+    const processed = log?.records_processed || data.processed || data.recordsProcessed || data.total || 0;
+    const created = log?.records_created || data.created || 0;
+    const updated = log?.records_updated || data.updated || data.confirmed || data.synced || 0;
+    const deleted = log?.records_deleted || data.deleted || 0;
+    const failed = log?.records_failed || data.failed || data.errors || 0;
+    const skipped = data.skipped || data.stillPending || 0;
+    const matched = data.matched || 0;
+    const notFound = data.notFound || 0;
+    
+    // Always show processed first if > 0
+    if (processed > 0) {
+      metrics.push({ label: 'Processed', value: processed, icon: '📊' });
+    }
+    
+    // Show CRUD breakdown
+    if (created > 0) {
+      metrics.push({ label: 'Created', value: created, highlight: true, icon: '➕' });
+    }
+    if (typeof updated === 'number' && updated > 0) {
+      metrics.push({ label: 'Updated', value: updated, highlight: true, icon: '✏️' });
+    }
+    if (typeof deleted === 'number' && deleted > 0) {
+      metrics.push({ label: 'Deleted', value: deleted, icon: '🗑️' });
+    }
+    if (matched > 0) {
+      metrics.push({ label: 'Matched', value: matched, highlight: true, icon: '🔗' });
+    }
+    if (skipped > 0) {
+      metrics.push({ label: 'Pending', value: skipped, icon: '⏳' });
+    }
+    if (notFound > 0) {
+      metrics.push({ label: 'Not Found', value: notFound, icon: '❓' });
+    }
+    if (failed > 0) {
+      metrics.push({ label: 'Failed', value: failed, error: true, icon: '❌' });
+    }
+    
+    // Handle "confirmed" specifically (from Member Sync)
+    if (data.confirmed !== undefined && !metrics.find(m => m.label === 'Updated')) {
+      metrics.push({ label: 'Confirmed', value: data.confirmed, highlight: data.confirmed > 0, icon: '✅' });
+    }
+    
+    // Show mode if present
+    if (data.mode) {
+      metrics.push({ label: 'Mode', value: data.mode === 'full' ? '🔄 Full' : '📈 Incremental', isText: true });
+    }
+    
+    // Handle message (from Member Sync, etc.)
+    const message = data.message;
+    
+    // Handle nested "deleted" object (from Cleanup task)
+    const deletedDetails = [];
+    if (data.deleted && typeof data.deleted === 'object' && !Array.isArray(data.deleted)) {
+      Object.entries(data.deleted).forEach(([key, val]) => {
+        if (typeof val === 'number') {
+          const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+          deletedDetails.push({ name: label, count: val });
         }
       });
     }
     
-    if (metrics.length > 0) {
+    // Handle nested details for composite tasks (like LMS Bundle)
+    const nestedDetails = [];
+    if (data.details && typeof data.details === 'object') {
+      Object.entries(data.details).forEach(([key, val]) => {
+        if (val && typeof val === 'object') {
+          const subProcessed = val.processed || val.synced || val.total || 0;
+          const subCreated = val.created || 0;
+          const subUpdated = val.updated || 0;
+          const subFailed = val.failed || val.errors || 0;
+          if (subProcessed > 0 || subCreated > 0 || subUpdated > 0) {
+            nestedDetails.push({
+              name: key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' '),
+              processed: subProcessed,
+              created: subCreated,
+              updated: subUpdated,
+              failed: subFailed
+            });
+          }
+        }
+      });
+    }
+    
+    // If no metrics but we have a message, show the message nicely
+    if (metrics.length === 0 && message) {
       return (
-        <div className="summary-metrics">
-          {metrics.map((m, i) => (
-            <div key={i} className={`summary-metric ${m.highlight ? 'highlight' : ''} ${m.error ? 'error' : ''}`}>
-              <span className="metric-value">{typeof m.value === 'number' ? m.value.toLocaleString() : m.value}</span>
-              <span className="metric-label">{m.label}</span>
-            </div>
-          ))}
+        <div className="summary-container">
+          <div className="summary-message">
+            <span className="message-icon">ℹ️</span>
+            <span>{message}</span>
+          </div>
         </div>
       );
     }
     
-    return <pre className="summary-json">{JSON.stringify(data, null, 2)}</pre>;
+    // If no metrics and no nested details, show "no details"
+    if (metrics.length === 0 && nestedDetails.length === 0 && deletedDetails.length === 0) {
+      return <span className="summary-text empty">No details available</span>;
+    }
+    
+    return (
+      <div className="summary-container">
+        {metrics.length > 0 && (
+          <div className="summary-metrics">
+            {metrics.map((m, i) => (
+              <div key={i} className={`summary-metric ${m.highlight ? 'highlight' : ''} ${m.error ? 'error' : ''}`}>
+                <span className="metric-icon">{m.icon}</span>
+                <span className="metric-value">{m.isText ? m.value : (typeof m.value === 'number' ? m.value.toLocaleString() : m.value)}</span>
+                <span className="metric-label">{m.label}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {message && (
+          <div className="summary-message">
+            <span className="message-icon">ℹ️</span>
+            <span>{message}</span>
+          </div>
+        )}
+        {deletedDetails.length > 0 && (
+          <div className="nested-details">
+            <div className="nested-header">Cleanup Details:</div>
+            <div className="nested-list">
+              {deletedDetails.map((item, i) => (
+                <div key={i} className="nested-item">
+                  <span className="nested-name">{item.name}:</span>
+                  <span className="nested-stats">
+                    <span>{item.count} deleted</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {nestedDetails.length > 0 && (
+          <div className="nested-details">
+            <div className="nested-header">Sub-tasks:</div>
+            <div className="nested-list">
+              {nestedDetails.map((sub, i) => (
+                <div key={i} className="nested-item">
+                  <span className="nested-name">{sub.name}:</span>
+                  <span className="nested-stats">
+                    {sub.processed > 0 && <span>{sub.processed.toLocaleString()} processed</span>}
+                    {sub.created > 0 && <span className="created">+{sub.created}</span>}
+                    {sub.updated > 0 && <span className="updated">↻{sub.updated}</span>}
+                    {sub.failed > 0 && <span className="failed">✗{sub.failed}</span>}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
   };
 
   if (loading) {
@@ -393,47 +630,76 @@ function SyncDashboard() {
         </div>
       </header>
 
-      {/* Active Tasks Banner */}
-      {schedulerStatus?.activeTasks?.length > 0 && (
-        <div className="active-tasks-banner">
-          <div className="banner-header">
-            <span className="banner-icon">⚡</span>
-            <span className="banner-title">Running ({schedulerStatus.activeTasks.length})</span>
-          </div>
-          <div className="active-tasks-list">
-            {schedulerStatus.activeTasks.map((task, idx) => {
-              const meta = TASK_METADATA[task.type] || { icon: '📋', name: task.type };
-              return (
-                <div key={idx} className="active-task-item">
-                  <span className="task-icon">{meta.icon}</span>
-                  <div className="task-info">
-                    <div className="task-name">{meta.name}</div>
-                    {task.progress && (
-                      <div className="task-progress">
-                        <span className="progress-stage">{task.progress.stage}</span>
-                        {task.progress.total > 0 && (
-                          <>
-                            <div className="progress-bar-container">
-                              <div 
-                                className="progress-bar-fill" 
-                                style={{ width: `${Math.round((task.progress.current / task.progress.total) * 100)}%` }}
-                              />
-                            </div>
-                            <span className="progress-numbers">
-                              {task.progress.current.toLocaleString()}/{task.progress.total.toLocaleString()}
-                            </span>
-                          </>
-                        )}
+      {/* Active Tasks Banner - shows for both scheduler and manually triggered tasks */}
+      {(schedulerStatus?.activeTasks?.length > 0 || runningTasks.size > 0) && (() => {
+        // Combine scheduler active tasks with manually triggered tasks
+        const schedulerTasks = schedulerStatus?.activeTasks || [];
+        const schedulerTaskTypes = new Set(schedulerTasks.map(t => t.type));
+        
+        // Add manually triggered tasks that aren't already in scheduler list
+        const manualTasks = [...runningTasks]
+          .filter(type => !schedulerTaskTypes.has(type))
+          .map(type => ({
+            type,
+            isManual: true,
+            startedAt: Date.now()
+          }));
+        
+        const allRunningTasks = [...schedulerTasks, ...manualTasks];
+        
+        return (
+          <div className="active-tasks-banner">
+            <div className="banner-header">
+              <span className="banner-icon">⚡</span>
+              <span className="banner-title">Running ({allRunningTasks.length})</span>
+            </div>
+            <div className="active-tasks-list">
+              {allRunningTasks.map((task, idx) => {
+                const meta = TASK_METADATA[task.type] || { icon: '📋', name: task.type };
+                return (
+                  <div key={idx} className="active-task-item">
+                    <span className="task-icon">{meta.icon}</span>
+                    <div className="task-info">
+                      <div className="task-name">
+                        {meta.name}
+                        {task.isManual && <span className="manual-badge">Manual</span>}
                       </div>
-                    )}
+                      {task.progress ? (
+                        <div className="task-progress">
+                          <span className="progress-stage">{task.progress.stage}</span>
+                          {task.progress.total > 0 && (
+                            <>
+                              <div className="progress-bar-container">
+                                <div 
+                                  className="progress-bar-fill" 
+                                  style={{ width: `${Math.round((task.progress.current / task.progress.total) * 100)}%` }}
+                                />
+                              </div>
+                              <span className="progress-numbers">
+                                {task.progress.current.toLocaleString()}/{task.progress.total.toLocaleString()}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="task-progress">
+                          <span className="progress-stage">Processing...</span>
+                          <div className="progress-bar-container indeterminate">
+                            <div className="progress-bar-fill indeterminate" />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="task-runtime">
+                      {task.runningSeconds ? formatDuration(task.runningSeconds) : <span className="ntx-spinner small"></span>}
+                    </div>
                   </div>
-                  <div className="task-runtime">{formatDuration(task.runningSeconds)}</div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Tab Navigation */}
       <div className="tab-nav">
@@ -549,8 +815,8 @@ function SyncDashboard() {
                           </div>
                           <div className="detail-row">
                             <span className="label">Status:</span>
-                            <span className={`value status ${getStatusClass(task.last_status)}`}>
-                              {task.last_status || 'Never'}
+                            <span className={`value status ${isRunning ? 'running' : getStatusClass(task.last_status)}`}>
+                              {isRunning ? '⏳ Running' : (task.last_status || 'Never')}
                             </span>
                           </div>
                           {task.enabled && (
@@ -598,7 +864,48 @@ function SyncDashboard() {
                         {expandedTask === task.task_type && (
                           <div className="task-expanded">
                             <h4>Configuration</h4>
-                            <pre>{JSON.stringify(task.config ? JSON.parse(task.config) : {}, null, 2)}</pre>
+                            {task.config && (() => {
+                              try {
+                                const config = JSON.parse(task.config);
+                                const supportsMode = Object.prototype.hasOwnProperty.call(config, 'mode') || ['sync_users', 'sync_groups', 'sync_courses', 'impartner_sync', 'sync_to_impartner', 'sync_leads'].includes(task.task_type);
+                                
+                                return (
+                                  <>
+                                    {supportsMode && (
+                                      <div className="config-controls">
+                                        <label className="config-label">Sync Mode:</label>
+                                        <div className="mode-toggle-group">
+                                          <button
+                                            className={`mode-toggle-btn ${(config.mode || 'incremental') === 'incremental' ? 'active' : ''}`}
+                                            onClick={() => updateTaskMode(task.task_type, 'incremental')}
+                                            title="Incremental: Only sync changed records since last run"
+                                          >
+                                            🔄 Incremental
+                                          </button>
+                                          <button
+                                            className={`mode-toggle-btn ${config.mode === 'full' ? 'active' : ''}`}
+                                            onClick={() => updateTaskMode(task.task_type, 'full')}
+                                            title="Full: Sync all records every time"
+                                          >
+                                            📦 Full
+                                          </button>
+                                        </div>
+                                        <div className="mode-description">
+                                          {(config.mode || 'incremental') === 'incremental' ? (
+                                            <small>✓ Only syncs changed records since last run (faster, recommended)</small>
+                                          ) : (
+                                            <small>⚠ Syncs all records every time (slower, use for troubleshooting)</small>
+                                          )}
+                                        </div>
+                                      </div>
+                                    )}
+                                    <pre>{JSON.stringify(config, null, 2)}</pre>
+                                  </>
+                                );
+                              } catch {
+                                return <pre>{task.config}</pre>;
+                              }
+                            })()}
                           </div>
                         )}
                       </div>
@@ -672,7 +979,7 @@ function SyncDashboard() {
                             <tr className="log-details-row">
                               <td colSpan="7">
                                 <div className="log-details">
-                                  {formatSyncSummary(log.details || log.result_summary)}
+                                  {formatSyncSummary(log.details || log.result_summary, log)}
                                   {log.error_message && (
                                     <div className="error-details">
                                       <strong>Error:</strong>

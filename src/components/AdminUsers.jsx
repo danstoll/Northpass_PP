@@ -46,6 +46,12 @@ import {
   VisibilityOff,
   Save,
   Refresh,
+  Email,
+  History,
+  Login,
+  Warning,
+  FilterList,
+  Clear,
 } from '@mui/icons-material';
 import { useAuth, RequirePermission } from '../context/AuthContext';
 import { PageHeader, StatsRow, StatCard, ActionButton, SearchInput, EmptyState, LoadingState } from './ui/NintexUI';
@@ -82,12 +88,20 @@ const AdminUsers = () => {
   const [profileDialog, setProfileDialog] = useState({ open: false, mode: 'create', profile: null });
   const [passwordDialog, setPasswordDialog] = useState({ open: false, userId: null });
   const [deleteDialog, setDeleteDialog] = useState({ open: false, type: null, id: null, name: '' });
+  const [sendingCredentials, setSendingCredentials] = useState(null); // userId being sent to
   
   // Form state
   const [userForm, setUserForm] = useState({ email: '', firstName: '', lastName: '', password: '', profileId: '', isActive: true });
   const [profileForm, setProfileForm] = useState({ name: '', description: '', permissions: {} });
   const [newPassword, setNewPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  
+  // Login History state
+  const [loginHistory, setLoginHistory] = useState([]);
+  const [loginStats, setLoginStats] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyFilter, setHistoryFilter] = useState({ userId: '', success: 'all', days: 30 });
+  const [selectedUserHistory, setSelectedUserHistory] = useState(null);
 
   // Load data
   useEffect(() => {
@@ -188,6 +202,30 @@ const AdminUsers = () => {
       setNewPassword('');
     } catch (err) {
       setError(err.message);
+    }
+  };
+
+  const handleSendCredentials = async (userId, userEmail) => {
+    setError(null);
+    setSendingCredentials(userId);
+    
+    try {
+      const res = await authFetch(`${API_BASE}/admin/users/${userId}/send-credentials`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}) // Auto-generate password
+      });
+      
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to send credentials');
+      }
+      
+      setSuccess(`Credentials email sent to ${userEmail}`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSendingCredentials(null);
     }
   };
 
@@ -315,6 +353,47 @@ const AdminUsers = () => {
     }));
   };
 
+  // Load login history
+  const loadLoginHistory = async () => {
+    setHistoryLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.append('limit', '200');
+      if (historyFilter.userId) params.append('userId', historyFilter.userId);
+      if (historyFilter.success !== 'all') params.append('success', historyFilter.success);
+      
+      const [historyRes, statsRes] = await Promise.all([
+        authFetch(`${API_BASE}/auth/login-history?${params}`),
+        authFetch(`${API_BASE}/auth/login-stats?days=${historyFilter.days}`)
+      ]);
+      
+      if (historyRes.ok) {
+        setLoginHistory(await historyRes.json());
+      }
+      if (statsRes.ok) {
+        setLoginStats(await statsRes.json());
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  // Load history when tab changes or filter changes
+  useEffect(() => {
+    if (tab === 2) {
+      loadLoginHistory();
+    }
+  }, [tab, historyFilter.userId, historyFilter.success]);
+
+  // View user's login history
+  const viewUserHistory = (user) => {
+    setSelectedUserHistory(user);
+    setHistoryFilter(prev => ({ ...prev, userId: user.id.toString() }));
+    setTab(2);
+  };
+
   // Stats
   const activeUsers = users.filter(u => u.is_active).length;
   const systemProfiles = profiles.filter(p => p.is_system).length;
@@ -348,6 +427,7 @@ const AdminUsers = () => {
         <Tabs value={tab} onChange={(e, v) => setTab(v)} sx={{ borderBottom: 1, borderColor: 'divider' }}>
           <Tab label="Users" icon={<People />} iconPosition="start" />
           <Tab label="Profiles" icon={<Security />} iconPosition="start" />
+          <Tab label="Login History" icon={<History />} iconPosition="start" />
         </Tabs>
 
         <CardContent>
@@ -408,6 +488,11 @@ const AdminUsers = () => {
                           }
                         </TableCell>
                         <TableCell align="right">
+                          <Tooltip title="View Login History">
+                            <IconButton size="small" onClick={() => viewUserHistory(user)}>
+                              <History />
+                            </IconButton>
+                          </Tooltip>
                           <RequirePermission category="users" action="edit">
                             <Tooltip title="Edit">
                               <IconButton size="small" onClick={() => openUserDialog('edit', user)}>
@@ -417,6 +502,22 @@ const AdminUsers = () => {
                             <Tooltip title="Change Password">
                               <IconButton size="small" onClick={() => setPasswordDialog({ open: true, userId: user.id })}>
                                 <Lock />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Send Login Credentials">
+                              <IconButton 
+                                size="small" 
+                                color="primary"
+                                onClick={() => handleSendCredentials(user.id, user.email)}
+                                disabled={sendingCredentials === user.id}
+                              >
+                                {sendingCredentials === user.id ? (
+                                  <Box sx={{ width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <Box className="ntx-spinner" sx={{ width: 16, height: 16 }} />
+                                  </Box>
+                                ) : (
+                                  <Email />
+                                )}
                               </IconButton>
                             </Tooltip>
                           </RequirePermission>
@@ -524,6 +625,193 @@ const AdminUsers = () => {
                   </TableBody>
                 </Table>
               </TableContainer>
+            </>
+          )}
+
+          {/* Login History Tab */}
+          {tab === 2 && (
+            <>
+              {/* Stats Row */}
+              {loginStats && (
+                <StatsRow columns={4}>
+                  <StatCard label="Total Attempts" value={loginStats.total_attempts} icon={<Login />} />
+                  <StatCard label="Successful" value={loginStats.successful_logins} icon={<CheckCircle />} variant="success" />
+                  <StatCard label="Failed" value={loginStats.failed_attempts} icon={<Warning />} variant="error" />
+                  <StatCard 
+                    label="Success Rate" 
+                    value={loginStats.total_attempts > 0 ? Math.round((loginStats.successful_logins / loginStats.total_attempts) * 100) + '%' : '—'} 
+                    icon={<Security />} 
+                    variant="info" 
+                  />
+                </StatsRow>
+              )}
+
+              {/* Filters */}
+              <Box sx={{ display: 'flex', gap: 2, mb: 3, alignItems: 'center', flexWrap: 'wrap' }}>
+                <FormControl size="small" sx={{ minWidth: 200 }}>
+                  <InputLabel>User</InputLabel>
+                  <Select
+                    value={historyFilter.userId}
+                    label="User"
+                    onChange={(e) => {
+                      setHistoryFilter(prev => ({ ...prev, userId: e.target.value }));
+                      setSelectedUserHistory(e.target.value ? users.find(u => u.id.toString() === e.target.value) : null);
+                    }}
+                  >
+                    <MenuItem value="">All Users</MenuItem>
+                    {users.map(user => (
+                      <MenuItem key={user.id} value={user.id.toString()}>
+                        {user.first_name} {user.last_name} ({user.email})
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                
+                <FormControl size="small" sx={{ minWidth: 130 }}>
+                  <InputLabel>Status</InputLabel>
+                  <Select
+                    value={historyFilter.success}
+                    label="Status"
+                    onChange={(e) => setHistoryFilter(prev => ({ ...prev, success: e.target.value }))}
+                  >
+                    <MenuItem value="all">All</MenuItem>
+                    <MenuItem value="true">Successful</MenuItem>
+                    <MenuItem value="false">Failed</MenuItem>
+                  </Select>
+                </FormControl>
+
+                <FormControl size="small" sx={{ minWidth: 120 }}>
+                  <InputLabel>Period</InputLabel>
+                  <Select
+                    value={historyFilter.days}
+                    label="Period"
+                    onChange={(e) => setHistoryFilter(prev => ({ ...prev, days: e.target.value }))}
+                  >
+                    <MenuItem value={7}>Last 7 days</MenuItem>
+                    <MenuItem value={30}>Last 30 days</MenuItem>
+                    <MenuItem value={90}>Last 90 days</MenuItem>
+                  </Select>
+                </FormControl>
+
+                {(historyFilter.userId || historyFilter.success !== 'all') && (
+                  <Tooltip title="Clear filters">
+                    <IconButton 
+                      size="small"
+                      onClick={() => {
+                        setHistoryFilter({ userId: '', success: 'all', days: historyFilter.days });
+                        setSelectedUserHistory(null);
+                      }}
+                    >
+                      <Clear />
+                    </IconButton>
+                  </Tooltip>
+                )}
+
+                <Box sx={{ flex: 1 }} />
+
+                <ActionButton 
+                  icon={<Refresh />} 
+                  onClick={loadLoginHistory}
+                  loading={historyLoading}
+                  variant="outlined"
+                  size="small"
+                >
+                  Refresh
+                </ActionButton>
+              </Box>
+
+              {selectedUserHistory && (
+                <Alert severity="info" sx={{ mb: 2 }} onClose={() => {
+                  setHistoryFilter(prev => ({ ...prev, userId: '' }));
+                  setSelectedUserHistory(null);
+                }}>
+                  Showing login history for <strong>{selectedUserHistory.first_name} {selectedUserHistory.last_name}</strong> ({selectedUserHistory.email})
+                </Alert>
+              )}
+
+              {/* History Table */}
+              {historyLoading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+                  <Box className="ntx-spinner" />
+                </Box>
+              ) : loginHistory.length === 0 ? (
+                <EmptyState message="No login history found" icon={<History />} />
+              ) : (
+                <TableContainer>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Date & Time</TableCell>
+                        <TableCell>User</TableCell>
+                        <TableCell>Status</TableCell>
+                        <TableCell>Method</TableCell>
+                        <TableCell>IP Address</TableCell>
+                        <TableCell>Details</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {loginHistory.map((entry, idx) => (
+                        <TableRow key={idx} sx={{ 
+                          backgroundColor: entry.success ? 'inherit' : 'rgba(211, 47, 47, 0.04)'
+                        }}>
+                          <TableCell>
+                            <Typography variant="body2">
+                              {new Date(entry.created_at).toLocaleDateString()}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {new Date(entry.created_at).toLocaleTimeString()}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Typography variant="body2">{entry.user_name || entry.email}</Typography>
+                            {entry.user_name && (
+                              <Typography variant="caption" color="text.secondary">{entry.email}</Typography>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <Chip 
+                              label={entry.success ? 'Success' : 'Failed'}
+                              size="small"
+                              color={entry.success ? 'success' : 'error'}
+                              icon={entry.success ? <CheckCircle /> : <Cancel />}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Chip 
+                              label={entry.login_method || 'password'}
+                              size="small"
+                              variant="outlined"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
+                              {entry.ip_address || '—'}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            {entry.failure_reason && (
+                              <Tooltip title={entry.failure_reason}>
+                                <Chip 
+                                  label={entry.failure_reason.replace(/_/g, ' ')}
+                                  size="small"
+                                  color="warning"
+                                  variant="outlined"
+                                />
+                              </Tooltip>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+
+              {loginHistory.length >= 200 && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2, textAlign: 'center' }}>
+                  Showing first 200 entries. Use filters to narrow down results.
+                </Typography>
+              )}
             </>
           )}
         </CardContent>

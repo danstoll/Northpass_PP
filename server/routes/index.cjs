@@ -16,6 +16,7 @@
  * - certificationRoutes: /api/db/certifications/*
  * - pamRoutes: /api/db/pams/*
  * - notificationRoutes: /api/db/notifications/*
+ * - leadRoutes: /api/db/leads/*
  */
 
 module.exports = {
@@ -28,5 +29,6 @@ module.exports = {
   partnerFamilyRoutes: require('./partnerFamilyRoutes.cjs'),
   certificationRoutes: require('./certificationRoutes.cjs'),
   pamRoutes: require('./pamRoutes.cjs'),
-  notificationRoutes: require('./notificationRoutes.cjs')
+  notificationRoutes: require('./notificationRoutes.cjs'),
+  leadRoutes: require('./leadRoutes.cjs')
 };

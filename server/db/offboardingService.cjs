@@ -63,14 +63,15 @@ function makeNorthpassRequest(method, path, body = null) {
 
 /**
  * Get the "All Partners" group ID from the database
+ * Note: lms_groups.id IS the Northpass ID (varchar)
  */
 async function getAllPartnersGroupId() {
   const [group] = await query(`
-    SELECT id, northpass_id FROM lms_groups 
+    SELECT id FROM lms_groups 
     WHERE LOWER(name) = 'all partners'
     LIMIT 1
   `);
-  return group?.northpass_id || group?.id;
+  return group?.id;
 }
 
 /**
@@ -176,12 +177,12 @@ async function deleteLmsGroup(groupId) {
     if (result.success) {
       // Remove group from local database
       await query('DELETE FROM lms_group_members WHERE group_id = ?', [groupId]);
-      await query('DELETE FROM lms_groups WHERE id = ? OR northpass_id = ?', [groupId, groupId]);
+      await query('DELETE FROM lms_groups WHERE id = ?', [groupId]);
       console.log(`   ✅ Deleted LMS group ${groupId}`);
     } else if (result.status === 404) {
       // Group doesn't exist - still clean up local DB
       await query('DELETE FROM lms_group_members WHERE group_id = ?', [groupId]);
-      await query('DELETE FROM lms_groups WHERE id = ? OR northpass_id = ?', [groupId, groupId]);
+      await query('DELETE FROM lms_groups WHERE id = ?', [groupId]);
       console.log(`   ⚠️ Group ${groupId} not found in LMS (cleaned up local DB)`);
       return { success: true, notFound: true };
     } else {
@@ -213,9 +214,10 @@ async function offboardContact(contactId) {
 
   try {
     // Get contact details with LMS user ID and partner group
+    // Note: lms_groups.id IS the Northpass ID (varchar, not auto-increment)
     const [contact] = await query(`
       SELECT c.id, c.email, c.lms_user_id, c.partner_id,
-             p.account_name, g.id as partner_group_id, g.northpass_id as partner_group_northpass_id
+             p.account_name, g.id as partner_group_id
       FROM contacts c
       LEFT JOIN partners p ON p.id = c.partner_id
       LEFT JOIN lms_groups g ON g.partner_id = p.id
@@ -236,8 +238,8 @@ async function offboardContact(contactId) {
     const lmsUserId = contact.lms_user_id;
     console.log(`   User: ${contact.email} (LMS ID: ${lmsUserId})`);
 
-    // 1. Remove from partner group
-    const partnerGroupId = contact.partner_group_northpass_id || contact.partner_group_id;
+    // 1. Remove from partner group (lms_groups.id IS the Northpass ID)
+    const partnerGroupId = contact.partner_group_id;
     if (partnerGroupId) {
       console.log(`   Removing from partner group: ${contact.account_name}...`);
       const partnerResult = await removeUserFromGroup(lmsUserId, partnerGroupId);
@@ -292,8 +294,9 @@ async function offboardPartner(partnerId) {
 
   try {
     // Get partner details with LMS group
+    // Note: lms_groups.id IS the Northpass ID (varchar, not auto-increment)
     const [partner] = await query(`
-      SELECT p.id, p.account_name, g.id as group_id, g.northpass_id as group_northpass_id, g.name as group_name
+      SELECT p.id, p.account_name, g.id as group_id, g.name as group_name
       FROM partners p
       LEFT JOIN lms_groups g ON g.partner_id = p.id
       WHERE p.id = ?
@@ -343,8 +346,8 @@ async function offboardPartner(partnerId) {
       }
     }
 
-    // 2. Delete the partner's LMS group
-    const partnerGroupId = partner.group_northpass_id || partner.group_id;
+    // 2. Delete the partner's LMS group (lms_groups.id IS the Northpass ID)
+    const partnerGroupId = partner.group_id;
     if (partnerGroupId) {
       console.log(`   Deleting partner LMS group: ${partner.group_name}...`);
       const deleteResult = await deleteLmsGroup(partnerGroupId);
