@@ -356,7 +356,7 @@ async function fetchGroupMemberIds(groupId, options = {}) {
     
     const memberships = response.data.data || [];
     if (memberships.length === 0) break;
-    
+
     // Extract user IDs from membership relationships
     for (const membership of memberships) {
       const userId = membership?.relationships?.person?.data?.id;
@@ -364,15 +364,19 @@ async function fetchGroupMemberIds(groupId, options = {}) {
         allUserIds.push(userId);
       }
     }
-    
+
     console.log(`  📄 Page ${page}: ${memberships.length} memberships (total: ${allUserIds.length} users)`);
-    
+
+    // Check if there are more pages (using links.next or page count)
+    const hasNextPage = response.data.links?.next ? true : false;
+    if (!hasNextPage) break;
+
     page++;
     if (page > 100) {
       console.warn('⚠️ Stopped after 100 pages');
       break;
     }
-    
+
     // Rate limiting
     await new Promise(resolve => setTimeout(resolve, 200));
   }
@@ -507,7 +511,25 @@ async function syncUsers(logId, onProgress) {
 
     // Note: Using upserts, so we can't distinguish created vs updated - report as processed
     stats.created = stats.processed; // For backwards compatibility with sync log schema
-    console.log(`✅ Users synced: ${stats.processed} processed, ${stats.failed} failed`);
+
+    // Mark users not in Northpass as deleted (they exist in our DB but weren't returned by API)
+    // This catches users who were completely removed from Northpass
+    const lmsUserIds = users.map(u => u.id);
+    if (lmsUserIds.length > 0) {
+      const deletedResult = await query(`
+        UPDATE lms_users
+        SET status = 'deleted', synced_at = NOW()
+        WHERE id NOT IN (${lmsUserIds.map(() => '?').join(',')})
+          AND status != 'deleted'
+      `, lmsUserIds);
+
+      stats.deleted = deletedResult.affectedRows || 0;
+      if (stats.deleted > 0) {
+        console.log(`🗑️ Marked ${stats.deleted} users as deleted (no longer in Northpass)`);
+      }
+    }
+
+    console.log(`✅ Users synced: ${stats.processed} processed, ${stats.deleted || 0} deleted, ${stats.failed} failed`);
   } catch (error) {
     console.error('❌ User sync failed:', error);
     throw error;
@@ -557,10 +579,11 @@ async function syncUsersIncremental(logId, onProgress) {
 
     // Get existing user IDs to determine new vs updated
     const userIds = users.map(u => u.id);
-    const existingUsers = await query(
+    const existingUsersResult = await query(
       `SELECT id FROM lms_users WHERE id IN (${userIds.map(() => '?').join(',')})`,
       userIds
     );
+    const existingUsers = Array.isArray(existingUsersResult) ? existingUsersResult : [];
     const existingUserIds = new Set(existingUsers.map(u => u.id));
 
     // Get total user count for context
@@ -713,10 +736,14 @@ async function syncGroups(logId, onProgress) {
 
     // Get existing group IDs
     const groupIds = partnerGroups.map(g => g.id);
-    const existingGroups = groupIds.length > 0 ? await query(
-      `SELECT id FROM lms_groups WHERE id IN (${groupIds.map(() => '?').join(',')})`,
-      groupIds
-    ) : [];
+    let existingGroups = [];
+    if (groupIds.length > 0) {
+      const result = await query(
+        `SELECT id FROM lms_groups WHERE id IN (${groupIds.map(() => '?').join(',')})`,
+        groupIds
+      );
+      existingGroups = Array.isArray(result) ? result : [];
+    }
     const existingGroupIds = new Set(existingGroups.map(g => g.id));
 
     for (const group of partnerGroups) {
@@ -848,10 +875,14 @@ async function syncGroupsIncremental(logId, onProgress) {
 
     // Get existing group IDs
     const groupIds = partnerGroups.map(g => g.id);
-    const existingGroups = groupIds.length > 0 ? await query(
-      `SELECT id FROM lms_groups WHERE id IN (${groupIds.map(() => '?').join(',')})`,
-      groupIds
-    ) : [];
+    let existingGroups = [];
+    if (groupIds.length > 0) {
+      const result = await query(
+        `SELECT id FROM lms_groups WHERE id IN (${groupIds.map(() => '?').join(',')})`,
+        groupIds
+      );
+      existingGroups = Array.isArray(result) ? result : [];
+    }
     const existingGroupIds = new Set(existingGroups.map(g => g.id));
 
     for (const group of partnerGroups) {
@@ -997,74 +1028,91 @@ async function syncGroupMembers(logId, onProgress) {
     console.log(`📥 Checking ${groups.length} active partner groups for membership changes...`);
 
     // Fetch current counts from Northpass API to compare
-    // We do this in batches to be more efficient
+    // Use parallel requests with controlled concurrency for better performance
     const groupsToSync = [];
-    const BATCH_SIZE = 50;
-    
-    for (let i = 0; i < groups.length; i += BATCH_SIZE) {
-      const batch = groups.slice(i, i + BATCH_SIZE);
-      
-      // Check each group's current count from the API
-      for (const group of batch) {
-        try {
-          // Fetch just the group metadata (single request, lightweight)
-          const response = await fetch(`https://api.northpass.com/v2/groups/${group.id}`, {
-            headers: { 
-              'X-Api-Key': process.env.NORTHPASS_API_KEY || 'wcU0QRpN9jnPvXEc5KXMiuVWk',
-              'Content-Type': 'application/json'
-            }
-          });
-          
-          // Update last_api_check timestamp
-          await query('UPDATE lms_groups SET last_api_check = NOW() WHERE id = ?', [group.id]);
-          
-          if (!response.ok) {
-            const statusCode = response.status;
-            let reason;
-            
-            if (statusCode === 404) {
-              reason = 'Group not found in LMS (deleted)';
-              // Soft-delete the group instead of hard fail
-              await softDeleteGroup(group.id, group.name, reason);
-              stats.softDeleted++;
-            } else if (statusCode === 403) {
-              reason = 'Access denied (permissions issue)';
-            } else if (statusCode === 429) {
-              reason = 'Rate limited';
-            } else {
-              reason = `HTTP ${statusCode}`;
-            }
-            
-            // Log the failure
-            await logSyncFailure('group_members', 'group', group.id, group.name, reason, statusCode);
-            stats.failedGroups.push({ id: group.id, name: group.name, reason, status: statusCode });
-            stats.failed++;
-            continue;
+    const CONCURRENT_LIMIT = 10; // Max parallel API requests
+
+    // Helper function to check a single group
+    async function checkGroupCount(group) {
+      try {
+        const response = await fetch(`https://api.northpass.com/v2/groups/${group.id}`, {
+          headers: {
+            'X-Api-Key': process.env.NORTHPASS_API_KEY || 'wcU0QRpN9jnPvXEc5KXMiuVWk',
+            'Content-Type': 'application/json'
           }
-          
-          const data = await response.json();
-          const apiCount = data.data?.attributes?.user_count || 0;
-          const storedCount = group.stored_count || 0;
-          
-          // If counts differ, mark for full sync
-          if (apiCount !== storedCount) {
-            groupsToSync.push({ ...group, api_count: apiCount });
+        });
+
+        // Update last_api_check timestamp
+        await query('UPDATE lms_groups SET last_api_check = NOW() WHERE id = ?', [group.id]);
+
+        if (!response.ok) {
+          const statusCode = response.status;
+          let reason;
+
+          if (statusCode === 404) {
+            reason = 'Group not found in LMS (deleted)';
+            await softDeleteGroup(group.id, group.name, reason);
+            return { type: 'softDeleted', group };
+          } else if (statusCode === 403) {
+            reason = 'Access denied (permissions issue)';
+          } else if (statusCode === 429) {
+            reason = 'Rate limited';
           } else {
-            stats.unchanged++;
+            reason = `HTTP ${statusCode}`;
           }
-          
-          // Small delay to avoid rate limits
-          await new Promise(resolve => setTimeout(resolve, 50));
-        } catch (e) {
-          // Network error or other exception - log but still try to sync
-          await logSyncFailure('group_members', 'group', group.id, group.name, `Exception: ${e.message}`);
-          stats.failedGroups.push({ id: group.id, name: group.name, reason: e.message, status: null });
-          groupsToSync.push(group); // Try to sync anyway
+
+          await logSyncFailure('group_members', 'group', group.id, group.name, reason, statusCode);
+          return { type: 'failed', group, reason, status: statusCode };
+        }
+
+        const data = await response.json();
+        const apiCount = data.data?.attributes?.user_count || 0;
+        const storedCount = group.stored_count || 0;
+
+        if (apiCount !== storedCount) {
+          return { type: 'needsSync', group: { ...group, api_count: apiCount } };
+        } else {
+          return { type: 'unchanged', group };
+        }
+      } catch (e) {
+        await logSyncFailure('group_members', 'group', group.id, group.name, `Exception: ${e.message}`);
+        return { type: 'error', group, reason: e.message };
+      }
+    }
+
+    // Process groups in parallel batches
+    for (let i = 0; i < groups.length; i += CONCURRENT_LIMIT) {
+      const batch = groups.slice(i, i + CONCURRENT_LIMIT);
+      const promises = batch.map(group => checkGroupCount(group));
+      const results = await Promise.all(promises);
+
+      // Process results from this batch
+      for (const result of results) {
+        switch (result.type) {
+          case 'needsSync':
+            groupsToSync.push(result.group);
+            break;
+          case 'unchanged':
+            stats.unchanged++;
+            break;
+          case 'softDeleted':
+            stats.softDeleted++;
+            break;
+          case 'failed':
+            stats.failedGroups.push({ id: result.group.id, name: result.group.name, reason: result.reason, status: result.status });
+            stats.failed++;
+            break;
+          case 'error':
+            stats.failedGroups.push({ id: result.group.id, name: result.group.name, reason: result.reason, status: null });
+            groupsToSync.push(result.group); // Try to sync anyway on network errors
+            break;
         }
       }
-      
-      if (i + BATCH_SIZE < groups.length) {
-        console.log(`  Checked ${Math.min(i + BATCH_SIZE, groups.length)}/${groups.length} groups for changes...`);
+
+      if (i + CONCURRENT_LIMIT < groups.length) {
+        console.log(`  Checked ${Math.min(i + CONCURRENT_LIMIT, groups.length)}/${groups.length} groups for changes...`);
+        // Small delay between batches to be respectful of rate limits
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
     }
     
@@ -1346,27 +1394,20 @@ async function syncCourseProperties(logId, onProgress) {
 
     console.log(`📥 Fetched properties for ${allProperties.length} courses`);
 
-    // Get existing courses - only process properties for courses we already have
-    // This skips orphaned/deleted courses that still appear in Northpass properties API
+    // Get existing courses to track which ones need to be created
     const existingCourses = await query('SELECT id FROM lms_courses');
     const existingCourseIds = new Set(existingCourses.map(c => c.id));
     console.log(`📚 Found ${existingCourseIds.size} courses in database`);
 
     // Process each course
     let certificationCount = 0;
+    let coursesCreated = 0;
     for (const item of allProperties) {
       try {
         const courseId = item.id;
         const attrs = item.attributes || {};
         const properties = attrs.properties || {};
-        
-        // Skip orphaned courses that don't exist in our lms_courses table
-        // These are old artifacts in Northpass that can't be removed
-        if (!existingCourseIds.has(courseId)) {
-          stats.skipped++;
-          continue;
-        }
-        
+
         // Extract NPCU value
         let npcuValue = 0;
         if (properties.npcu !== undefined && properties.npcu !== null && properties.npcu !== '') {
@@ -1376,21 +1417,46 @@ async function syncCourseProperties(logId, onProgress) {
             npcuValue = 0;
           }
         }
-        
+
+        // If course doesn't exist in lms_courses, create it only if it has NPCU value
+        // (These are typically older "v1" versions of certifications)
+        if (!existingCourseIds.has(courseId)) {
+          if (npcuValue > 0) {
+            // Create the course record for NPCU-valued courses
+            const courseName = properties.name || `Unknown Course (${courseId})`;
+            await query(
+              `INSERT INTO lms_courses (id, name, description, status, npcu_value, is_certification, synced_at)
+               VALUES (?, ?, ?, 'archived', ?, TRUE, NOW())
+               ON DUPLICATE KEY UPDATE
+                 name = VALUES(name),
+                 npcu_value = VALUES(npcu_value),
+                 is_certification = TRUE,
+                 synced_at = NOW()`,
+              [courseId, courseName, 'Archived certification (from properties API)', npcuValue]
+            );
+            coursesCreated++;
+            console.log(`  📝 Created archived course: ${courseName} (NPCU=${npcuValue})`);
+          } else {
+            // Skip non-NPCU courses that don't exist - these are old artifacts
+            stats.skipped++;
+            continue;
+          }
+        } else {
+          // Update existing course record with NPCU value
+          await query(
+            `UPDATE lms_courses SET
+               npcu_value = ?,
+               is_certification = ?,
+               synced_at = NOW()
+             WHERE id = ?`,
+            [npcuValue, npcuValue > 0, courseId]
+          );
+        }
+
         if (npcuValue > 0) {
           certificationCount++;
           console.log(`  ✅ ${properties.name || courseId}: NPCU=${npcuValue}`);
         }
-
-        // Update course record with NPCU value
-        await query(
-          `UPDATE lms_courses SET 
-             npcu_value = ?,
-             is_certification = ?,
-             synced_at = NOW()
-           WHERE id = ?`,
-          [npcuValue, npcuValue > 0, courseId]
-        );
 
         // Store in course_properties table
         await query(
@@ -1411,13 +1477,69 @@ async function syncCourseProperties(logId, onProgress) {
       }
     }
 
-    console.log(`✅ Course properties synced: ${stats.processed} processed, ${certificationCount} with NPCU > 0, ${stats.failed} failed`);
+    stats.created = coursesCreated;
+
+    console.log(`✅ Course properties synced: ${stats.processed} processed, ${certificationCount} with NPCU > 0, ${coursesCreated} archived courses created, ${stats.failed} failed`);
   } catch (error) {
     console.error('❌ Course properties sync failed:', error);
     throw error;
   }
 
   return stats;
+}
+
+/**
+ * Fetch ALL transcripts for a user (with pagination)
+ * The transcripts API returns paginated results - we must iterate through all pages
+ * to get the complete enrollment history for users with many courses
+ * @param {string} userId - The LMS user ID
+ * @returns {Object} { transcripts: Array, error: Object|null, pages: number }
+ */
+async function fetchAllUserTranscripts(userId) {
+  const allTranscripts = [];
+  let page = 1;
+  let hasMore = true;
+  let lastError = null;
+
+  while (hasMore && page <= 20) { // Safety limit: 20 pages = ~2000 transcripts max
+    const response = await northpassRequest(`/v2/transcripts/${userId}?page=${page}&limit=100`);
+
+    if (response.status !== 200) {
+      lastError = {
+        status: response.status,
+        error: response.error || `HTTP ${response.status}`,
+        page
+      };
+      // If first page fails, return error
+      if (page === 1) {
+        return { transcripts: [], error: lastError, pages: 0 };
+      }
+      // If subsequent page fails, return what we have
+      console.warn(`  ⚠️ Transcript fetch failed on page ${page}, returning ${allTranscripts.length} records`);
+      break;
+    }
+
+    const pageData = response.data?.data || [];
+    if (pageData.length === 0) {
+      hasMore = false;
+    } else {
+      allTranscripts.push(...pageData);
+      // Check for next page
+      hasMore = response.data?.links?.next ? true : false;
+      page++;
+    }
+
+    // Rate limit between pages
+    if (hasMore) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+
+  return {
+    transcripts: allTranscripts,
+    error: lastError,
+    pages: page - 1
+  };
 }
 
 /**
@@ -1477,76 +1599,78 @@ async function syncEnrollments(logId, onProgress) {
     for (let i = 0; i < users.length; i++) {
       const user = users[i];
       try {
-        // Fetch transcripts for this user (correct endpoint: /v2/transcripts/{learner_id})
-        const response = await northpassRequest(`/v2/transcripts/${user.id}`);
-        
+        // Fetch ALL transcripts for this user (with pagination)
+        const { transcripts, error: fetchError, pages } = await fetchAllUserTranscripts(user.id);
+
         // Check for API errors
-        if (response.status !== 200) {
+        if (fetchError && transcripts.length === 0) {
           stats.apiErrors++;
           const errorInfo = {
             userId: user.id,
             email: user.email,
-            status: response.status,
-            error: response.error || `HTTP ${response.status}`
+            status: fetchError.status,
+            error: fetchError.error
           };
-          
+
           // Log first few errors in details
           if (stats.details.errors.length < 10) {
             stats.details.errors.push(errorInfo);
           }
-          
+
           // If getting many consecutive API errors, abort
           if (stats.apiErrors >= 10 && stats.apiErrors > stats.processed) {
-            const apiError = NorthpassApiError.fromResponse(response, `/v2/transcripts/${user.id}`);
             console.error(`🚨 Too many API errors (${stats.apiErrors}), aborting sync`);
             stats.details.abortReason = 'Too many consecutive API errors';
-            throw apiError;
+            throw new NorthpassApiError(
+              `Too many API errors: ${fetchError.error}`,
+              fetchError.status,
+              `/v2/transcripts/${user.id}`
+            );
           }
-          
+
           stats.failed++;
           continue;
         }
-        
-        if (response.data?.data) {
-          for (const transcript of response.data.data) {
-            const attrs = transcript.attributes || {};
-            // resource_id contains the course ID, resource_type indicates if it's a course
-            const courseId = attrs.resource_id;
-            const resourceType = attrs.resource_type;
-            
-            // Only process course enrollments (skip learning_path, event, etc.)
-            if (!courseId || resourceType !== 'course') continue;
 
-            // Derive progress percent from progress_status
-            const progressStatus = attrs.progress_status || 'enrolled';
-            const progressPercent = progressStatus === 'completed' ? 100 : 
-                                    progressStatus === 'in_progress' ? 50 : 0;
+        // Process all transcripts
+        for (const transcript of transcripts) {
+          const attrs = transcript.attributes || {};
+          // resource_id contains the course ID, resource_type indicates if it's a course
+          const courseId = attrs.resource_id;
+          const resourceType = attrs.resource_type;
 
-            await query(
-              `INSERT INTO lms_enrollments (id, user_id, course_id, status, progress_percent, enrolled_at, started_at, completed_at, expires_at, score, synced_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-               ON DUPLICATE KEY UPDATE
-                 status = VALUES(status),
-                 progress_percent = VALUES(progress_percent),
-                 completed_at = VALUES(completed_at),
-                 expires_at = VALUES(expires_at),
-                 score = VALUES(score),
-                 synced_at = NOW()`,
-              [
-                transcript.id,
-                user.id,
-                courseId,
-                progressStatus,
-                progressPercent,
-                attrs.enrolled_at ? new Date(attrs.enrolled_at) : null,
-                attrs.started_at ? new Date(attrs.started_at) : null,
-                attrs.completed_at ? new Date(attrs.completed_at) : null,
-                attrs.expires_at ? new Date(attrs.expires_at) : null,
-                attrs.score || null
-              ]
-            );
-            stats.processed++;
-          }
+          // Only process course enrollments (skip learning_path, event, etc.)
+          if (!courseId || resourceType !== 'course') continue;
+
+          // Derive progress percent from progress_status
+          const progressStatus = attrs.progress_status || 'enrolled';
+          const progressPercent = progressStatus === 'completed' ? 100 :
+                                  progressStatus === 'in_progress' ? 50 : 0;
+
+          await query(
+            `INSERT INTO lms_enrollments (id, user_id, course_id, status, progress_percent, enrolled_at, started_at, completed_at, expires_at, score, synced_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+             ON DUPLICATE KEY UPDATE
+               status = VALUES(status),
+               progress_percent = VALUES(progress_percent),
+               completed_at = VALUES(completed_at),
+               expires_at = VALUES(expires_at),
+               score = VALUES(score),
+               synced_at = NOW()`,
+            [
+              transcript.id,
+              user.id,
+              courseId,
+              progressStatus,
+              progressPercent,
+              attrs.enrolled_at ? new Date(attrs.enrolled_at) : null,
+              attrs.started_at ? new Date(attrs.started_at) : null,
+              attrs.completed_at ? new Date(attrs.completed_at) : null,
+              attrs.expires_at ? new Date(attrs.expires_at) : null,
+              attrs.score || null
+            ]
+          );
+          stats.processed++;
         }
 
         if ((i + 1) % 50 === 0) {
@@ -1554,8 +1678,8 @@ async function syncEnrollments(logId, onProgress) {
           onProgress && onProgress('enrollments', i + 1, users.length);
         }
 
-        // Rate limit
-        await new Promise(resolve => setTimeout(resolve, 200));
+        // Rate limit between users
+        await new Promise(resolve => setTimeout(resolve, 150));
       } catch (error) {
         stats.failed++;
         // Track if it's an API error vs DB error
@@ -1593,14 +1717,16 @@ async function syncEnrollments(logId, onProgress) {
 async function syncEnrollmentsIncremental(logId, onProgress, options = {}) {
   const maxAgeDays = options.maxAgeDays || 7; // Re-sync users not synced in 7 days
   console.log(`📊 Syncing enrollments INCREMENTALLY (max age: ${maxAgeDays} days)...`);
-  const stats = { 
-    processed: 0, created: 0, updated: 0, failed: 0, skipped: 0, 
+  const stats = {
+    processed: 0, created: 0, updated: 0, failed: 0, skipped: 0,
     mode: 'incremental',
     usersChecked: 0,
     newUsers: 0,
     updatedUsers: 0,
     staleUsers: 0,
     apiErrors: 0,
+    usersNotFound: 0, // Users that no longer exist in LMS (404s)
+    dbErrors: 0, // Database errors
     details: { errors: [] }
   };
 
@@ -1702,81 +1828,91 @@ async function syncEnrollmentsIncremental(logId, onProgress, options = {}) {
     for (let i = 0; i < users.length; i++) {
       const user = users[i];
       try {
-        // Fetch transcripts for this user (correct endpoint: /v2/transcripts/{learner_id})
-        const response = await northpassRequest(`/v2/transcripts/${user.id}`);
-        
+        // Fetch ALL transcripts for this user (with pagination)
+        const { transcripts, error: fetchError, pages } = await fetchAllUserTranscripts(user.id);
+
         // Check for API errors
-        if (response.status !== 200) {
-          stats.apiErrors++;
-          const errorInfo = {
-            userId: user.id,
-            email: user.email,
-            status: response.status,
-            error: response.error || `HTTP ${response.status}`
-          };
-          
-          // Log first few errors in details
-          if (stats.details.errors.length < 10) {
-            stats.details.errors.push(errorInfo);
+        if (fetchError && transcripts.length === 0) {
+          // Track 404s separately - these are users deleted from LMS (expected churn)
+          if (fetchError.status === 404) {
+            stats.usersNotFound++;
+            // Mark user's enrollment as synced so we don't keep retrying
+            await query('UPDATE lms_users SET enrollment_synced_at = NOW() WHERE id = ?', [user.id]);
+          } else {
+            // Real API errors (500s, 429s, etc.)
+            stats.apiErrors++;
+            const errorInfo = {
+              userId: user.id,
+              email: user.email,
+              status: fetchError.status,
+              error: fetchError.error
+            };
+
+            // Log first few errors in details
+            if (stats.details.errors.length < 10) {
+              stats.details.errors.push(errorInfo);
+            }
+
+            // If getting many consecutive real API errors, abort
+            if (stats.apiErrors >= 10 && stats.apiErrors > stats.processed) {
+              console.error(`🚨 Too many API errors (${stats.apiErrors}), aborting sync`);
+              stats.details.abortReason = 'Too many consecutive API errors';
+              throw new NorthpassApiError(
+                `Too many API errors: ${fetchError.error}`,
+                fetchError.status,
+                `/v2/transcripts/${user.id}`
+              );
+            }
           }
-          
-          // If getting many consecutive API errors, abort
-          if (stats.apiErrors >= 10 && stats.apiErrors > stats.processed) {
-            const apiError = NorthpassApiError.fromResponse(response, `/v2/transcripts/${user.id}`);
-            console.error(`🚨 Too many API errors (${stats.apiErrors}), aborting sync`);
-            stats.details.abortReason = 'Too many consecutive API errors';
-            throw apiError;
-          }
-          
+
           stats.failed++;
           continue;
         }
-        
-        if (response.data?.data) {
-          for (const transcript of response.data.data) {
-            const attrs = transcript.attributes || {};
-            // resource_id contains the course ID, resource_type indicates if it's a course
-            const courseId = attrs.resource_id;
-            const resourceType = attrs.resource_type;
-            
-            // Only process course enrollments (skip learning_path, event, etc.)
-            if (!courseId || resourceType !== 'course') continue;
 
-            // Derive progress percent from progress_status
-            const progressStatus = attrs.progress_status || 'enrolled';
-            const progressPercent = progressStatus === 'completed' ? 100 : 
-                                    progressStatus === 'in_progress' ? 50 : 0;
+        // Process all transcripts (now properly paginated)
+        for (const transcript of transcripts) {
+          const attrs = transcript.attributes || {};
+          // resource_id contains the course ID, resource_type indicates if it's a course
+          const courseId = attrs.resource_id;
+          const resourceType = attrs.resource_type;
 
-            const result = await query(
-              `INSERT INTO lms_enrollments (id, user_id, course_id, status, progress_percent, enrolled_at, started_at, completed_at, expires_at, score, synced_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-               ON DUPLICATE KEY UPDATE
-                 status = VALUES(status),
-                 progress_percent = VALUES(progress_percent),
-                 completed_at = VALUES(completed_at),
-                 expires_at = VALUES(expires_at),
-                 score = VALUES(score),
-                 synced_at = NOW()`,
-              [
-                transcript.id,
-                user.id,
-                courseId,
-                progressStatus,
-                progressPercent,
-                attrs.enrolled_at ? new Date(attrs.enrolled_at) : null,
-                attrs.started_at ? new Date(attrs.started_at) : null,
-                attrs.completed_at ? new Date(attrs.completed_at) : null,
-                attrs.expires_at ? new Date(attrs.expires_at) : null,
-                attrs.score || null
-              ]
-            );
-            
-            if (result.insertId) stats.created++;
-            else if (result.affectedRows > 0) stats.updated++;
-            stats.processed++;
-          }
+          // Only process course enrollments (skip learning_path, event, etc.)
+          if (!courseId || resourceType !== 'course') continue;
+
+          // Derive progress percent from progress_status
+          const progressStatus = attrs.progress_status || 'enrolled';
+          const progressPercent = progressStatus === 'completed' ? 100 :
+                                  progressStatus === 'in_progress' ? 50 : 0;
+
+          const result = await query(
+            `INSERT INTO lms_enrollments (id, user_id, course_id, status, progress_percent, enrolled_at, started_at, completed_at, expires_at, score, synced_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+             ON DUPLICATE KEY UPDATE
+               status = VALUES(status),
+               progress_percent = VALUES(progress_percent),
+               completed_at = VALUES(completed_at),
+               expires_at = VALUES(expires_at),
+               score = VALUES(score),
+               synced_at = NOW()`,
+            [
+              transcript.id,
+              user.id,
+              courseId,
+              progressStatus,
+              progressPercent,
+              attrs.enrolled_at ? new Date(attrs.enrolled_at) : null,
+              attrs.started_at ? new Date(attrs.started_at) : null,
+              attrs.completed_at ? new Date(attrs.completed_at) : null,
+              attrs.expires_at ? new Date(attrs.expires_at) : null,
+              attrs.score || null
+            ]
+          );
+
+          if (result.insertId) stats.created++;
+          else if (result.affectedRows > 0) stats.updated++;
+          stats.processed++;
         }
-        
+
         // Update user's enrollment_synced_at timestamp
         await query('UPDATE lms_users SET enrollment_synced_at = NOW() WHERE id = ?', [user.id]);
 
@@ -1785,22 +1921,41 @@ async function syncEnrollmentsIncremental(logId, onProgress, options = {}) {
           onProgress && onProgress('enrollments', i + 1, users.length);
         }
 
-        // Rate limit
-        await new Promise(resolve => setTimeout(resolve, 200));
+        // Rate limit between users
+        await new Promise(resolve => setTimeout(resolve, 150));
       } catch (error) {
         stats.failed++;
         if (error.isApiError) {
           stats.apiErrors++;
+        } else {
+          // Database or other errors
+          stats.dbErrors++;
+          if (stats.details.errors.length < 10) {
+            stats.details.errors.push({
+              userId: user.id,
+              email: user.email,
+              error: error.message || 'Unknown error',
+              type: 'db_error'
+            });
+          }
         }
       }
     }
 
-    // Log summary with API error count
-    if (stats.apiErrors > 0) {
-      console.warn(`⚠️ Enrollments synced (incremental) with ${stats.apiErrors} API errors: ${stats.processed} records from ${users.length} users`);
-      stats.details.warning = `${stats.apiErrors} API errors encountered`;
+    // Log detailed summary
+    const summaryParts = [`${stats.processed} enrollments from ${users.length - stats.failed} users`];
+    if (stats.usersNotFound > 0) summaryParts.push(`${stats.usersNotFound} users not found in LMS`);
+    if (stats.apiErrors > 0) summaryParts.push(`${stats.apiErrors} API errors`);
+    if (stats.dbErrors > 0) summaryParts.push(`${stats.dbErrors} DB errors`);
+
+    if (stats.apiErrors > 0 || stats.dbErrors > 0) {
+      console.warn(`⚠️ Enrollments synced (incremental): ${summaryParts.join(', ')}`);
+      stats.details.warning = summaryParts.slice(1).join(', ');
+    } else if (stats.usersNotFound > 0) {
+      console.log(`✅ Enrollments synced (incremental): ${summaryParts.join(', ')}`);
+      stats.details.info = `${stats.usersNotFound} users no longer exist in LMS (expected churn)`;
     } else {
-      console.log(`✅ Enrollments synced (incremental): ${stats.processed} records from ${users.length} users`);
+      console.log(`✅ Enrollments synced (incremental): ${summaryParts[0]}`);
     }
   } catch (error) {
     console.error('❌ Incremental enrollments sync failed:', error.message || error);
@@ -1924,6 +2079,8 @@ module.exports = {
   NorthpassApiError,
   // Low-level API function for external use
   northpassRequest,
+  // Transcript fetching with pagination
+  fetchAllUserTranscripts,
   // Sync failure tracking
   logSyncFailure,
   softDeleteGroup

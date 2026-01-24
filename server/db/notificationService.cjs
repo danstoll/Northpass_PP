@@ -1,15 +1,24 @@
 /**
  * Notification Service - Nintex Workflow Cloud Integration
- * 
+ *
  * Sends notifications via Nintex Workflow Cloud which handles:
  * - Email notifications
  * - Slack messages
  * - System alerts
- * 
+ *
  * Workflow URL: https://ntx-channel.workflowcloud.com
  */
 
 const { query } = require('./connection.cjs');
+
+// Dynamic import for node-fetch (CommonJS compatibility)
+let fetch;
+async function getFetch() {
+  if (!fetch) {
+    fetch = (await import('node-fetch')).default;
+  }
+  return fetch;
+}
 
 const WORKFLOW_URL = 'https://ntx-channel.workflowcloud.com/api/v1/workflow/published/6176b33c-9458-4579-8828-af69bb829e8d/instances';
 const WORKFLOW_TOKEN = 'F80xrywkYF0FC7RyXa4QXUU78oQq7kobFQEp7HpauP1if7XsB81mswHarzweezCZwrlUgv';
@@ -71,7 +80,8 @@ async function sendNotification(options) {
   console.log(`📤 Starting Nintex Workflow - Type: ${commType}, To: ${email || 'Slack'}`);
 
   try {
-    const response = await fetch(`${WORKFLOW_URL}?token=${WORKFLOW_TOKEN}`, {
+    const fetchFn = await getFetch();
+    const response = await fetchFn(`${WORKFLOW_URL}?token=${WORKFLOW_TOKEN}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'

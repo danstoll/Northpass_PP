@@ -597,7 +597,34 @@ const CompanyWidget = ({ groupName, tier }) => {
       const data = await response.json();
       console.log(`✅ Database returned data for: ${data.group.name}`);
       addProgressLog(`✓ Found group: ${data.group.name}`, 'success');
-      
+
+      // Track page view for analytics (fire and forget)
+      if (data.group.partnerId) {
+        // Check for nintex_viewer cookie to identify Nintex staff
+        const getNintexViewerCookie = () => {
+          const match = document.cookie.match(/(?:^|; )nintex_viewer=([^;]*)/);
+          return match ? decodeURIComponent(match[1]) : null;
+        };
+        const nintexViewer = getNintexViewerCookie();
+
+        fetch('/api/track/view', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pageType: 'widget',
+            pagePath: window.location.pathname,
+            partnerId: data.group.partnerId,
+            viewer: nintexViewer ? 'nintex' : 'partner',
+            viewerEmail: nintexViewer || null,
+            sessionId: sessionStorage.getItem('sessionId') || (() => {
+              const id = Math.random().toString(36).substring(2);
+              sessionStorage.setItem('sessionId', id);
+              return id;
+            })()
+          })
+        }).catch(() => {}); // Silently fail if tracking fails
+      }
+
       // Set group data
       setGroupData({
         id: data.group.id,

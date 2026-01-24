@@ -38,6 +38,7 @@ import {
   ResultAlert,
   TierBadge,
   TabPanel,
+  InfoButton,
 } from './ui/NintexUI';
 import './DataManagement.css';
 
@@ -364,11 +365,11 @@ const DataManagement = () => {
         <>
           <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
             <Tabs value={tabValueFromName} onChange={handleTabChange}>
-              <Tab label="Overview" icon={<Storage />} iconPosition="start" />
-              <Tab label="Quick Sync" icon={<Sync />} iconPosition="start" />
-              <Tab label="Data Cleaning" icon={<CleaningServices />} iconPosition="start" />
-              <Tab label="LMS Matching" icon={<Link />} iconPosition="start" />
-              <Tab label="Browse" icon={<Search />} iconPosition="start" />
+              <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Overview<InfoButton tooltip="View database statistics - total partners, contacts, regions, and tiers in the system." /></Box>} icon={<Storage />} iconPosition="start" />
+              <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Quick Sync<InfoButton tooltip="Quickly sync partners or contacts between the database and LMS. Refresh data without running full sync." /></Box>} icon={<Sync />} iconPosition="start" />
+              <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Data Cleaning<InfoButton tooltip="Clean up duplicate or invalid data. Remove contacts by email pattern, region, or tier." /></Box>} icon={<CleaningServices />} iconPosition="start" />
+              <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>LMS Matching<InfoButton tooltip="Link database partners to their LMS groups. View and fix partners without matching LMS groups." /></Box>} icon={<Link />} iconPosition="start" />
+              <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Browse<InfoButton tooltip="Browse and search partner data. View partner details, contacts, and their LMS status." /></Box>} icon={<Search />} iconPosition="start" />
             </Tabs>
           </Box>
 

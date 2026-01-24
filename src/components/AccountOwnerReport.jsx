@@ -1,6 +1,35 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { Box, FormControl, InputLabel, Select, MenuItem, Tooltip, IconButton, Typography } from '@mui/material';
+import {
+  Box,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  Tooltip,
+  IconButton,
+  Typography,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
+  Chip,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Paper,
+  CircularProgress,
+  Alert,
+} from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import PeopleIcon from '@mui/icons-material/People';
+import DownloadIcon from '@mui/icons-material/Download';
+import CloseIcon from '@mui/icons-material/Close';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import CancelIcon from '@mui/icons-material/Cancel';
 import { generateEncodedUrl } from '../utils/urlEncoder';
 import {
   PageHeader,
@@ -15,6 +44,7 @@ import {
   DataTable,
   LoadingState,
   EmptyState,
+  StatusChip,
 } from './ui/NintexUI';
 import './AccountOwnerReport.css';
 
@@ -142,6 +172,14 @@ export default function AccountOwnerReport() {
   const [orderBy, setOrderBy] = useState('account_name');
   const [order, setOrder] = useState('asc');
 
+  // Partner Users Dialog state
+  const [usersDialogOpen, setUsersDialogOpen] = useState(false);
+  const [usersDialogPartner, setUsersDialogPartner] = useState(null);
+  const [partnerUsers, setPartnerUsers] = useState([]);
+  const [partnerUsersSummary, setPartnerUsersSummary] = useState(null);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [usersError, setUsersError] = useState(null);
+
   // Load account owners from MariaDB on mount
   const loadAccountOwners = useCallback(async () => {
     setLoadingOwners(true);
@@ -183,6 +221,83 @@ export default function AccountOwnerReport() {
   useEffect(() => {
     loadAccountOwners();
   }, [loadAccountOwners]);
+
+  // Load users for a specific partner (for export dialog)
+  const loadPartnerUsers = useCallback(async (partner) => {
+    setUsersDialogPartner(partner);
+    setUsersDialogOpen(true);
+    setLoadingUsers(true);
+    setUsersError(null);
+    setPartnerUsers([]);
+    setPartnerUsersSummary(null);
+
+    try {
+      const response = await fetch(`/api/db/reports/partner-users-export/${partner.id}`);
+      if (response.ok) {
+        const data = await response.json();
+        setPartnerUsers(data.users || []);
+        setPartnerUsersSummary(data.summary);
+      } else {
+        setUsersError('Failed to load users');
+      }
+    } catch (error) {
+      console.error('Error loading partner users:', error);
+      setUsersError(error.message);
+    } finally {
+      setLoadingUsers(false);
+    }
+  }, []);
+
+  // Export users to CSV
+  const exportUsersToCSV = useCallback(() => {
+    if (!partnerUsers.length || !usersDialogPartner) return;
+
+    const headers = ['Name', 'Email', 'Title', 'CRM Status', 'In LMS', 'LMS Status', 'NPCU Earned', 'Certifications'];
+    const rows = partnerUsers.map(user => [
+      user.full_name?.trim() || '',
+      user.email || '',
+      user.title || '',
+      user.crm_status || '',
+      user.in_lms ? 'Yes' : 'No',
+      user.lms_status_display || '',
+      user.npcu_earned || 0,
+      user.certifications || 0
+    ]);
+
+    // Create CSV content
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(cell => {
+        // Escape quotes and wrap in quotes if contains comma or newline
+        const str = String(cell);
+        if (str.includes(',') || str.includes('\n') || str.includes('"')) {
+          return `"${str.replace(/"/g, '""')}"`;
+        }
+        return str;
+      }).join(','))
+    ].join('\n');
+
+    // Create and download file
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    const filename = `${usersDialogPartner.account_name.replace(/[^a-z0-9]/gi, '_')}_Users_${new Date().toISOString().split('T')[0]}.csv`;
+    link.setAttribute('download', filename);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [partnerUsers, usersDialogPartner]);
+
+  // Close users dialog
+  const closeUsersDialog = useCallback(() => {
+    setUsersDialogOpen(false);
+    setUsersDialogPartner(null);
+    setPartnerUsers([]);
+    setPartnerUsersSummary(null);
+    setUsersError(null);
+  }, []);
 
   // Load accounts when owner changes
   useEffect(() => {
@@ -327,10 +442,15 @@ export default function AccountOwnerReport() {
 
   // Table columns for DataTable
   const tableColumns = [
-    { 
-      id: 'account_name', 
+    {
+      id: 'account_name',
       label: 'Partner Name',
-      render: (val) => <span style={{ fontWeight: 500 }}>{val}</span>
+      render: (val, row) => (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <span style={{ fontWeight: 500 }}>{val}</span>
+          {row.is_active === 0 && <StatusChip status="inactive" label="Inactive" />}
+        </Box>
+      )
     },
     { 
       id: 'partner_tier', 
@@ -446,22 +566,35 @@ export default function AccountOwnerReport() {
     },
     {
       id: 'actions',
-      label: <Box sx={{ display: 'flex', alignItems: 'center' }}>Dashboard<InfoTooltip metricKey="dashboardLink" /></Box>,
+      label: <Box sx={{ display: 'flex', alignItems: 'center' }}>Actions</Box>,
       render: (_, row) => (
         <Box sx={{ display: 'flex', gap: 1 }}>
-          <ActionButton
-            size="small"
-            onClick={() => openDashboard(row)}
-          >
-            🔗 Open
-          </ActionButton>
-          <ActionButton
-            size="small"
-            variant="outlined"
-            onClick={() => copyToClipboard(generateDashboardLink(row), row.account_name)}
-          >
-            {copiedLink === row.account_name ? '✓ Copied' : '📋 Copy'}
-          </ActionButton>
+          <Tooltip title="View all users for this partner">
+            <ActionButton
+              size="small"
+              variant="outlined"
+              onClick={() => loadPartnerUsers(row)}
+            >
+              <PeopleIcon sx={{ fontSize: 16, mr: 0.5 }} /> Users
+            </ActionButton>
+          </Tooltip>
+          <Tooltip title="Open partner dashboard">
+            <ActionButton
+              size="small"
+              onClick={() => openDashboard(row)}
+            >
+              🔗 Open
+            </ActionButton>
+          </Tooltip>
+          <Tooltip title="Copy dashboard link">
+            <ActionButton
+              size="small"
+              variant="outlined"
+              onClick={() => copyToClipboard(generateDashboardLink(row), row.account_name)}
+            >
+              {copiedLink === row.account_name ? '✓ Copied' : '📋 Copy'}
+            </ActionButton>
+          </Tooltip>
         </Box>
       )
     },
@@ -689,6 +822,169 @@ export default function AccountOwnerReport() {
           message="No account owners found in the database. Please import partner data first using the Data Import feature."
         />
       )}
+
+      {/* Partner Users Dialog */}
+      <Dialog
+        open={usersDialogOpen}
+        onClose={closeUsersDialog}
+        maxWidth="lg"
+        fullWidth
+        PaperProps={{ sx: { minHeight: '60vh' } }}
+      >
+        <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <PeopleIcon color="primary" />
+            <Typography variant="h6">
+              Users - {usersDialogPartner?.account_name}
+            </Typography>
+            {usersDialogPartner?.partner_tier && (
+              <Chip label={usersDialogPartner.partner_tier} size="small" color="primary" variant="outlined" />
+            )}
+          </Box>
+          <IconButton onClick={closeUsersDialog} size="small">
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+
+        <DialogContent dividers>
+          {loadingUsers && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', py: 6 }}>
+              <CircularProgress />
+            </Box>
+          )}
+
+          {usersError && (
+            <Alert severity="error" sx={{ mb: 2 }}>{usersError}</Alert>
+          )}
+
+          {!loadingUsers && partnerUsersSummary && (
+            <>
+              {/* Summary Stats */}
+              <Box sx={{ display: 'flex', gap: 2, mb: 3, flexWrap: 'wrap' }}>
+                <Chip
+                  label={`Total: ${partnerUsersSummary.total}`}
+                  color="default"
+                  variant="outlined"
+                />
+                <Chip
+                  icon={<CheckCircleIcon />}
+                  label={`CRM Active: ${partnerUsersSummary.crmActive}`}
+                  color="success"
+                  variant="outlined"
+                />
+                <Chip
+                  icon={<CancelIcon />}
+                  label={`CRM Inactive: ${partnerUsersSummary.crmInactive}`}
+                  color="error"
+                  variant="outlined"
+                />
+                <Chip
+                  label={`In LMS: ${partnerUsersSummary.inLms}`}
+                  color="info"
+                  variant="outlined"
+                />
+                <Chip
+                  label={`Not in LMS: ${partnerUsersSummary.notInLms}`}
+                  color="warning"
+                  variant="outlined"
+                />
+              </Box>
+
+              <Alert severity="info" sx={{ mb: 2 }}>
+                <Typography variant="body2">
+                  Export this list to CSV and share with the partner for review. They can identify users who are no longer with the company for offboarding.
+                </Typography>
+              </Alert>
+
+              {/* Users Table */}
+              <TableContainer component={Paper} sx={{ maxHeight: 400 }}>
+                <Table stickyHeader size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell sx={{ fontWeight: 600 }}>Name</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Email</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Title</TableCell>
+                      <TableCell align="center" sx={{ fontWeight: 600 }}>CRM Status</TableCell>
+                      <TableCell align="center" sx={{ fontWeight: 600 }}>LMS Status</TableCell>
+                      <TableCell align="center" sx={{ fontWeight: 600 }}>NPCU</TableCell>
+                      <TableCell align="center" sx={{ fontWeight: 600 }}>Certs</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {partnerUsers.map((user, idx) => (
+                      <TableRow key={user.contact_id || idx} hover>
+                        <TableCell>{user.full_name?.trim() || '-'}</TableCell>
+                        <TableCell>
+                          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>
+                            {user.email}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>{user.title || '-'}</TableCell>
+                        <TableCell align="center">
+                          <Chip
+                            size="small"
+                            label={user.crm_status}
+                            color={user.crm_active ? 'success' : 'error'}
+                            variant="outlined"
+                            sx={{ minWidth: 70 }}
+                          />
+                        </TableCell>
+                        <TableCell align="center">
+                          <Chip
+                            size="small"
+                            label={user.lms_status_display}
+                            color={
+                              !user.in_lms ? 'default' :
+                              user.lms_active ? 'success' : 'error'
+                            }
+                            variant="outlined"
+                            sx={{ minWidth: 90 }}
+                          />
+                        </TableCell>
+                        <TableCell align="center">
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              fontWeight: user.npcu_earned > 0 ? 600 : 400,
+                              color: user.npcu_earned > 0 ? 'success.main' : 'text.secondary'
+                            }}
+                          >
+                            {user.npcu_earned || 0}
+                          </Typography>
+                        </TableCell>
+                        <TableCell align="center">
+                          {user.certifications || 0}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {partnerUsers.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={7} align="center" sx={{ py: 4, color: 'text.secondary' }}>
+                          No users found for this partner
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </>
+          )}
+        </DialogContent>
+
+        <DialogActions sx={{ px: 3, py: 2 }}>
+          <Button onClick={closeUsersDialog} color="inherit">
+            Close
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<DownloadIcon />}
+            onClick={exportUsersToCSV}
+            disabled={partnerUsers.length === 0}
+          >
+            Export to CSV ({partnerUsers.length} users)
+          </Button>
+        </DialogActions>
+      </Dialog>
     </PageContent>
   );
 }

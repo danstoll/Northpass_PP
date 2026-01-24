@@ -370,6 +370,8 @@ export const StatusChip = ({ status, label, size = 'small' }) => {
     error: { color: 'error', icon: <ErrorIcon fontSize="small" /> },
     failed: { color: 'error', icon: <ErrorIcon fontSize="small" /> },
     expired: { color: 'error', icon: <ErrorIcon fontSize="small" /> },
+    inactive: { color: 'default', icon: <ErrorIcon fontSize="small" /> },
+    deactivated: { color: 'default', icon: <ErrorIcon fontSize="small" /> },
     info: { color: 'info', icon: <Info fontSize="small" /> },
     running: { color: 'info', icon: <CircularProgress size={14} /> },
     syncing: { color: 'info', icon: <CircularProgress size={14} /> },
@@ -565,6 +567,42 @@ export const RefreshButton = ({ onClick, loading, tooltip = 'Refresh', size = 'm
         </IconButton>
       </span>
     </Tooltip>
+  );
+};
+
+// Info Button - for explaining features with tooltip
+export const InfoButton = ({ tooltip, size = 16 }) => {
+  return (
+    <Tooltip title={tooltip} arrow placement="top">
+      <IconButton 
+        size="small" 
+        sx={{ 
+          ml: 0.5, 
+          p: 0.25, 
+          opacity: 0.7,
+          '&:hover': { opacity: 1, backgroundColor: 'transparent' }
+        }}
+      >
+        <Info sx={{ fontSize: size }} />
+      </IconButton>
+    </Tooltip>
+  );
+};
+
+// Tab with Info - Tab component with optional info button
+export const TabWithInfo = ({ label, icon, info, ...props }) => {
+  return (
+    <Tab
+      {...props}
+      icon={icon}
+      iconPosition="start"
+      label={
+        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+          {label}
+          {info && <InfoButton tooltip={info} size={14} />}
+        </Box>
+      }
+    />
   );
 };
 
@@ -774,6 +812,8 @@ export default {
   // Buttons
   ActionButton,
   RefreshButton,
+  InfoButton,
+  TabWithInfo,
   // Feedback
   ResultAlert,
   SectionHeader,

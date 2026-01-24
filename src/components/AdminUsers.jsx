@@ -2,7 +2,7 @@
  * AdminUsers - Admin user and profile management
  * Allows managing admin users and their role assignments
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Box,
   Card,
@@ -54,7 +54,7 @@ import {
   Clear,
 } from '@mui/icons-material';
 import { useAuth, RequirePermission } from '../context/AuthContext';
-import { PageHeader, StatsRow, StatCard, ActionButton, SearchInput, EmptyState, LoadingState } from './ui/NintexUI';
+import { PageHeader, StatsRow, StatCard, ActionButton, SearchInput, EmptyState, LoadingState, InfoButton } from './ui/NintexUI';
 import './AdminUsers.css';
 
 const API_BASE = '/api/db';
@@ -131,16 +131,16 @@ const AdminUsers = () => {
     }
   };
 
-  // Filter users
-  const filteredUsers = users.filter(user => {
+  // Filter users (memoized)
+  const filteredUsers = useMemo(() => {
     const term = searchTerm.toLowerCase();
-    return (
+    return users.filter(user => (
       user.email?.toLowerCase().includes(term) ||
       user.first_name?.toLowerCase().includes(term) ||
       user.last_name?.toLowerCase().includes(term) ||
       user.profile_name?.toLowerCase().includes(term)
-    );
-  });
+    ));
+  }, [users, searchTerm]);
 
   // User CRUD
   const handleSaveUser = async () => {
@@ -425,9 +425,9 @@ const AdminUsers = () => {
       {/* Tabs */}
       <Card sx={{ mt: 3 }}>
         <Tabs value={tab} onChange={(e, v) => setTab(v)} sx={{ borderBottom: 1, borderColor: 'divider' }}>
-          <Tab label="Users" icon={<People />} iconPosition="start" />
-          <Tab label="Profiles" icon={<Security />} iconPosition="start" />
-          <Tab label="Login History" icon={<History />} iconPosition="start" />
+          <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Users<InfoButton tooltip="Manage admin portal users. Create accounts, assign profiles, and control access to the admin interface." /></Box>} icon={<People />} iconPosition="start" />
+          <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Profiles<InfoButton tooltip="Define permission profiles that control what each admin user can access. Assign profiles to users in the Users tab." /></Box>} icon={<Security />} iconPosition="start" />
+          <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Login History<InfoButton tooltip="View login history for all admin users. Track successful and failed login attempts for security monitoring." /></Box>} icon={<History />} iconPosition="start" />
         </Tabs>
 
         <CardContent>

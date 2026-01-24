@@ -375,31 +375,31 @@ export default function PartnerUsersReport({ onBack }) {
           <FilterSelect
             label="Partner"
             value={partner}
-            onChange={(e) => { setPartner(e.target.value); setPage(0); }}
+            onChange={(val) => { setPartner(val); setPage(0); }}
             options={filters.partners}
             sx={{ minWidth: 220 }}
           />
-          
+
           <FilterSelect
             label="Tier"
             value={tier}
-            onChange={(e) => { setTier(e.target.value); setPage(0); }}
+            onChange={(val) => { setTier(val); setPage(0); }}
             options={filters.tiers}
             sx={{ minWidth: 150 }}
           />
-          
+
           <FilterSelect
             label="Region"
             value={region}
-            onChange={(e) => { setRegion(e.target.value); setPage(0); }}
+            onChange={(val) => { setRegion(val); setPage(0); }}
             options={filters.regions}
             sx={{ minWidth: 150 }}
           />
-          
+
           <FilterSelect
             label="Owner"
             value={owner}
-            onChange={(e) => { setOwner(e.target.value); setPage(0); }}
+            onChange={(val) => { setOwner(val); setPage(0); }}
             options={filters.owners}
             sx={{ minWidth: 180 }}
           />

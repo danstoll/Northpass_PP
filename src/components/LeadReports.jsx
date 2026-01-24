@@ -72,6 +72,7 @@ import {
   EmptyState,
   TierBadge,
   FilterSelect,
+  InfoButton,
 } from './ui/NintexUI';
 import { 
   PieChart, Pie, Cell, ResponsiveContainer, 
@@ -95,17 +96,17 @@ const REGION_COLORS = {
 
 // Tab definitions
 const TABS = [
-  { id: 'dashboard', label: 'Dashboard', icon: <Assessment /> },
-  { id: 'by-partner', label: 'By Partner', icon: <Business /> },
-  { id: 'by-month', label: 'By Month', icon: <CalendarMonth /> },
-  { id: 'by-region', label: 'By Region', icon: <Public /> },
-  { id: 'by-owner', label: 'By Owner', icon: <Person /> },
-  { id: 'by-source', label: 'By Source', icon: <Source /> },
-  { id: 'by-status', label: 'By Status', icon: <Flag /> },
-  { id: 'trends', label: 'Trends', icon: <TrendingUp /> },
-  { id: 'comparisons', label: 'Comparisons', icon: <CompareArrows /> },
-  { id: 'top-performers', label: 'Top Performers', icon: <EmojiEvents /> },
-  { id: 'growth', label: 'Growth Analysis', icon: <InsertChart /> },
+  { id: 'dashboard', label: <Box sx={{ display: 'flex', alignItems: 'center' }}>Dashboard<InfoButton tooltip="Overview of all lead metrics including totals, conversion rates, and key performance indicators." /></Box>, icon: <Assessment /> },
+  { id: 'by-partner', label: <Box sx={{ display: 'flex', alignItems: 'center' }}>By Partner<InfoButton tooltip="Leads grouped by partner organization. Shows lead count, conversion rate, and registration status." /></Box>, icon: <Business /> },
+  { id: 'by-month', label: <Box sx={{ display: 'flex', alignItems: 'center' }}>By Month<InfoButton tooltip="Monthly lead trends showing volume over time with growth metrics." /></Box>, icon: <CalendarMonth /> },
+  { id: 'by-region', label: <Box sx={{ display: 'flex', alignItems: 'center' }}>By Region<InfoButton tooltip="Lead distribution across geographic regions (Americas, EMEA, APAC, etc.)." /></Box>, icon: <Public /> },
+  { id: 'by-owner', label: <Box sx={{ display: 'flex', alignItems: 'center' }}>By Owner<InfoButton tooltip="Leads grouped by account owner. Shows portfolio performance and conversion rates." /></Box>, icon: <Person /> },
+  { id: 'by-source', label: <Box sx={{ display: 'flex', alignItems: 'center' }}>By Source<InfoButton tooltip="Lead sources breakdown (web form, event, referral, etc.)." /></Box>, icon: <Source /> },
+  { id: 'by-status', label: <Box sx={{ display: 'flex', alignItems: 'center' }}>By Status<InfoButton tooltip="Lead pipeline stages showing distribution across status values." /></Box>, icon: <Flag /> },
+  { id: 'trends', label: <Box sx={{ display: 'flex', alignItems: 'center' }}>Trends<InfoButton tooltip="Time-series analysis of lead metrics with trend lines and seasonality patterns." /></Box>, icon: <TrendingUp /> },
+  { id: 'comparisons', label: <Box sx={{ display: 'flex', alignItems: 'center' }}>Comparisons<InfoButton tooltip="Compare metrics across different dimensions (region vs region, time periods, etc.)." /></Box>, icon: <CompareArrows /> },
+  { id: 'top-performers', label: <Box sx={{ display: 'flex', alignItems: 'center' }}>Top Performers<InfoButton tooltip="Leaderboard showing top partners, owners, and regions by lead metrics." /></Box>, icon: <EmojiEvents /> },
+  { id: 'growth', label: <Box sx={{ display: 'flex', alignItems: 'center' }}>Growth Analysis<InfoButton tooltip="Growth rate calculations with period-over-period comparisons and projections." /></Box>, icon: <InsertChart /> },
 ];
 
 export default function LeadReports({ onBack }) {

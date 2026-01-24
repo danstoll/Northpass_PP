@@ -16,7 +16,7 @@ import {
   Send as SendIcon, Notifications as NotificationsIcon,
   Description as TemplateIcon, Save as SaveIcon, Visibility as PreviewIcon
 } from '@mui/icons-material';
-import { PageHeader, PageContent, SectionCard, ActionButton } from './ui/NintexUI';
+import { PageHeader, PageContent, SectionCard, ActionButton, InfoButton } from './ui/NintexUI';
 import { useAuth } from '../context/AuthContext';
 
 function TabPanel({ children, value, index, ...other }) {
@@ -431,9 +431,9 @@ export default function Settings() {
       <Paper sx={{ mb: 3 }}>
         <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
           <Tabs value={tabValue} onChange={(e, v) => setTabValue(v)}>
-            <Tab icon={<SettingsIcon />} label="Partner Tiers" iconPosition="start" />
-            <Tab icon={<NotificationsIcon />} label="Notifications" iconPosition="start" />
-            <Tab icon={<TemplateIcon />} label="Message Templates" iconPosition="start" />
+            <Tab icon={<SettingsIcon />} label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Partner Tiers<InfoButton tooltip="Define partner tier levels and their NPCU requirements for certification compliance tracking." /></Box>} iconPosition="start" />
+            <Tab icon={<NotificationsIcon />} label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Notifications<InfoButton tooltip="Configure notification channels (email, Slack) and test connectivity for automated alerts." /></Box>} iconPosition="start" />
+            <Tab icon={<TemplateIcon />} label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Message Templates<InfoButton tooltip="Customize email templates used for automated notifications like certification updates and reminders." /></Box>} iconPosition="start" />
           </Tabs>
         </Box>
 

@@ -61,8 +61,9 @@ router.get('/partner-contact-audit', async (req, res) => {
     }
     
     // Get contacts that have lms_user_id set (fast indexed query)
+    // Include inactive partners so user can see them and skip if desired
     const contacts = await query(`
-      SELECT 
+      SELECT
         c.partner_id,
         c.email,
         c.first_name,
@@ -70,15 +71,16 @@ router.get('/partner-contact-audit', async (req, res) => {
         c.lms_user_id as user_id,
         p.account_name,
         p.partner_tier,
+        p.is_active as partner_is_active,
+        p.account_status as partner_account_status,
         g.id as partner_group_id,
         g.name as partner_group_name
       FROM contacts c
       INNER JOIN partners p ON p.id = c.partner_id
       LEFT JOIN lms_groups g ON g.partner_id = p.id
       WHERE c.is_active = TRUE
-        AND p.is_active = TRUE
         AND c.lms_user_id IS NOT NULL
-      ORDER BY p.account_name
+      ORDER BY p.is_active DESC, p.account_name
     `);
     
     // Process contacts and find missing memberships
@@ -105,6 +107,8 @@ router.get('/partner-contact-audit', async (req, res) => {
             partnerId,
             partnerName: contact.account_name,
             partnerTier: contact.partner_tier,
+            partnerIsActive: contact.partner_is_active,
+            partnerAccountStatus: contact.partner_account_status,
             partnerGroupId: contact.partner_group_id,
             partnerGroupName: contact.partner_group_name,
             totalContacts: 0,
@@ -139,11 +143,17 @@ router.get('/partner-contact-audit', async (req, res) => {
       // Check if group name needs ptr_ prefix
       const needsRename = p.partnerGroupName && !p.partnerGroupName.toLowerCase().startsWith('ptr_');
       const suggestedName = needsRename ? `ptr_${p.partnerName}` : null;
-      
+      // Determine if partner is truly active (check both fields)
+      const isActive = p.partnerIsActive !== false && p.partnerIsActive !== 0 &&
+                       (p.partnerAccountStatus === 'Active' || !p.partnerAccountStatus);
+
       return {
         partnerId: p.partnerId,
         partnerName: p.partnerName,
         tier: p.partnerTier,
+        isActive,
+        partnerIsActive: p.partnerIsActive,
+        partnerAccountStatus: p.partnerAccountStatus,
         partnerGroupId: p.partnerGroupId,
         partnerGroupName: p.partnerGroupName,
         needsRename,
@@ -1102,6 +1112,431 @@ router.post('/add-users-to-impartner', async (req, res) => {
     res.json({ results });
   } catch (error) {
     console.error('Add users to Impartner error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Deactivate users in Impartner CRM
+// Sets IsActive=false and Contact_Status__cf='Inactive'
+router.post('/deactivate-users-in-impartner', async (req, res) => {
+  try {
+    const { users, deactivateLms = true } = req.body; // Array of { email } or { impartnerId }
+
+    if (!users || !Array.isArray(users) || users.length === 0) {
+      return res.status(400).json({ error: 'users array is required' });
+    }
+
+    const results = {
+      total: users.length,
+      impartnerDeactivated: 0,
+      impartnerFailed: 0,
+      impartnerNotFound: 0,
+      lmsDeactivated: 0,
+      lmsFailed: 0,
+      localDbUpdated: 0,
+      errors: [],
+      processed: []
+    };
+
+    for (const user of users) {
+      const userEmail = user.email?.toLowerCase();
+      let impartnerId = user.impartnerId;
+      let lmsUserId = user.lmsUserId;
+      let contactId = user.contactId;
+
+      try {
+        // If no impartnerId provided, look it up from our database or Impartner
+        if (!impartnerId && userEmail) {
+          // First check our local contacts table
+          const [contact] = await query(
+            'SELECT id, impartner_id, lms_user_id FROM contacts WHERE LOWER(email) = ?',
+            [userEmail]
+          );
+
+          if (contact) {
+            impartnerId = contact.impartner_id;
+            lmsUserId = contact.lms_user_id;
+            contactId = contact.id;
+          }
+
+          // If still no impartnerId, search Impartner directly
+          if (!impartnerId) {
+            const lookupFilter = `Email = '${userEmail}'`;
+            const lookupUrl = `${IMPARTNER_CONFIG.host}/api/objects/v1/User?fields=Id,Email,IsActive&filter=${encodeURIComponent(lookupFilter)}&take=1`;
+
+            const lookupResp = await fetch(lookupUrl, {
+              headers: {
+                'Authorization': `prm-key ${IMPARTNER_CONFIG.apiKey}`,
+                'X-PRM-TenantId': IMPARTNER_CONFIG.tenantId,
+                'Accept': 'application/json'
+              }
+            });
+
+            if (lookupResp.ok) {
+              const lookupData = await lookupResp.json();
+              const impartnerUser = lookupData?.data?.results?.[0];
+              if (impartnerUser?.id) {
+                impartnerId = impartnerUser.id;
+              }
+            }
+          }
+        }
+
+        // Step 1: Deactivate in Impartner
+        if (impartnerId) {
+          // Use PATCH to update the user
+          const updateResp = await fetch(`${IMPARTNER_CONFIG.host}/api/objects/v1/User`, {
+            method: 'PATCH',
+            headers: {
+              'Authorization': `prm-key ${IMPARTNER_CONFIG.apiKey}`,
+              'X-PRM-TenantId': IMPARTNER_CONFIG.tenantId,
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            },
+            body: JSON.stringify([{
+              Id: impartnerId,
+              IsActive: false,
+              Contact_Status__cf: 'Inactive'
+            }])
+          });
+
+          if (updateResp.ok) {
+            results.impartnerDeactivated++;
+            results.processed.push({
+              email: userEmail,
+              impartnerId,
+              impartnerStatus: 'deactivated'
+            });
+          } else {
+            const errorText = await updateResp.text();
+            results.impartnerFailed++;
+            results.errors.push({
+              email: userEmail,
+              step: 'impartner',
+              error: `HTTP ${updateResp.status}: ${errorText.substring(0, 200)}`
+            });
+          }
+        } else {
+          results.impartnerNotFound++;
+          results.errors.push({
+            email: userEmail,
+            step: 'impartner',
+            error: 'User not found in Impartner'
+          });
+        }
+
+        // Step 2: Deactivate in LMS (Northpass) if requested
+        if (deactivateLms) {
+          // Get LMS user ID if not already known
+          if (!lmsUserId && userEmail) {
+            const [lmsUser] = await query(
+              'SELECT id FROM lms_users WHERE LOWER(email) = ?',
+              [userEmail]
+            );
+            if (lmsUser) {
+              lmsUserId = lmsUser.id;
+            }
+          }
+
+          if (lmsUserId) {
+            try {
+              // Deactivate in Northpass via API
+              const lmsResp = await fetch(`https://api.northpass.com/v2/people/${lmsUserId}`, {
+                method: 'PATCH',
+                headers: {
+                  'X-Api-Key': API_KEY,
+                  'Content-Type': 'application/json',
+                  'Accept': 'application/json'
+                },
+                body: JSON.stringify({
+                  data: {
+                    type: 'people',
+                    id: lmsUserId,
+                    attributes: {
+                      deactivated: true
+                    }
+                  }
+                })
+              });
+
+              if (lmsResp.ok || lmsResp.status === 204) {
+                // Update local lms_users table
+                await query(
+                  `UPDATE lms_users SET status = 'deactivated', is_active = FALSE, deactivated_at = NOW(), synced_at = NOW() WHERE id = ?`,
+                  [lmsUserId]
+                );
+                results.lmsDeactivated++;
+              } else {
+                results.lmsFailed++;
+                results.errors.push({
+                  email: userEmail,
+                  step: 'lms',
+                  error: `HTTP ${lmsResp.status}`
+                });
+              }
+            } catch (lmsErr) {
+              results.lmsFailed++;
+              results.errors.push({
+                email: userEmail,
+                step: 'lms',
+                error: lmsErr.message
+              });
+            }
+          }
+        }
+
+        // Step 3: Update local contacts table
+        if (contactId || userEmail) {
+          try {
+            if (contactId) {
+              await query(
+                'UPDATE contacts SET is_active = FALSE, updated_at = NOW() WHERE id = ?',
+                [contactId]
+              );
+            } else if (userEmail) {
+              await query(
+                'UPDATE contacts SET is_active = FALSE, updated_at = NOW() WHERE LOWER(email) = ?',
+                [userEmail]
+              );
+            }
+            results.localDbUpdated++;
+          } catch (dbErr) {
+            // Non-critical - continue
+          }
+        }
+
+        // Rate limit between users
+        await new Promise(resolve => setTimeout(resolve, 200));
+
+      } catch (userError) {
+        results.errors.push({
+          email: userEmail,
+          step: 'general',
+          error: userError.message
+        });
+      }
+    }
+
+    res.json({
+      success: results.impartnerDeactivated > 0 || results.lmsDeactivated > 0,
+      results
+    });
+  } catch (error) {
+    console.error('Deactivate users in Impartner error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Deactivate a single user - for batch processing from frontend
+// This allows the frontend to show progress as each user is processed
+router.post('/deactivate-single-user', async (req, res) => {
+  try {
+    const { email, impartnerId, lmsUserId, contactId, deactivateLms = true } = req.body;
+
+    if (!email && !impartnerId) {
+      return res.status(400).json({ error: 'email or impartnerId is required' });
+    }
+
+    const userEmail = email?.toLowerCase();
+    let finalImpartnerId = impartnerId;
+    let finalLmsUserId = lmsUserId;
+    let finalContactId = contactId;
+
+    const result = {
+      email: userEmail,
+      impartnerDeactivated: false,
+      lmsDeactivated: false,
+      localDbUpdated: false,
+      errors: []
+    };
+
+    // If no impartnerId provided, look it up
+    if (!finalImpartnerId && userEmail) {
+      const [contact] = await query(
+        'SELECT id, impartner_id, lms_user_id FROM contacts WHERE LOWER(email) = ?',
+        [userEmail]
+      );
+
+      if (contact) {
+        finalImpartnerId = contact.impartner_id;
+        finalLmsUserId = contact.lms_user_id;
+        finalContactId = contact.id;
+      }
+
+      // If still no impartnerId, search Impartner directly
+      if (!finalImpartnerId) {
+        const lookupFilter = `Email = '${userEmail}'`;
+        const lookupUrl = `${IMPARTNER_CONFIG.host}/api/objects/v1/User?fields=Id,Email,IsActive&filter=${encodeURIComponent(lookupFilter)}&take=1`;
+
+        const lookupResp = await fetch(lookupUrl, {
+          headers: {
+            'Authorization': `prm-key ${IMPARTNER_CONFIG.apiKey}`,
+            'X-PRM-TenantId': IMPARTNER_CONFIG.tenantId,
+            'Accept': 'application/json'
+          }
+        });
+
+        if (lookupResp.ok) {
+          const lookupData = await lookupResp.json();
+          const impartnerUser = lookupData?.data?.results?.[0];
+          if (impartnerUser?.id) {
+            finalImpartnerId = impartnerUser.id;
+          }
+        }
+      }
+    }
+
+    // Step 1: Deactivate in Impartner
+    if (finalImpartnerId) {
+      const updateResp = await fetch(`${IMPARTNER_CONFIG.host}/api/objects/v1/User`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `prm-key ${IMPARTNER_CONFIG.apiKey}`,
+          'X-PRM-TenantId': IMPARTNER_CONFIG.tenantId,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify([{
+          Id: finalImpartnerId,
+          IsActive: false,
+          Contact_Status__cf: 'Inactive'
+        }])
+      });
+
+      if (updateResp.ok) {
+        result.impartnerDeactivated = true;
+      } else {
+        result.errors.push(`Impartner: HTTP ${updateResp.status}`);
+      }
+    } else {
+      result.errors.push('Not found in Impartner');
+    }
+
+    // Step 2: Deactivate in LMS if requested
+    if (deactivateLms) {
+      if (!finalLmsUserId && userEmail) {
+        const [lmsUser] = await query(
+          'SELECT id FROM lms_users WHERE LOWER(email) = ?',
+          [userEmail]
+        );
+        if (lmsUser) {
+          finalLmsUserId = lmsUser.id;
+        }
+      }
+
+      if (finalLmsUserId) {
+        try {
+          const lmsResp = await fetch(`https://api.northpass.com/v2/people/${finalLmsUserId}`, {
+            method: 'PATCH',
+            headers: {
+              'X-Api-Key': API_KEY,
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            },
+            body: JSON.stringify({
+              data: {
+                type: 'people',
+                id: finalLmsUserId,
+                attributes: {
+                  deactivated: true
+                }
+              }
+            })
+          });
+
+          if (lmsResp.ok || lmsResp.status === 204) {
+            await query(
+              `UPDATE lms_users SET status = 'deactivated', is_active = FALSE, deactivated_at = NOW(), synced_at = NOW() WHERE id = ?`,
+              [finalLmsUserId]
+            );
+            result.lmsDeactivated = true;
+          } else {
+            result.errors.push(`LMS: HTTP ${lmsResp.status}`);
+          }
+        } catch (lmsErr) {
+          result.errors.push(`LMS: ${lmsErr.message}`);
+        }
+      }
+    }
+
+    // Step 3: Update local contacts table
+    if (finalContactId || userEmail) {
+      try {
+        if (finalContactId) {
+          await query(
+            'UPDATE contacts SET is_active = FALSE, updated_at = NOW() WHERE id = ?',
+            [finalContactId]
+          );
+        } else if (userEmail) {
+          await query(
+            'UPDATE contacts SET is_active = FALSE, updated_at = NOW() WHERE LOWER(email) = ?',
+            [userEmail]
+          );
+        }
+        result.localDbUpdated = true;
+      } catch (dbErr) {
+        // Non-critical
+      }
+    }
+
+    res.json({
+      success: result.impartnerDeactivated || result.lmsDeactivated,
+      result
+    });
+  } catch (error) {
+    console.error('Deactivate single user error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get users that can be deactivated in Impartner (preview endpoint)
+router.get('/users-for-impartner-deactivation', async (req, res) => {
+  try {
+    const { search, partnerId, limit = 100 } = req.query;
+
+    // Get contacts that are active in our system but could be deactivated
+    let sql = `
+      SELECT
+        c.id as contact_id,
+        c.email,
+        c.first_name,
+        c.last_name,
+        c.impartner_id,
+        c.lms_user_id,
+        c.is_active as contact_is_active,
+        p.id as partner_id,
+        p.account_name,
+        p.partner_tier,
+        p.is_active as partner_is_active,
+        u.id as lms_id,
+        u.status as lms_status,
+        u.is_active as lms_is_active
+      FROM contacts c
+      LEFT JOIN partners p ON p.id = c.partner_id
+      LEFT JOIN lms_users u ON u.id = c.lms_user_id
+      WHERE c.email IS NOT NULL
+    `;
+    const params = [];
+
+    if (search) {
+      sql += ' AND (c.email LIKE ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR p.account_name LIKE ?)';
+      const term = `%${search}%`;
+      params.push(term, term, term, term);
+    }
+
+    if (partnerId) {
+      sql += ' AND c.partner_id = ?';
+      params.push(partnerId);
+    }
+
+    sql += ' ORDER BY p.account_name, c.last_name LIMIT ?';
+    params.push(parseInt(limit));
+
+    const users = await query(sql, params);
+
+    res.json({ users, total: users.length });
+  } catch (error) {
+    console.error('Get users for deactivation error:', error);
     res.status(500).json({ error: error.message });
   }
 });

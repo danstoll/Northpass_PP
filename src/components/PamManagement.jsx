@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box, Card, CardContent, Typography, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, Paper, Chip, IconButton, Button,
@@ -17,7 +17,7 @@ import {
   VisibilityOff as VisibilityOffIcon,
   Check as CheckIcon
 } from '@mui/icons-material';
-import { PageHeader, PageContent, StatCard, StatsRow, ActionButton, LoadingState } from './ui/NintexUI';
+import { PageHeader, PageContent, StatCard, StatsRow, ActionButton, LoadingState, InfoButton } from './ui/NintexUI';
 import './PamManagement.css';
 
 function TabPanel({ children, value, index, ...other }) {
@@ -259,12 +259,15 @@ export default function PamManagement() {
     }
   };
 
-  // Filter PAMs by search term
-  const filteredPams = pams.filter(pam =>
-    pam.owner_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (pam.email && pam.email.toLowerCase().includes(searchTerm.toLowerCase())) ||
-    (pam.region && pam.region.toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+  // Filter PAMs by search term (memoized)
+  const filteredPams = useMemo(() => {
+    const term = searchTerm.toLowerCase();
+    return pams.filter(pam =>
+      pam.owner_name.toLowerCase().includes(term) ||
+      (pam.email && pam.email.toLowerCase().includes(term)) ||
+      (pam.region && pam.region.toLowerCase().includes(term))
+    );
+  }, [pams, searchTerm]);
 
   if (loading && pams.length === 0) {
     return <LoadingState message="Loading Partner Account Managers..." />;
@@ -315,8 +318,8 @@ export default function PamManagement() {
       <Card sx={{ mt: 3 }}>
         <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
           <Tabs value={tabValue} onChange={(e, v) => setTabValue(v)}>
-            <Tab icon={<PersonIcon />} label="Partner Managers" />
-            <Tab icon={<HistoryIcon />} label="Email History" />
+            <Tab icon={<PersonIcon />} label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Partner Managers<InfoButton tooltip="View and manage Partner Account Managers (PAMs), their assigned partners, and email notification preferences." /></Box>} />
+            <Tab icon={<HistoryIcon />} label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Email History<InfoButton tooltip="View history of all certification notification emails sent to PAMs including delivery status." /></Box>} />
           </Tabs>
         </Box>
 

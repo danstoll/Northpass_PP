@@ -699,4 +699,23 @@ router.post('/bulk-save-analysis', async (req, res) => {
   }
 });
 
+// Record a group membership in local database (after adding via API)
+router.post('/groups/:groupId/members/:userId/record', async (req, res) => {
+  try {
+    const { groupId, userId } = req.params;
+    const { source = 'manual_fix' } = req.body;
+
+    await query(`
+      INSERT INTO lms_group_members (group_id, user_id, pending_source, added_at)
+      VALUES (?, ?, ?, NOW())
+      ON DUPLICATE KEY UPDATE pending_source = VALUES(pending_source), added_at = NOW()
+    `, [groupId, userId, source]);
+
+    res.json({ success: true, groupId, userId });
+  } catch (error) {
+    console.error('Record group membership error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;

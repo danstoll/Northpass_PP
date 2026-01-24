@@ -40,7 +40,8 @@ const TASK_METADATA = {
   group_analysis: { icon: '🔍', name: 'Group Analysis', category: 'analysis', description: 'Find potential users by domain', apiEndpoint: null },
   group_members_sync: { icon: '👥', name: 'Member Sync', category: 'analysis', description: 'Confirm pending group members', apiEndpoint: null },
   cleanup: { icon: '🧹', name: 'Cleanup', category: 'maintenance', description: 'Remove old logs and data', apiEndpoint: null },
-  pam_weekly_report: { icon: '📧', name: 'PAM Weekly Reports', category: 'notifications', description: 'Send weekly reports to Partner Account Managers', apiEndpoint: '/api/db/pams/send-all-reports' }
+  pam_weekly_report: { icon: '📧', name: 'PAM Weekly Reports', category: 'notifications', description: 'Send weekly reports to Partner Account Managers', apiEndpoint: '/api/db/pams/send-all-reports' },
+  daily_sync_chain: { icon: '⛓️', name: 'Daily Sync Chain', category: 'orchestrated', description: 'Orchestrated full sync: Courses → Impartner → NPCU → Users → Groups → Enrollments → Push', apiEndpoint: '/api/db/tasks/daily-sync-chain/trigger', hidden: true }
 };
 
 function SyncDashboard() {
@@ -63,6 +64,10 @@ function SyncDashboard() {
   const [newInterval, setNewInterval] = useState('');
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [expandedLog, setExpandedLog] = useState(null);
+
+  // Daily sync chain state
+  const [dailySyncChainRunning, setDailySyncChainRunning] = useState(false);
+  const [dailySyncChainStatus, setDailySyncChainStatus] = useState(null);
 
   // Fetch all tasks
   const fetchTasks = useCallback(async () => {
@@ -328,6 +333,41 @@ function SyncDashboard() {
       }
     } catch {
       setError('Failed to update interval');
+    }
+  };
+
+  // Trigger daily sync chain
+  const triggerDailySyncChain = async () => {
+    setError(null);
+    setDailySyncChainRunning(true);
+    setDailySyncChainStatus({ status: 'starting', message: 'Starting daily sync chain...' });
+
+    try {
+      const response = await fetch('/api/db/tasks/daily-sync-chain/trigger', { method: 'POST' });
+      const { ok: parseOk, data, error: parseError } = await safeJsonParse(response);
+
+      if (!parseOk) {
+        throw new Error(parseError);
+      }
+
+      if (response.ok) {
+        setDailySyncChainStatus({
+          status: 'running',
+          message: data.message || 'Daily sync chain started. Check sync logs for progress.'
+        });
+        setSuccessMessage('Daily sync chain started in background');
+        // Refresh data to show progress
+        setTimeout(fetchTasks, 2000);
+        setTimeout(fetchSyncHistory, 3000);
+      } else {
+        setDailySyncChainRunning(false);
+        setDailySyncChainStatus({ status: 'error', message: data.error || 'Failed to start sync chain' });
+        setError(data.error || 'Failed to start daily sync chain');
+      }
+    } catch (err) {
+      setDailySyncChainRunning(false);
+      setDailySyncChainStatus({ status: 'error', message: err.message });
+      setError(err.message || 'Failed to start daily sync chain');
     }
   };
 
@@ -701,15 +741,135 @@ function SyncDashboard() {
         );
       })()}
 
+      {/* Daily Sync Chain Panel */}
+      {(() => {
+        const chainTask = tasks.find(t => t.task_type === 'daily_sync_chain');
+        if (!chainTask) return null;
+
+        const isChainRunning = dailySyncChainRunning || runningTasks.has('daily_sync_chain') ||
+          schedulerStatus?.activeTasks?.some(t => t.type === 'daily_sync_chain');
+
+        return (
+          <div className="daily-sync-chain-panel">
+            <div className="chain-header">
+              <div className="chain-title">
+                <span className="chain-icon">⛓️</span>
+                <div>
+                  <h2>Daily Sync Chain</h2>
+                  <span className="chain-subtitle">
+                    Orchestrated full sync with proper dependency order
+                  </span>
+                </div>
+              </div>
+              <div className="chain-controls">
+                <label className="toggle-switch" title={chainTask.enabled ? 'Disable schedule' : 'Enable schedule'}>
+                  <input
+                    type="checkbox"
+                    checked={chainTask.enabled}
+                    onChange={(e) => toggleTask('daily_sync_chain', e.target.checked)}
+                  />
+                  <span className="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+
+            <div className="chain-steps">
+              <div className="chain-step">
+                <span className="step-badge tier1">Tier 1</span>
+                <span className="step-tasks">📚 Courses + 🔄 Impartner</span>
+                <span className="step-note">(parallel)</span>
+              </div>
+              <span className="chain-arrow">→</span>
+              <div className="chain-step">
+                <span className="step-badge">2</span>
+                <span className="step-tasks">🎓 NPCU</span>
+              </div>
+              <span className="chain-arrow">→</span>
+              <div className="chain-step">
+                <span className="step-badge">3</span>
+                <span className="step-tasks">👥 Users</span>
+              </div>
+              <span className="chain-arrow">→</span>
+              <div className="chain-step">
+                <span className="step-badge">4</span>
+                <span className="step-tasks">🏢 Groups</span>
+              </div>
+              <span className="chain-arrow">→</span>
+              <div className="chain-step">
+                <span className="step-badge">5</span>
+                <span className="step-tasks">📊 Enrollments</span>
+              </div>
+              <span className="chain-arrow">→</span>
+              <div className="chain-step">
+                <span className="step-badge">6</span>
+                <span className="step-tasks">📤 Push</span>
+              </div>
+            </div>
+
+            <div className="chain-info">
+              <div className="info-item">
+                <span className="info-label">Schedule:</span>
+                <span className="info-value">
+                  {chainTask.enabled ? (
+                    <>Daily at {chainTask.schedule_time?.substring(0, 5) || '02:00'}</>
+                  ) : (
+                    <span className="disabled-text">Disabled</span>
+                  )}
+                </span>
+              </div>
+              <div className="info-item">
+                <span className="info-label">Last Run:</span>
+                <span className="info-value">{formatDate(chainTask.last_run_at)}</span>
+              </div>
+              <div className="info-item">
+                <span className="info-label">Status:</span>
+                <span className={`info-value status ${isChainRunning ? 'running' : getStatusClass(chainTask.last_status)}`}>
+                  {isChainRunning ? '⏳ Running' : (chainTask.last_status || 'Never run')}
+                </span>
+              </div>
+              {chainTask.last_duration_seconds && (
+                <div className="info-item">
+                  <span className="info-label">Duration:</span>
+                  <span className="info-value">{formatDuration(chainTask.last_duration_seconds)}</span>
+                </div>
+              )}
+            </div>
+
+            {dailySyncChainStatus && dailySyncChainStatus.status !== 'running' && (
+              <div className={`chain-status-message ${dailySyncChainStatus.status}`}>
+                {dailySyncChainStatus.message}
+              </div>
+            )}
+
+            <div className="chain-actions">
+              <button
+                className={`btn-run-chain ${isChainRunning ? 'running' : ''}`}
+                onClick={triggerDailySyncChain}
+                disabled={isChainRunning}
+              >
+                {isChainRunning ? (
+                  <><span className="ntx-spinner small"></span> Running Chain...</>
+                ) : (
+                  <>▶ Run Full Sync Chain Now</>
+                )}
+              </button>
+              <span className="action-hint">
+                Runs all syncs in sequence (~75-120 min)
+              </span>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Tab Navigation */}
       <div className="tab-nav">
-        <button 
+        <button
           className={`tab-btn ${activeTab === 'tasks' ? 'active' : ''}`}
           onClick={() => setActiveTab('tasks')}
         >
           📋 All Tasks
         </button>
-        <button 
+        <button
           className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
           onClick={() => { setActiveTab('history'); fetchSyncHistory(); }}
         >

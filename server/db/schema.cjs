@@ -6,7 +6,7 @@
 const { query, transaction, getPool } = require('./connection.cjs');
 const crypto = require('crypto');
 
-const SCHEMA_VERSION = 24;
+const SCHEMA_VERSION = 31;
 
 /**
  * Create all database tables
@@ -1645,6 +1645,273 @@ Get started by completing your certifications to help your team meet NPCU goals.
       }
       
       console.log('  ✓ Soft-delete and activity tracking migration complete');
+    }
+
+    // Version 25: Add executive report recipients table and scheduled task
+    if (currentVersion < 25) {
+      console.log('📦 Running v25 migration: Add executive report recipients...');
+
+      // Executive report recipients table
+      try {
+        await query(`
+          CREATE TABLE IF NOT EXISTS executive_report_recipients (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            email VARCHAR(255) NOT NULL,
+            name VARCHAR(255),
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY unique_email (email),
+            INDEX idx_active (is_active)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        console.log('  ✓ Created executive_report_recipients table');
+      } catch (err) {
+        console.log(`  - executive_report_recipients table: ${err.message}`);
+      }
+
+      // Add executive weekly report scheduled task
+      try {
+        await query(`
+          INSERT INTO scheduled_tasks (task_type, task_name, enabled, interval_minutes, config)
+          VALUES ('executive_weekly_report', 'Executive Weekly Report', FALSE, 10080, '{}')
+          ON DUPLICATE KEY UPDATE task_name = task_name
+        `);
+        console.log('  ✓ Added executive_weekly_report scheduled task');
+      } catch (err) {
+        console.log(`  - executive_weekly_report task: ${err.message}`);
+      }
+
+      console.log('  ✓ Executive report migration complete');
+    }
+
+    // Version 26: Add performance indexes for sync and reporting
+    if (currentVersion < 26) {
+      console.log('📦 Running v26 migration: Add performance indexes for sync/reporting...');
+
+      const perfIndexes = [
+        // Critical for reporting queries - consolidates status + course + date lookups
+        { table: 'lms_enrollments', name: 'idx_enrollments_reporting', cols: '(status, course_id, completed_at)' },
+
+        // Critical for enrollment sync - expires_at lookups
+        { table: 'lms_enrollments', name: 'idx_enrollments_expires', cols: '(expires_at)' },
+
+        // Critical for sync - composite for faster user-group lookups
+        { table: 'lms_group_members', name: 'idx_gm_user_group_added', cols: '(user_id, group_id, added_at)' },
+
+        // Contacts composite for LMS linkage queries
+        { table: 'contacts', name: 'idx_contacts_lms_partner', cols: '(lms_user_id, partner_id)' },
+
+        // Partners composite for active partner reporting
+        { table: 'partners', name: 'idx_partners_active_npcu', cols: '(is_active, total_npcu)' },
+
+        // LMS courses composite for certification queries
+        { table: 'lms_courses', name: 'idx_courses_cert_npcu', cols: '(certification_category, npcu_value)' },
+      ];
+
+      for (const idx of perfIndexes) {
+        try {
+          await query(`ALTER TABLE ${idx.table} ADD INDEX ${idx.name} ${idx.cols}`);
+          console.log(`  ✓ Added index ${idx.table}.${idx.name}`);
+        } catch (err) {
+          if (!err.message.includes('Duplicate key')) {
+            console.log(`  - ${idx.table}.${idx.name}: ${err.message}`);
+          } else {
+            console.log(`  - ${idx.table}.${idx.name}: already exists`);
+          }
+        }
+      }
+
+      console.log('  ✓ Performance indexes migration complete');
+    }
+
+    // Version 27: Add schedule day/time columns for weekly reports
+    if (currentVersion < 27) {
+      console.log('📦 Running v27 migration: Add schedule day/time for weekly reports...');
+
+      // Add schedule_day (0=Sunday, 1=Monday, etc.) and schedule_time (HH:MM format)
+      const scheduleColumns = [
+        { name: 'schedule_day', def: 'TINYINT NULL COMMENT "Day of week: 0=Sun, 1=Mon, ..., 6=Sat"' },
+        { name: 'schedule_time', def: 'TIME NULL COMMENT "Time of day in HH:MM:SS format"' }
+      ];
+
+      for (const col of scheduleColumns) {
+        try {
+          await query(`ALTER TABLE scheduled_tasks ADD COLUMN ${col.name} ${col.def}`);
+          console.log(`  ✓ Added scheduled_tasks.${col.name}`);
+        } catch (err) {
+          if (!err.message.includes('Duplicate column')) {
+            console.log(`  - scheduled_tasks.${col.name}: ${err.message}`);
+          } else {
+            console.log(`  - scheduled_tasks.${col.name}: already exists`);
+          }
+        }
+      }
+
+      // Set default schedule for weekly reports: Monday at 8:00 AM
+      try {
+        await query(`
+          UPDATE scheduled_tasks
+          SET schedule_day = 1, schedule_time = '08:00:00'
+          WHERE task_type IN ('pam_weekly_report', 'executive_weekly_report')
+        `);
+        console.log('  ✓ Set default schedule for weekly reports (Monday 8:00 AM)');
+      } catch (err) {
+        console.log(`  - Default schedule: ${err.message}`);
+      }
+
+      console.log('  ✓ Schedule day/time migration complete');
+    }
+
+    // Version 28: Add daily_sync_chain orchestrated task
+    if (currentVersion < 28) {
+      console.log('📦 Running v28 migration: Add orchestrated daily sync chain task...');
+
+      try {
+        await query(`
+          INSERT INTO scheduled_tasks (task_type, task_name, enabled, interval_minutes, schedule_day, schedule_time, config)
+          VALUES ('daily_sync_chain', 'Daily Sync Chain (Orchestrated)', FALSE, 1440, 0, '02:00:00', '{"mode": "full"}')
+          ON DUPLICATE KEY UPDATE
+            task_name = VALUES(task_name),
+            interval_minutes = VALUES(interval_minutes)
+        `);
+        console.log('  ✓ Added daily_sync_chain task (runs daily at 2:00 AM, disabled by default)');
+      } catch (err) {
+        console.log(`  - daily_sync_chain task: ${err.message}`);
+      }
+
+      console.log('  ✓ Daily sync chain migration complete');
+    }
+
+    // Version 29: Add page_views tracking table for analytics
+    if (currentVersion < 29) {
+      console.log('📦 Running v29 migration: Add page_views tracking table...');
+
+      try {
+        await query(`
+          CREATE TABLE IF NOT EXISTS page_views (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            partner_id INT,
+            contact_id INT,
+            page_type VARCHAR(50) NOT NULL COMMENT 'widget, admin, login, etc.',
+            page_path VARCHAR(500),
+            session_id VARCHAR(100),
+            user_agent VARCHAR(500),
+            ip_address VARCHAR(45),
+            referrer VARCHAR(500),
+            viewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_partner (partner_id),
+            INDEX idx_contact (contact_id),
+            INDEX idx_page_type (page_type),
+            INDEX idx_viewed_at (viewed_at),
+            INDEX idx_session (session_id),
+            FOREIGN KEY (partner_id) REFERENCES partners(id) ON DELETE SET NULL,
+            FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        console.log('  ✓ Created page_views table');
+      } catch (err) {
+        console.log(`  - page_views table: ${err.message}`);
+      }
+
+      console.log('  ✓ Page views tracking migration complete');
+    }
+
+    // Version 30: Add viewer_type column to page_views for Nintex vs Partner tracking
+    if (currentVersion < 30) {
+      console.log('📦 Running v30 migration: Add viewer_type to page_views...');
+
+      try {
+        await query(`
+          ALTER TABLE page_views
+          ADD COLUMN viewer_type ENUM('nintex', 'partner', 'unknown') DEFAULT 'unknown' AFTER page_type,
+          ADD COLUMN viewer_email VARCHAR(255) AFTER viewer_type,
+          ADD INDEX idx_viewer_type (viewer_type)
+        `);
+        console.log('  ✓ Added viewer_type and viewer_email columns to page_views');
+      } catch (err) {
+        console.log(`  - viewer_type column: ${err.message}`);
+      }
+
+      console.log('  ✓ Viewer tracking migration complete');
+    }
+
+    // Migration v30 -> v31: Add performance indexes for reporting
+    if (currentVersion < 31) {
+      console.log('📦 Running v31 migration: Add reporting performance indexes...');
+
+      // Index for completed enrollments ordered by date (recent activity reports)
+      try {
+        await query('ALTER TABLE lms_enrollments ADD INDEX idx_enrollments_completed_desc (completed_at DESC, status)');
+        console.log('  ✓ Added idx_enrollments_completed_desc');
+      } catch (err) {
+        if (!err.message.includes('Duplicate')) console.log(`  - enrollments completed_desc: ${err.message}`);
+      }
+
+      // Index for course-level completion analytics
+      try {
+        await query('ALTER TABLE lms_enrollments ADD INDEX idx_enrollments_course_completed (course_id, completed_at)');
+        console.log('  ✓ Added idx_enrollments_course_completed');
+      } catch (err) {
+        if (!err.message.includes('Duplicate')) console.log(`  - enrollments course_completed: ${err.message}`);
+      }
+
+      // Index for page_views date-based trend analysis
+      try {
+        await query('ALTER TABLE page_views ADD INDEX idx_pageviews_date_type (viewed_at, page_type)');
+        console.log('  ✓ Added idx_pageviews_date_type');
+      } catch (err) {
+        if (!err.message.includes('Duplicate')) console.log(`  - pageviews date_type: ${err.message}`);
+      }
+
+      // Index for partner engagement trends
+      try {
+        await query('ALTER TABLE page_views ADD INDEX idx_pageviews_partner_date (partner_id, viewed_at)');
+        console.log('  ✓ Added idx_pageviews_partner_date');
+      } catch (err) {
+        if (!err.message.includes('Duplicate')) console.log(`  - pageviews partner_date: ${err.message}`);
+      }
+
+      // Index for leads partner acquisition analysis
+      try {
+        await query('ALTER TABLE leads ADD INDEX idx_leads_partner_created (partner_id, lead_created_at)');
+        console.log('  ✓ Added idx_leads_partner_created');
+      } catch (err) {
+        if (!err.message.includes('Duplicate')) console.log(`  - leads partner_created: ${err.message}`);
+      }
+
+      // Index for sync performance tracking
+      try {
+        await query('ALTER TABLE sync_logs ADD INDEX idx_sync_performance (sync_type, completed_at, records_processed)');
+        console.log('  ✓ Added idx_sync_performance');
+      } catch (err) {
+        if (!err.message.includes('Duplicate')) console.log(`  - sync_logs performance: ${err.message}`);
+      }
+
+      // Index for email PAM reporting
+      try {
+        await query('ALTER TABLE email_log ADD INDEX idx_email_pam_sent (pam_id, sent_at)');
+        console.log('  ✓ Added idx_email_pam_sent');
+      } catch (err) {
+        if (!err.message.includes('Duplicate')) console.log(`  - email_log pam_sent: ${err.message}`);
+      }
+
+      // Index for course status filtering
+      try {
+        await query('ALTER TABLE lms_courses ADD INDEX idx_courses_status (status)');
+        console.log('  ✓ Added idx_courses_status');
+      } catch (err) {
+        if (!err.message.includes('Duplicate')) console.log(`  - courses status: ${err.message}`);
+      }
+
+      // Index for partners by country (regional reports)
+      try {
+        await query('ALTER TABLE partners ADD INDEX idx_partners_region_country (account_region, country)');
+        console.log('  ✓ Added idx_partners_region_country');
+      } catch (err) {
+        if (!err.message.includes('Duplicate')) console.log(`  - partners region_country: ${err.message}`);
+      }
+
+      console.log('  ✓ Performance indexes migration complete');
     }
 
     await query('UPDATE schema_info SET version = ? WHERE id = 1', [SCHEMA_VERSION]);

@@ -30,7 +30,9 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TablePagination,
   Paper,
+  InputAdornment,
 } from '@mui/material';
 import {
   FamilyRestroom as FamilyIcon,
@@ -70,6 +72,7 @@ import {
   EmptyState,
   StatusChip,
   TierBadge,
+  InfoButton,
 } from './ui/NintexUI';
 
 // ============================================
@@ -284,6 +287,12 @@ const GroupManagement = () => {
   const [fixProgress, setFixProgress] = useState(null);
   const [fixResults, setFixResults] = useState(null);
   const [renaming, setRenaming] = useState(null);
+  // Audit enhancements: search, pagination, expanded rows
+  const [auditSearch, setAuditSearch] = useState('');
+  const [auditPage, setAuditPage] = useState(0);
+  const [auditRowsPerPage, setAuditRowsPerPage] = useState(25);
+  const [expandedPartners, setExpandedPartners] = useState(new Set());
+  const [hideInactivePartners, setHideInactivePartners] = useState(true); // Default to hiding inactive
 
   // ========== Tab 2: All Partners Sync State ==========
   const [syncLoading, setSyncLoading] = useState(false);
@@ -529,7 +538,7 @@ const GroupManagement = () => {
           const user = partner.missingPartnerGroup[i];
           try {
             await northpassApi.addUserToGroup(partner.partnerGroupId, user.userId);
-            await fetch(`/api/db/groups/${partner.partnerGroupId}/members/${user.userId}/record`, { method: 'POST' });
+            await fetch(`/api/db/group-analysis/groups/${partner.partnerGroupId}/members/${user.userId}/record`, { method: 'POST' });
             results.partnerGroup.success++;
           } catch (err) {
             results.partnerGroup.failed++;
@@ -546,7 +555,7 @@ const GroupManagement = () => {
           const user = partner.missingAllPartnersGroup[i];
           try {
             await northpassApi.addUserToGroup(audit.allPartnersGroupId, user.userId);
-            await fetch(`/api/db/groups/${audit.allPartnersGroupId}/members/${user.userId}/record`, { method: 'POST' });
+            await fetch(`/api/db/group-analysis/groups/${audit.allPartnersGroupId}/members/${user.userId}/record`, { method: 'POST' });
             results.allPartnersGroup.success++;
           } catch (err) {
             results.allPartnersGroup.failed++;
@@ -917,12 +926,12 @@ const GroupManagement = () => {
       {/* Tabs */}
       <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
         <Tabs value={tabIndex} onChange={(e, v) => setTabIndex(v)} variant="scrollable" scrollButtons="auto">
-          <Tab icon={<GroupAddIcon />} iconPosition="start" label={`Create Groups${stats.partnersWithoutGroups > 0 ? ` (${stats.partnersWithoutGroups})` : ''}`} />
-          <Tab icon={<BuildIcon />} iconPosition="start" label="Group Audit" />
-          <Tab icon={<PublicIcon />} iconPosition="start" label="All Partners Sync" />
-          <Tab icon={<FamilyIcon />} iconPosition="start" label="Partner Families" />
-          <Tab icon={<AutoDetectIcon />} iconPosition="start" label="Auto-Detect" />
-          <Tab icon={<WarningIcon />} iconPosition="start" label={<Badge badgeContent={stats.totalConflicts} color="warning">Conflicts</Badge>} />
+          <Tab icon={<GroupAddIcon />} iconPosition="start" label={<Box sx={{ display: 'flex', alignItems: 'center' }}>{`Create Groups${stats.partnersWithoutGroups > 0 ? ` (${stats.partnersWithoutGroups})` : ''}`}<InfoButton tooltip="Create LMS groups for partners that don't have one yet. Groups enable tracking certifications and enrollments by partner." /></Box>} />
+          <Tab icon={<BuildIcon />} iconPosition="start" label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Group Audit<InfoButton tooltip="Audit contacts to ensure they're in the correct partner groups. Finds users missing from their partner's group or the All Partners shared group." /></Box>} />
+          <Tab icon={<PublicIcon />} iconPosition="start" label={<Box sx={{ display: 'flex', alignItems: 'center' }}>All Partners Sync<InfoButton tooltip="Ensure all partner users are in the 'All Partners' shared group. This group gives visibility across all partner learners." /></Box>} />
+          <Tab icon={<FamilyIcon />} iconPosition="start" label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Partner Families<InfoButton tooltip="Manage partner families (GSI accounts). Link related partners together to aggregate their certifications and NPCU." /></Box>} />
+          <Tab icon={<AutoDetectIcon />} iconPosition="start" label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Auto-Detect<InfoButton tooltip="Automatically detect potential partner families by analyzing name patterns, domains, and shared contacts." /></Box>} />
+          <Tab icon={<WarningIcon />} iconPosition="start" label={<Box sx={{ display: 'flex', alignItems: 'center' }}><Badge badgeContent={stats.totalConflicts} color="warning">Conflicts</Badge><InfoButton tooltip="Find and resolve users who belong to multiple partner groups. Each user should only be in one partner group." /></Box>} />
         </Tabs>
       </Box>
 
@@ -1121,47 +1130,187 @@ const GroupManagement = () => {
           <>
             <StatsRow columns={4}>
               <StatCard icon="📊" value={audit.totalContacts || 0} label="Total Contacts" />
-              <StatCard icon="✅" value={audit.inBothGroups || 0} label="Fully Synced" variant="success" />
-              <StatCard icon="⚠️" value={audit.missingFromPartnerGroup || 0} label="Missing Partner Group" variant="warning" />
-              <StatCard icon="🌐" value={audit.missingFromAllPartners || 0} label="Missing All Partners" variant="warning" />
+              <StatCard icon="✅" value={(audit.totalContacts || 0) - (audit.missingPartnerGroup || 0) - (audit.missingAllPartnersGroup || 0)} label="Fully Synced" variant="success" />
+              <StatCard icon="⚠️" value={audit.missingPartnerGroup || 0} label="Missing Partner Group" variant="warning" />
+              <StatCard icon="🌐" value={audit.missingAllPartnersGroup || 0} label="Missing All Partners" variant="warning" />
             </StatsRow>
 
-            {audit.partnersWithIssues?.length > 0 && (
-              <Box sx={{ mt: 3 }}>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                  <Typography variant="h6">Partners with Issues ({audit.partnersWithIssues.length})</Typography>
-                  <ActionButton variant="contained" onClick={fixAllMemberships} loading={fixing} disabled={fixing}>
-                    Fix All Issues
-                  </ActionButton>
-                </Box>
-                <TableContainer component={Paper}>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Partner</TableCell>
-                        <TableCell align="center">Missing Partner Group</TableCell>
-                        <TableCell align="center">Missing All Partners</TableCell>
-                        <TableCell align="center">Actions</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {audit.partnersWithIssues.slice(0, 50).map(p => (
-                        <TableRow key={p.partnerId} hover>
-                          <TableCell><strong>{p.partnerName}</strong></TableCell>
-                          <TableCell align="center">{p.missingPartnerGroup?.length || 0}</TableCell>
-                          <TableCell align="center">{p.missingAllPartnersGroup?.length || 0}</TableCell>
-                          <TableCell align="center">
-                            <ActionButton size="small" variant="outlined" onClick={() => fixPartnerMemberships(p.partnerId)} disabled={fixing}>
-                              Fix
-                            </ActionButton>
-                          </TableCell>
+            {audit.partnersWithIssues?.length > 0 && (() => {
+              // Filter partners by search term and active status
+              const filteredPartners = audit.partnersWithIssues.filter(p => {
+                if (auditSearch && !p.partnerName?.toLowerCase().includes(auditSearch.toLowerCase())) {
+                  return false;
+                }
+                if (hideInactivePartners && p.isActive === false) {
+                  return false;
+                }
+                return true;
+              });
+              const inactiveCount = audit.partnersWithIssues.filter(p => p.isActive === false).length;
+              // Paginate
+              const paginatedPartners = filteredPartners.slice(
+                auditPage * auditRowsPerPage,
+                auditPage * auditRowsPerPage + auditRowsPerPage
+              );
+
+              return (
+                <Box sx={{ mt: 3 }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 2 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                      <Typography variant="h6">Partners with Issues ({filteredPartners.length})</Typography>
+                      {inactiveCount > 0 && (
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              size="small"
+                              checked={hideInactivePartners}
+                              onChange={(e) => { setHideInactivePartners(e.target.checked); setAuditPage(0); }}
+                            />
+                          }
+                          label={<Typography variant="caption">Hide {inactiveCount} inactive</Typography>}
+                        />
+                      )}
+                    </Box>
+                    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                      <TextField
+                        size="small"
+                        placeholder="Search partners..."
+                        value={auditSearch}
+                        onChange={(e) => { setAuditSearch(e.target.value); setAuditPage(0); }}
+                        InputProps={{
+                          startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>
+                        }}
+                        sx={{ width: 250 }}
+                      />
+                      <ActionButton variant="contained" onClick={fixAllMemberships} loading={fixing} disabled={fixing}>
+                        Fix All Issues
+                      </ActionButton>
+                    </Box>
+                  </Box>
+                  <TableContainer component={Paper}>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell width={40}></TableCell>
+                          <TableCell>Partner</TableCell>
+                          <TableCell align="center">Missing Partner Group</TableCell>
+                          <TableCell align="center">Missing All Partners</TableCell>
+                          <TableCell align="center">Actions</TableCell>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              </Box>
-            )}
+                      </TableHead>
+                      <TableBody>
+                        {paginatedPartners.map(p => (
+                          <React.Fragment key={p.partnerId}>
+                            <TableRow hover sx={{ '& > *': { borderBottom: expandedPartners.has(p.partnerId) ? 'none' : undefined }, opacity: p.isActive === false ? 0.6 : 1 }}>
+                              <TableCell>
+                                <IconButton
+                                  size="small"
+                                  onClick={() => {
+                                    const newExpanded = new Set(expandedPartners);
+                                    if (newExpanded.has(p.partnerId)) {
+                                      newExpanded.delete(p.partnerId);
+                                    } else {
+                                      newExpanded.add(p.partnerId);
+                                    }
+                                    setExpandedPartners(newExpanded);
+                                  }}
+                                >
+                                  {expandedPartners.has(p.partnerId) ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                                </IconButton>
+                              </TableCell>
+                              <TableCell>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                  <strong>{p.partnerName}</strong>
+                                  <Typography variant="caption" color="text.secondary">{p.tier}</Typography>
+                                  {p.isActive === false && (
+                                    <Chip label="Inactive" size="small" color="error" sx={{ height: 20, fontSize: '0.7rem' }} />
+                                  )}
+                                </Box>
+                              </TableCell>
+                              <TableCell align="center">
+                                <Chip size="small" label={p.missingPartnerGroup?.length || 0} color={p.missingPartnerGroup?.length ? 'warning' : 'default'} />
+                              </TableCell>
+                              <TableCell align="center">
+                                <Chip size="small" label={p.missingAllPartnersGroup?.length || 0} color={p.missingAllPartnersGroup?.length ? 'warning' : 'default'} />
+                              </TableCell>
+                              <TableCell align="center">
+                                <ActionButton size="small" variant="outlined" onClick={() => fixPartnerMemberships(p.partnerId)} disabled={fixing}>
+                                  Fix
+                                </ActionButton>
+                              </TableCell>
+                            </TableRow>
+                            {/* Expanded row showing user details */}
+                            <TableRow>
+                              <TableCell colSpan={5} sx={{ py: 0, bgcolor: 'action.hover' }}>
+                                <Collapse in={expandedPartners.has(p.partnerId)} timeout="auto" unmountOnExit>
+                                  <Box sx={{ py: 2, px: 3 }}>
+                                    {/* Missing from Partner Group */}
+                                    {p.missingPartnerGroup?.length > 0 && (
+                                      <Box sx={{ mb: 2 }}>
+                                        <Typography variant="subtitle2" color="warning.main" gutterBottom>
+                                          ⚠️ Missing from Partner Group ({p.missingPartnerGroup.length})
+                                        </Typography>
+                                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                                          {p.missingPartnerGroup.map((user, idx) => (
+                                            <Chip
+                                              key={idx}
+                                              size="small"
+                                              icon={<PersonIcon />}
+                                              label={`${user.firstName || ''} ${user.lastName || ''} (${user.email})`}
+                                              variant="outlined"
+                                              sx={{ maxWidth: 350 }}
+                                            />
+                                          ))}
+                                        </Box>
+                                      </Box>
+                                    )}
+                                    {/* Missing from All Partners */}
+                                    {p.missingAllPartnersGroup?.length > 0 && (
+                                      <Box>
+                                        <Typography variant="subtitle2" color="info.main" gutterBottom>
+                                          🌐 Missing from All Partners Group ({p.missingAllPartnersGroup.length})
+                                        </Typography>
+                                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                                          {p.missingAllPartnersGroup.map((user, idx) => (
+                                            <Chip
+                                              key={idx}
+                                              size="small"
+                                              icon={<PersonIcon />}
+                                              label={`${user.firstName || ''} ${user.lastName || ''} (${user.email})`}
+                                              variant="outlined"
+                                              sx={{ maxWidth: 350 }}
+                                            />
+                                          ))}
+                                        </Box>
+                                      </Box>
+                                    )}
+                                    {/* Show group info */}
+                                    {p.partnerGroupName && (
+                                      <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                                        Group: {p.partnerGroupName}
+                                      </Typography>
+                                    )}
+                                  </Box>
+                                </Collapse>
+                              </TableCell>
+                            </TableRow>
+                          </React.Fragment>
+                        ))}
+                      </TableBody>
+                    </Table>
+                    <TablePagination
+                      component="div"
+                      count={filteredPartners.length}
+                      page={auditPage}
+                      onPageChange={(e, newPage) => setAuditPage(newPage)}
+                      rowsPerPage={auditRowsPerPage}
+                      onRowsPerPageChange={(e) => { setAuditRowsPerPage(parseInt(e.target.value, 10)); setAuditPage(0); }}
+                      rowsPerPageOptions={[10, 25, 50, 100]}
+                    />
+                  </TableContainer>
+                </Box>
+              );
+            })()}
 
             {audit.groupsToRename?.length > 0 && (
               <Box sx={{ mt: 3 }}>

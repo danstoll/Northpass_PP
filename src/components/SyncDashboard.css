@@ -1126,43 +1126,297 @@
   .sync-dashboard {
     padding: 16px;
   }
-  
+
   .sync-dashboard .dashboard-header {
     flex-direction: column;
     align-items: flex-start;
     gap: 12px;
   }
-  
+
   .sync-dashboard .header-right {
     flex-wrap: wrap;
   }
-  
+
   .sync-dashboard .tab-nav {
     width: 100%;
   }
-  
+
   .sync-dashboard .tab-btn {
     flex: 1;
     text-align: center;
   }
-  
+
   .sync-dashboard .tasks-grid {
     grid-template-columns: 1fr;
   }
-  
+
   .sync-dashboard .task-details {
     grid-template-columns: 1fr;
   }
-  
+
   .sync-dashboard .footer-stats {
     flex-wrap: wrap;
     gap: 16px;
   }
-  
+
   .sync-dashboard .log-table th,
   .sync-dashboard .log-table td {
     padding: 8px 10px;
     font-size: 0.75rem;
+  }
+}
+
+/* Daily Sync Chain Panel */
+.sync-dashboard .daily-sync-chain-panel {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border: 1px solid rgba(107, 76, 154, 0.4);
+  border-radius: 16px;
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.sync-dashboard .chain-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.sync-dashboard .chain-title {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.sync-dashboard .chain-icon {
+  font-size: 2.5rem;
+}
+
+.sync-dashboard .chain-title h2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 0;
+  color: #fff;
+  background: linear-gradient(90deg, #FF6B35, #FFB800);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.sync-dashboard .chain-subtitle {
+  display: block;
+  font-size: 0.875rem;
+  color: rgba(255, 255, 255, 0.6);
+  margin-top: 4px;
+}
+
+.sync-dashboard .chain-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Chain Steps Flow */
+.sync-dashboard .chain-steps {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  margin-bottom: 20px;
+}
+
+.sync-dashboard .chain-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.sync-dashboard .step-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  background: var(--nintex-purple);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 6px;
+  padding: 0 6px;
+}
+
+.sync-dashboard .step-badge.tier1 {
+  background: linear-gradient(135deg, var(--nintex-orange), #FFB800);
+  color: #000;
+}
+
+.sync-dashboard .step-tasks {
+  font-size: 0.813rem;
+  color: #fff;
+  font-weight: 500;
+}
+
+.sync-dashboard .step-note {
+  font-size: 0.688rem;
+  color: rgba(255, 255, 255, 0.5);
+  font-style: italic;
+}
+
+.sync-dashboard .chain-arrow {
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 1.25rem;
+  font-weight: bold;
+}
+
+/* Chain Info */
+.sync-dashboard .chain-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  margin-bottom: 20px;
+}
+
+.sync-dashboard .info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sync-dashboard .info-label {
+  font-size: 0.688rem;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+  letter-spacing: 0.5px;
+}
+
+.sync-dashboard .info-value {
+  font-size: 0.938rem;
+  color: #fff;
+  font-weight: 500;
+}
+
+.sync-dashboard .info-value.status.running {
+  color: #64b5f6;
+}
+
+.sync-dashboard .info-value.status.success {
+  color: #81c784;
+}
+
+.sync-dashboard .info-value.status.error {
+  color: #e57373;
+}
+
+.sync-dashboard .info-value .disabled-text {
+  color: rgba(255, 255, 255, 0.4);
+  font-style: italic;
+}
+
+/* Chain Status Message */
+.sync-dashboard .chain-status-message {
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 0.875rem;
+}
+
+.sync-dashboard .chain-status-message.error {
+  background: rgba(244, 67, 54, 0.15);
+  border: 1px solid rgba(244, 67, 54, 0.4);
+  color: #ff8a8a;
+}
+
+.sync-dashboard .chain-status-message.starting {
+  background: rgba(33, 150, 243, 0.15);
+  border: 1px solid rgba(33, 150, 243, 0.4);
+  color: #64b5f6;
+}
+
+/* Chain Actions */
+.sync-dashboard .chain-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.sync-dashboard .btn-run-chain {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 28px;
+  background: linear-gradient(135deg, var(--nintex-orange), #e55a2b);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s;
+  box-shadow: 0 4px 12px rgba(255, 107, 53, 0.3);
+}
+
+.sync-dashboard .btn-run-chain:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(255, 107, 53, 0.4);
+}
+
+.sync-dashboard .btn-run-chain:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.sync-dashboard .btn-run-chain.running {
+  background: linear-gradient(135deg, #1976d2, #1565c0);
+  box-shadow: 0 4px 12px rgba(25, 118, 210, 0.3);
+}
+
+.sync-dashboard .action-hint {
+  font-size: 0.813rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* Responsive for Chain Panel */
+@media (max-width: 992px) {
+  .sync-dashboard .chain-steps {
+    justify-content: center;
+  }
+
+  .sync-dashboard .chain-arrow {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .sync-dashboard .daily-sync-chain-panel {
+    padding: 16px;
+  }
+
+  .sync-dashboard .chain-header {
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .sync-dashboard .chain-info {
+    gap: 16px;
+  }
+
+  .sync-dashboard .chain-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .sync-dashboard .action-hint {
+    text-align: center;
   }
 }
 

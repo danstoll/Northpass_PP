@@ -18,6 +18,7 @@ import LeadReports from './components/LeadReports'
 import ResetPassword from './components/ResetPassword'
 import MagicLogin from './components/MagicLogin'
 import EmailSchedules from './components/EmailSchedules'
+import WidgetAnalytics from './components/WidgetAnalytics'
 import { extractUrlParams } from './utils/urlEncoder'
 import { extractCustomerParams } from './utils/customerUrlEncoder'
 import './App.css'
@@ -37,6 +38,7 @@ function App() {
   const isDbReportsRoute = currentPath === '/admin/dbreports' || currentPath === '/admin/dbreports/';
   const isSettingsRoute = currentPath === '/admin/settings' || currentPath === '/admin/settings/';
   const isAnalyticsRoute = currentPath === '/admin/analytics' || currentPath === '/admin/analytics/';
+  const isWidgetAnalyticsRoute = currentPath === '/admin/widget-analytics' || currentPath === '/admin/widget-analytics/';
   const isPamRoute = currentPath === '/admin/pam' || currentPath === '/admin/pam/';
   const isGroupsRoute = currentPath === '/admin/groups' || currentPath === '/admin/groups/';
   const isCertificationsRoute = currentPath === '/admin/certifications' || currentPath === '/admin/certifications/';
@@ -145,6 +147,17 @@ function App() {
       <div className="app">
         <AdminHub currentPage="analytics">
           <AnalyticsDashboard />
+        </AdminHub>
+      </div>
+    );
+  }
+
+  // Show widget analytics for /admin/widget-analytics route
+  if (isWidgetAnalyticsRoute) {
+    return (
+      <div className="app">
+        <AdminHub currentPage="widget-analytics">
+          <WidgetAnalytics />
         </AdminHub>
       </div>
     );

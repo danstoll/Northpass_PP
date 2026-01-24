@@ -45,6 +45,7 @@ import {
   Warning as WarningIcon,
   AddCircleOutline as AddCircleOutlineIcon,
   Link as LinkIcon,
+  LinkOff as LinkOffIcon,
   PersonOff as PersonOffIcon,
   RemoveCircleOutline as RemoveCircleOutlineIcon,
   School as SchoolIcon,
@@ -73,6 +74,7 @@ import {
   DataTable,
   StatusChip,
   TierBadge,
+  InfoButton,
 } from './ui/NintexUI';
 
 // Common personal/public email domains to exclude
@@ -353,18 +355,27 @@ const AddToGroupModal = ({ isOpen, onClose, selectedUsers, groupName, onConfirm,
 // ============================================
 // Domain Row Component (expandable)
 // ============================================
-const DomainRow = ({ 
-  domainData, 
-  isExpanded, 
-  onToggle, 
-  selectedUsers, 
-  onUserSelect, 
-  onSelectAll, 
+const DomainRow = ({
+  domainData,
+  isExpanded,
+  onToggle,
+  selectedUsers,
+  onUserSelect,
+  onSelectAll,
   selectionMode,
   onCreateGroup,
   isCreatingGroup,
   onAddAllToGroup,
-  isAddingToGroup
+  isAddingToGroup,
+  onCreateCrmContact,
+  onDisassociateDomain,
+  selectedCrmUsers,
+  onCrmUserSelect,
+  onSelectAllCrmUsers,
+  onBulkCreateCrm,
+  isBulkCreatingCrm,
+  onRemoveFromGroup,
+  removingUserId
 }) => {
   const {
     domain,
@@ -374,6 +385,7 @@ const DomainRow = ({
     matchedPartner,
     matchedPartnerId,
     partnerTier,
+    partnerIsActive,
     partnerGroupId,
     partnerGroupName,
     users = [],
@@ -381,8 +393,14 @@ const DomainRow = ({
   } = domainData;
 
   const usersNotInGroup = users.filter(u => !u.inPartnerGroup);
+  const usersNotInCrm = users.filter(u => !u.crmAssociation);
   const allSelected = usersNotInGroup.length > 0 && usersNotInGroup.every(u => selectedUsers.has(u.id));
   const someSelected = usersNotInGroup.some(u => selectedUsers.has(u.id)) && !allSelected;
+  
+  // CRM selection state for this domain
+  const allCrmSelected = usersNotInCrm.length > 0 && usersNotInCrm.every(u => selectedCrmUsers.has(u.id));
+  const someCrmSelected = usersNotInCrm.some(u => selectedCrmUsers.has(u.id)) && !allCrmSelected;
+  const selectedCrmCount = usersNotInCrm.filter(u => selectedCrmUsers.has(u.id)).length;
 
   return (
     <>
@@ -424,12 +442,53 @@ const DomainRow = ({
             )}
           </Box>
         </td>
-        <td>
+        <td style={{ textAlign: 'center' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1 }}>
+            {usersNotInCrm.length > 0 ? (
+              <>
+                <PersonAddIcon sx={{ color: 'warning.main', fontSize: 16 }} />
+                <span style={{ color: 'var(--admin-warning-text)' }}>{usersNotInCrm.length}</span>
+              </>
+            ) : (
+              <span style={{ opacity: 0.5 }}>0</span>
+            )}
+          </Box>
+        </td>
+        <td onClick={(e) => e.stopPropagation()}>
           {matchedPartner ? (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <BusinessIcon sx={{ color: 'primary.main', fontSize: 16 }} />
-              <span>{matchedPartner}</span>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <BusinessIcon sx={{ color: partnerIsActive ? 'primary.main' : 'text.disabled', fontSize: 16 }} />
+              <span style={{ color: partnerIsActive ? 'inherit' : 'var(--admin-text-muted)' }}>{matchedPartner}</span>
               {partnerTier && <TierBadge tier={partnerTier} size="small" />}
+              {partnerIsActive === false && (
+                <Chip 
+                  label="Inactive" 
+                  size="small" 
+                  sx={{ 
+                    height: 18, 
+                    fontSize: '0.65rem',
+                    bgcolor: 'error.light',
+                    color: 'error.contrastText'
+                  }} 
+                />
+              )}
+              <Tooltip title={`Remove @${domain} from ${matchedPartner}`}>
+                <IconButton
+                  size="small"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDisassociateDomain(domain, matchedPartnerId, matchedPartner);
+                  }}
+                  sx={{ 
+                    ml: 0.5, 
+                    p: 0.25,
+                    color: 'text.secondary',
+                    '&:hover': { color: 'error.main', bgcolor: 'error.lighter' }
+                  }}
+                >
+                  <LinkOffIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </Tooltip>
             </Box>
           ) : (
             <span style={{ opacity: 0.5 }}>-</span>
@@ -463,14 +522,51 @@ const DomainRow = ({
       </tr>
       {isExpanded && (
         <tr className="domain-users-row">
-          <td colSpan={7}>
+          <td colSpan={8}>
             <Box sx={{ p: 2, bgcolor: 'var(--admin-bg-elevated)' }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 1 }}>
                 <Typography variant="subtitle2">
                   Users in @{domain} ({users.length})
+                  {usersNotInCrm.length > 0 && (
+                    <Chip 
+                      label={`${usersNotInCrm.length} not in CRM`} 
+                      size="small" 
+                      color="warning" 
+                      sx={{ ml: 1, height: 20, fontSize: '0.7rem' }} 
+                    />
+                  )}
                 </Typography>
-                <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-                  {/* Quick Add All button - appears when there are ungrouped users and a partner group exists */}
+                <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {/* Bulk Add to CRM - appears when there are users not in CRM and a matched partner */}
+                  {usersNotInCrm.length > 0 && matchedPartnerId && (
+                    <>
+                      <ActionButton 
+                        size="small" 
+                        variant="text"
+                        onClick={(e) => { e.stopPropagation(); onSelectAllCrmUsers(usersNotInCrm, !allCrmSelected); }}
+                      >
+                        {allCrmSelected ? 'Deselect CRM' : `Select ${usersNotInCrm.length} for CRM`}
+                      </ActionButton>
+                      {selectedCrmCount > 0 && (
+                        <ActionButton 
+                          size="small" 
+                          variant="contained"
+                          color="warning"
+                          onClick={(e) => { 
+                            e.stopPropagation(); 
+                            const selectedUsers = usersNotInCrm.filter(u => selectedCrmUsers.has(u.id));
+                            onBulkCreateCrm(selectedUsers, matchedPartnerId, matchedPartner); 
+                          }}
+                          loading={isBulkCreatingCrm}
+                          disabled={isBulkCreatingCrm}
+                        >
+                          <PersonAddIcon sx={{ fontSize: 16, mr: 0.5 }} />
+                          Add {selectedCrmCount} to CRM
+                        </ActionButton>
+                      )}
+                    </>
+                  )}
+                  {/* Quick Add All to Group button - appears when there are ungrouped users and a partner group exists */}
                   {notInPartnerGroup > 0 && partnerGroupId && (
                     <ActionButton 
                       size="small" 
@@ -515,6 +611,7 @@ const DomainRow = ({
                   <thead>
                     <tr>
                       {selectionMode && <th style={{ width: 40 }}></th>}
+                      <th style={{ width: 30 }}></th>
                       <th>Email</th>
                       <th>Name</th>
                       <th>Status</th>
@@ -526,7 +623,7 @@ const DomainRow = ({
                     {users.map(user => (
                       <tr 
                         key={user.id}
-                        className={selectedUsers.has(user.id) ? 'selected' : ''}
+                        className={`${selectedUsers.has(user.id) ? 'selected' : ''} ${selectedCrmUsers.has(user.id) ? 'crm-selected' : ''}`}
                         onClick={(e) => { e.stopPropagation(); selectionMode && onUserSelect(user); }}
                       >
                         {selectionMode && (
@@ -540,11 +637,47 @@ const DomainRow = ({
                             />
                           </td>
                         )}
+                        {/* CRM Selection checkbox - only for users not in CRM */}
+                        <td onClick={(e) => e.stopPropagation()}>
+                          {!user.crmAssociation && matchedPartnerId && (
+                            <Checkbox
+                              size="small"
+                              checked={selectedCrmUsers.has(user.id)}
+                              onChange={() => onCrmUserSelect(user)}
+                              sx={{ p: 0.25 }}
+                            />
+                          )}
+                        </td>
                         <td>{user.email}</td>
                         <td>{[user.firstName, user.lastName].filter(Boolean).join(' ') || '-'}</td>
                         <td>
                           {user.inPartnerGroup ? (
-                            <StatusChip status="success" label="In Partner Group" />
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                              <StatusChip status="success" label="In Partner Group" />
+                              {partnerGroupId && (
+                                <Tooltip title={`Remove ${user.email} from ${partnerGroupName || 'partner group'}`}>
+                                  <IconButton
+                                    size="small"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onRemoveFromGroup(user, partnerGroupId, partnerGroupName);
+                                    }}
+                                    disabled={removingUserId === user.id}
+                                    sx={{
+                                      p: 0.25,
+                                      color: 'text.secondary',
+                                      '&:hover': { color: 'error.main', bgcolor: 'error.lighter' }
+                                    }}
+                                  >
+                                    {removingUserId === user.id ? (
+                                      <CircularProgress size={14} />
+                                    ) : (
+                                      <LinkOffIcon sx={{ fontSize: 16 }} />
+                                    )}
+                                  </IconButton>
+                                </Tooltip>
+                              )}
+                            </Box>
                           ) : (
                             <StatusChip status="warning" label="No Partner Group" />
                           )}
@@ -583,7 +716,24 @@ const DomainRow = ({
                               )}
                             </Box>
                           ) : (
-                            <span style={{ opacity: 0.4, fontSize: '0.75rem' }}>Not in CRM</span>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <span style={{ opacity: 0.4, fontSize: '0.75rem' }}>Not in CRM</span>
+                              {matchedPartnerId && (
+                                <Tooltip title={`Add ${user.email} to CRM as ${matchedPartner} contact`}>
+                                  <IconButton
+                                    size="small"
+                                    color="primary"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onCreateCrmContact(user.email, user.firstName, user.lastName, matchedPartnerId);
+                                    }}
+                                    sx={{ p: 0.25 }}
+                                  >
+                                    <PersonAddIcon sx={{ fontSize: 16 }} />
+                                  </IconButton>
+                                </Tooltip>
+                              )}
+                            </Box>
                           )}
                         </td>
                       </tr>
@@ -644,12 +794,16 @@ const UserManagement = () => {
   const [expandedDomains, setExpandedDomains] = useState(new Set());
   const [domainSelectionMode, setDomainSelectionMode] = useState(false);
   const [selectedDomainUsers, setSelectedDomainUsers] = useState(new Map()); // userId -> user object
+  const [selectedCrmUsers, setSelectedCrmUsers] = useState(new Set()); // userId set for CRM bulk add
+  const [isBulkCreatingCrm, setIsBulkCreatingCrm] = useState(false);
+  const [bulkCrmResults, setBulkCrmResults] = useState(null);
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [targetGroup, setTargetGroup] = useState(null);
   const [groupAddProgress, setGroupAddProgress] = useState({ stage: '', current: 0, total: 0 });
   const [groupAddResults, setGroupAddResults] = useState(null);
   const [isAddingToGroup, setIsAddingToGroup] = useState(false);
   const [creatingGroupFor, setCreatingGroupFor] = useState(null); // { partnerId, partnerName, domain }
+  const [removingUserId, setRemovingUserId] = useState(null); // User ID being removed from group
 
   // Tab 2: Orphan Discovery state
   const [orphanLoading, setOrphanLoading] = useState(false);
@@ -681,6 +835,8 @@ const UserManagement = () => {
   const [addToGroupUserId, setAddToGroupUserId] = useState(null);
   const [selectedGroupToAdd, setSelectedGroupToAdd] = useState(null);
   const [addingToGroup, setAddingToGroup] = useState(false);
+  const [dialogGroupsList, setDialogGroupsList] = useState([]);
+  const [dialogGroupsLoading, setDialogGroupsLoading] = useState(false);
 
   // Tab 4: Offboarding state
   const [offboardLoading, setOffboardLoading] = useState(false);
@@ -693,10 +849,39 @@ const UserManagement = () => {
   const [offboardSearchTerm, setOffboardSearchTerm] = useState('');
   const [offboardReasonFilter, setOffboardReasonFilter] = useState('all');
 
+  // Impartner deactivation state
+  const [deactivateInImpartner, setDeactivateInImpartner] = useState(false);
+  const [deactivateInLms, setDeactivateInLms] = useState(true);
+  const [impartnerDeactivating, setImpartnerDeactivating] = useState(false);
+  const [impartnerDeactivateResults, setImpartnerDeactivateResults] = useState(null);
+
+  // Bulk offboard state
+  const [bulkOffboardMode, setBulkOffboardMode] = useState('search'); // 'search', 'paste', 'partner'
+  const [bulkSearchQuery, setBulkSearchQuery] = useState('');
+  const [bulkSearchResults, setBulkSearchResults] = useState([]);
+  const [bulkSearchLoading, setBulkSearchLoading] = useState(false);
+  const [selectedBulkUsers, setSelectedBulkUsers] = useState(new Set());
+  const [pastedEmails, setPastedEmails] = useState('');
+  const [parsedEmails, setParsedEmails] = useState([]);
+  const [bulkPartnerFilter, setBulkPartnerFilter] = useState(null);
+  const [partnerUsers, setPartnerUsers] = useState([]);
+  const [partnerUsersLoading, setPartnerUsersLoading] = useState(false);
+  const [bulkDeactivateInLms, setBulkDeactivateInLms] = useState(true);
+  const [bulkDeactivating, setBulkDeactivating] = useState(false);
+  const [bulkDeactivateResults, setBulkDeactivateResults] = useState(null);
+  const [bulkDeactivateProgress, setBulkDeactivateProgress] = useState({ current: 0, total: 0, currentEmail: '' });
+
   // Load CRM contacts on mount
   useEffect(() => {
     loadData();
   }, []);
+
+  // Load partners list when switching to bulk partner mode
+  useEffect(() => {
+    if (activeTab === 4 && bulkOffboardMode === 'partner' && partnersList.length === 0) {
+      loadPartnersList();
+    }
+  }, [activeTab, bulkOffboardMode, partnersList.length]);
 
   const loadData = async () => {
     try {
@@ -878,6 +1063,41 @@ const UserManagement = () => {
     }
   };
 
+  // Disassociate a domain from a partner
+  const handleDisassociateDomain = async (domain, partnerId, partnerName) => {
+    const confirmed = window.confirm(
+      `Are you sure you want to disassociate @${domain} from ${partnerName}?\n\n` +
+      `This will remove the domain from the partner's associated domains list. ` +
+      `Users with this email domain will no longer be automatically matched to this partner.`
+    );
+    
+    if (!confirmed) return;
+    
+    try {
+      const response = await fetch('/api/db/lms/disassociate-domain', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain, partnerId })
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to disassociate domain');
+      }
+      
+      console.log(`✅ Domain disassociated:`, data);
+      alert(`✅ ${data.message}`);
+      
+      // Refresh domain analysis to reflect the change
+      await loadDomainAnalysis();
+      
+    } catch (error) {
+      console.error('Error disassociating domain:', error);
+      alert(`❌ Error: ${error.message}`);
+    }
+  };
+
   // Load domain analysis when tab changes
   useEffect(() => {
     if (activeTab === 1 && !domainData && !domainLoading) {
@@ -970,6 +1190,10 @@ const UserManagement = () => {
         case 'notInPartnerGroup':
           aVal = a.notInPartnerGroup || 0;
           bVal = b.notInPartnerGroup || 0;
+          break;
+        case 'notInCrm':
+          aVal = a.users?.filter(u => !u.crmAssociation).length || 0;
+          bVal = b.users?.filter(u => !u.crmAssociation).length || 0;
           break;
         case 'matchedPartner':
           aVal = a.matchedPartner?.toLowerCase() || '';
@@ -1067,6 +1291,104 @@ const UserManagement = () => {
 
   const clearDomainSelection = () => {
     setSelectedDomainUsers(new Map());
+  };
+
+  // CRM bulk selection handlers
+  const toggleCrmUserSelection = (user) => {
+    setSelectedCrmUsers(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(user.id)) {
+        newSet.delete(user.id);
+      } else {
+        newSet.add(user.id);
+      }
+      return newSet;
+    });
+  };
+
+  const selectAllCrmUsers = (users, select) => {
+    setSelectedCrmUsers(prev => {
+      const newSet = new Set(prev);
+      users.forEach(user => {
+        if (select) {
+          newSet.add(user.id);
+        } else {
+          newSet.delete(user.id);
+        }
+      });
+      return newSet;
+    });
+  };
+
+  // Bulk create CRM contacts
+  const handleBulkCreateCrm = async (users, partnerId, partnerName) => {
+    if (!users || users.length === 0 || !partnerId) return;
+    
+    const confirmed = window.confirm(
+      `Add ${users.length} users to Impartner CRM as ${partnerName} contacts?\n\n` +
+      `This will create contact records in both Impartner and the local database.`
+    );
+    
+    if (!confirmed) return;
+    
+    setIsBulkCreatingCrm(true);
+    setBulkCrmResults(null);
+    
+    const results = {
+      success: 0,
+      failed: 0,
+      impartnerSuccess: 0,
+      localOnly: 0,
+      errors: []
+    };
+    
+    try {
+      const response = await fetch('/api/db/users/bulk-create-crm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          users: users.map(u => ({
+            email: u.email,
+            firstName: u.firstName || '',
+            lastName: u.lastName || ''
+          })),
+          partnerId,
+          pushToImpartner: true
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create contacts');
+      }
+      
+      results.success = data.results.success || 0;
+      results.failed = data.results.failed || 0;
+      results.impartnerSuccess = data.results.impartnerSuccess || 0;
+      results.localOnly = data.results.localOnly || 0;
+      results.errors = data.results.errors || [];
+      
+      setBulkCrmResults(results);
+      
+      // Clear selection for successful users
+      setSelectedCrmUsers(new Set());
+      
+      // Show result
+      const message = `✅ Created ${results.success} contacts (${results.impartnerSuccess} in Impartner)` +
+        (results.failed > 0 ? `\n❌ ${results.failed} failed` : '') +
+        (results.localOnly > 0 ? `\n⚠️ ${results.localOnly} local only (Impartner failed)` : '');
+      alert(message);
+      
+      // Refresh domain analysis
+      await loadDomainAnalysis();
+      
+    } catch (error) {
+      console.error('Bulk CRM creation error:', error);
+      alert(`❌ Error: ${error.message}`);
+    } finally {
+      setIsBulkCreatingCrm(false);
+    }
   };
 
   // Get selected contact objects for modal
@@ -1234,6 +1556,65 @@ const UserManagement = () => {
       }
       return newSet;
     });
+  };
+
+  // Remove user from partner group
+  const handleRemoveFromGroup = async (user, groupId, groupName) => {
+    if (!user || !groupId) return;
+
+    const confirmed = window.confirm(
+      `Remove ${user.email} from ${groupName || 'partner group'}?\n\nThis will unlink them from the partner in Northpass LMS.`
+    );
+    if (!confirmed) return;
+
+    setRemovingUserId(user.id);
+    try {
+      const response = await fetch('/api/impartner/offboard/remove-from-group', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id, groupId })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to remove user from group');
+      }
+
+      const result = await response.json();
+      console.log(`✅ Removed ${user.email} from ${groupName}:`, result);
+
+      // Update local state - mark user as not in partner group
+      setDomainData(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          domains: prev.domains.map(d => {
+            const updatedUsers = d.users.map(u =>
+              u.id === user.id ? { ...u, inPartnerGroup: false } : u
+            );
+            const inGroup = updatedUsers.filter(u => u.inPartnerGroup).length;
+            const notInGroup = updatedUsers.filter(u => !u.inPartnerGroup).length;
+            return {
+              ...d,
+              users: updatedUsers,
+              inPartnerGroup: inGroup,
+              notInPartnerGroup: notInGroup
+            };
+          }),
+          summary: {
+            ...prev.summary,
+            usersInPartnerGroups: prev.summary.usersInPartnerGroups - 1,
+            usersNotInPartnerGroups: prev.summary.usersNotInPartnerGroups + 1
+          }
+        };
+      });
+
+    } catch (err) {
+      console.error('Failed to remove user from group:', err);
+      alert(`Failed to remove user: ${err.message}`);
+    } finally {
+      setRemovingUserId(null);
+    }
   };
 
   // ============================================
@@ -1652,7 +2033,8 @@ const UserManagement = () => {
           firstName: createUserData.firstName,
           lastName: createUserData.lastName,
           partnerId: createUserData.partnerId,
-          title: createUserData.title
+          title: createUserData.title,
+          pushToImpartner: true
         })
       });
       
@@ -1662,7 +2044,17 @@ const UserManagement = () => {
         throw new Error(data.error || 'Failed to create contact');
       }
       
-      setCreateUserResult({ success: true, message: `Contact ${data.contact.email} created in CRM`, data });
+      // Show success with Impartner status
+      const impartnerStatus = data.pushedToImpartner 
+        ? '✅ Added to Impartner CRM' 
+        : data.impartnerError 
+          ? `⚠️ Local only (${data.impartnerError})`
+          : '📋 Local database only';
+      setCreateUserResult({ 
+        success: true, 
+        message: `Contact ${data.contact.email} created. ${impartnerStatus}`,
+        data 
+      });
       
       // Refresh profile and search results
       if (createUserData.email) {
@@ -1671,12 +2063,41 @@ const UserManagement = () => {
       if (userSearchQuery) {
         setTimeout(() => searchUsers(), 1000);
       }
+      // Refresh domain data if on domain tab
+      if (activeTab === 1 && domainData) {
+        setTimeout(() => loadDomainAnalysis(), 1500);
+      }
     } catch (err) {
       setCreateUserResult({ success: false, message: err.message });
     } finally {
       setCreatingUser(false);
     }
   };
+
+  // Fetch groups when Add to Group dialog opens
+  useEffect(() => {
+    if (showAddToGroupDialog && dialogGroupsList.length === 0) {
+      const fetchGroups = async () => {
+        setDialogGroupsLoading(true);
+        try {
+          const response = await fetch('/api/db/lms/groups');
+          if (response.ok) {
+            const allGroups = await response.json();
+            // Filter out "All Partners" and sort by name
+            const filtered = allGroups
+              .filter(g => g.name && g.name !== 'All Partners')
+              .sort((a, b) => a.name.localeCompare(b.name));
+            setDialogGroupsList(filtered);
+          }
+        } catch (err) {
+          console.error('Failed to fetch groups for dialog:', err);
+        } finally {
+          setDialogGroupsLoading(false);
+        }
+      };
+      fetchGroups();
+    }
+  }, [showAddToGroupDialog, dialogGroupsList.length]);
 
   // Add user to a group
   const addUserToGroupAction = async () => {
@@ -1756,26 +2177,26 @@ const UserManagement = () => {
   // Perform offboarding - remove users from All Partners group
   const offboardSelectedUsers = async () => {
     if (selectedOffboardUsers.size === 0) return;
-    
+
     const userIds = Array.from(selectedOffboardUsers);
-    
+
     setOffboarding(true);
     setOffboardProgress({ current: 0, total: userIds.length });
     setOffboardResults(null);
-    
+
     try {
       const response = await fetch('/api/db/maintenance/offboard-users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userIds })
       });
-      
+
       if (!response.ok) throw new Error('Offboard operation failed');
       const result = await response.json();
-      
+
       setOffboardResults(result);
       setSelectedOffboardUsers(new Set());
-      
+
       // Reload data to show updated list
       await loadOffboardData();
     } catch (err) {
@@ -1784,6 +2205,238 @@ const UserManagement = () => {
     } finally {
       setOffboarding(false);
     }
+  };
+
+  // Full deactivation - Impartner + LMS + local DB
+  const deactivateUsersInImpartner = async () => {
+    if (selectedOffboardUsers.size === 0) return;
+
+    // Get emails for selected users
+    const selectedUserData = filteredOffboardUsers.filter(u => selectedOffboardUsers.has(u.user_id));
+
+    setImpartnerDeactivating(true);
+    setImpartnerDeactivateResults(null);
+
+    try {
+      const response = await fetch('/api/db/maintenance/deactivate-users-in-impartner', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          users: selectedUserData.map(u => ({ email: u.email })),
+          deactivateLms: deactivateInLms
+        })
+      });
+
+      if (!response.ok) throw new Error('Deactivation failed');
+      const result = await response.json();
+
+      setImpartnerDeactivateResults(result.results);
+      setSelectedOffboardUsers(new Set());
+
+      // Also offboard from All Partners group if successful
+      if (result.results.impartnerDeactivated > 0 || result.results.lmsDeactivated > 0) {
+        await loadOffboardData();
+      }
+    } catch (err) {
+      console.error('Impartner deactivation error:', err);
+      setImpartnerDeactivateResults({ error: err.message });
+    } finally {
+      setImpartnerDeactivating(false);
+    }
+  };
+
+  // ============================================
+  // Bulk Offboarding Functions
+  // ============================================
+
+  // Search for users to bulk offboard
+  const searchUsersForBulkOffboard = async () => {
+    if (!bulkSearchQuery.trim()) return;
+
+    setBulkSearchLoading(true);
+    setBulkSearchResults([]);
+
+    try {
+      const response = await fetch(`/api/db/maintenance/users-for-impartner-deactivation?search=${encodeURIComponent(bulkSearchQuery)}&limit=100`);
+      if (!response.ok) throw new Error('Search failed');
+      const data = await response.json();
+      setBulkSearchResults(data.users || []);
+    } catch (err) {
+      console.error('Bulk search error:', err);
+    } finally {
+      setBulkSearchLoading(false);
+    }
+  };
+
+  // Parse pasted email list
+  const parseEmailList = useCallback(() => {
+    if (!pastedEmails.trim()) {
+      setParsedEmails([]);
+      return;
+    }
+
+    // Parse emails - support comma, semicolon, newline, space separated
+    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+    const matches = pastedEmails.match(emailRegex) || [];
+    const uniqueEmails = [...new Set(matches.map(e => e.toLowerCase()))];
+    setParsedEmails(uniqueEmails);
+    setSelectedBulkUsers(new Set(uniqueEmails));
+  }, [pastedEmails]);
+
+  // Load users for a specific partner
+  const loadPartnerUsersForOffboard = async (partnerId) => {
+    if (!partnerId) {
+      setPartnerUsers([]);
+      return;
+    }
+
+    setPartnerUsersLoading(true);
+    try {
+      const response = await fetch(`/api/db/maintenance/users-for-impartner-deactivation?partnerId=${partnerId}&limit=500`);
+      if (!response.ok) throw new Error('Failed to load partner users');
+      const data = await response.json();
+      setPartnerUsers(data.users || []);
+    } catch (err) {
+      console.error('Load partner users error:', err);
+      setPartnerUsers([]);
+    } finally {
+      setPartnerUsersLoading(false);
+    }
+  };
+
+  // Execute bulk deactivation - processes users one by one with progress
+  const executeBulkDeactivation = async () => {
+    let usersToDeactivate = [];
+
+    if (bulkOffboardMode === 'search') {
+      usersToDeactivate = bulkSearchResults
+        .filter(u => selectedBulkUsers.has(u.contact_id))
+        .map(u => ({ email: u.email, contactId: u.contact_id, impartnerId: u.impartner_id, lmsUserId: u.lms_user_id }));
+    } else if (bulkOffboardMode === 'paste') {
+      usersToDeactivate = parsedEmails
+        .filter(e => selectedBulkUsers.has(e))
+        .map(e => ({ email: e }));
+    } else if (bulkOffboardMode === 'partner') {
+      usersToDeactivate = partnerUsers
+        .filter(u => selectedBulkUsers.has(u.contact_id))
+        .map(u => ({ email: u.email, contactId: u.contact_id, impartnerId: u.impartner_id, lmsUserId: u.lms_user_id }));
+    }
+
+    if (usersToDeactivate.length === 0) return;
+
+    setBulkDeactivating(true);
+    setBulkDeactivateResults(null);
+    setBulkDeactivateProgress({ current: 0, total: usersToDeactivate.length, currentEmail: '' });
+
+    // Accumulate results as we process each user
+    const results = {
+      total: usersToDeactivate.length,
+      impartnerDeactivated: 0,
+      impartnerFailed: 0,
+      impartnerNotFound: 0,
+      lmsDeactivated: 0,
+      lmsFailed: 0,
+      localDbUpdated: 0,
+      errors: []
+    };
+
+    try {
+      for (let i = 0; i < usersToDeactivate.length; i++) {
+        const user = usersToDeactivate[i];
+        setBulkDeactivateProgress({
+          current: i + 1,
+          total: usersToDeactivate.length,
+          currentEmail: user.email
+        });
+
+        try {
+          const response = await fetch('/api/db/maintenance/deactivate-single-user', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: user.email,
+              impartnerId: user.impartnerId,
+              lmsUserId: user.lmsUserId,
+              contactId: user.contactId,
+              deactivateLms: bulkDeactivateInLms
+            })
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            if (data.result.impartnerDeactivated) {
+              results.impartnerDeactivated++;
+            } else if (data.result.errors?.some(e => e.includes('Not found'))) {
+              results.impartnerNotFound++;
+            } else {
+              results.impartnerFailed++;
+            }
+            if (data.result.lmsDeactivated) {
+              results.lmsDeactivated++;
+            }
+            if (data.result.localDbUpdated) {
+              results.localDbUpdated++;
+            }
+            if (data.result.errors?.length > 0) {
+              results.errors.push({ email: user.email, errors: data.result.errors });
+            }
+          } else {
+            results.impartnerFailed++;
+            results.errors.push({ email: user.email, errors: ['Request failed'] });
+          }
+        } catch (err) {
+          results.impartnerFailed++;
+          results.errors.push({ email: user.email, errors: [err.message] });
+        }
+      }
+
+      setBulkDeactivateResults(results);
+      setSelectedBulkUsers(new Set());
+
+      // Refresh data if successful
+      if (results.impartnerDeactivated > 0 || results.lmsDeactivated > 0) {
+        if (bulkOffboardMode === 'search' && bulkSearchQuery) {
+          await searchUsersForBulkOffboard();
+        } else if (bulkOffboardMode === 'partner' && bulkPartnerFilter) {
+          await loadPartnerUsersForOffboard(bulkPartnerFilter);
+        }
+      }
+    } catch (err) {
+      console.error('Bulk deactivation error:', err);
+      setBulkDeactivateResults({ ...results, error: err.message });
+    } finally {
+      setBulkDeactivating(false);
+      setBulkDeactivateProgress({ current: 0, total: 0, currentEmail: '' });
+    }
+  };
+
+  // Toggle bulk user selection
+  const toggleBulkUser = (identifier) => {
+    setSelectedBulkUsers(prev => {
+      const next = new Set(prev);
+      if (next.has(identifier)) {
+        next.delete(identifier);
+      } else {
+        next.add(identifier);
+      }
+      return next;
+    });
+  };
+
+  // Select all bulk users
+  const selectAllBulkUsers = () => {
+    if (bulkOffboardMode === 'search') {
+      setSelectedBulkUsers(new Set(bulkSearchResults.map(u => u.contact_id)));
+    } else if (bulkOffboardMode === 'paste') {
+      setSelectedBulkUsers(new Set(parsedEmails));
+    } else if (bulkOffboardMode === 'partner') {
+      setSelectedBulkUsers(new Set(partnerUsers.map(u => u.contact_id)));
+    }
+  };
+
+  // Clear bulk selection
+  const clearBulkSelection = () => {
+    setSelectedBulkUsers(new Set());
   };
 
   // Toggle user selection for offboarding
@@ -1917,31 +2570,31 @@ const UserManagement = () => {
           <Tab 
             icon={<PersonAddIcon />} 
             iconPosition="start" 
-            label="Add to LMS" 
+            label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Add to LMS<InfoButton tooltip="Find CRM contacts who aren't in the LMS yet and add them. Creates user accounts and adds them to their partner's group." /></Box>}
           />
           {/* MATCHING: Link orphaned users to partners */}
           <Tab 
             icon={<DomainIcon />} 
             iconPosition="start" 
-            label="Domain Matching" 
+            label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Domain Matching<InfoButton tooltip="Match LMS users to partners by email domain. Useful for finding users who registered directly and linking them to the correct partner." /></Box>}
           />
           {/* ORPHANS: Unlinked users needing partner assignment */}
           <Tab 
             icon={<PersonOffIcon />} 
             iconPosition="start" 
-            label={`Orphans${orphanSummary?.totalOrphans > 0 ? ` (${orphanSummary.totalOrphans})` : ''}`}
+            label={<Box sx={{ display: 'flex', alignItems: 'center' }}>{`Orphans${orphanSummary?.totalOrphans > 0 ? ` (${orphanSummary.totalOrphans})` : ''}`}<InfoButton tooltip="Discover LMS users whose email domain matches a partner but aren't linked. These users registered directly in Northpass, bypassing CRM automation." /></Box>}
           />
           {/* SEARCH: Find specific users */}
           <Tab 
             icon={<PersonSearch />} 
             iconPosition="start" 
-            label="User Search" 
+            label={<Box sx={{ display: 'flex', alignItems: 'center' }}>User Search<InfoButton tooltip="Search for any user by email, name, or partner. View their profile, group memberships, enrollments, and certifications." /></Box>}
           />
           {/* OFFBOARDING: Remove deactivated users */}
           <Tab 
             icon={<RemoveCircleOutlineIcon />} 
             iconPosition="start" 
-            label={`Offboarding${offboardData?.total > 0 ? ` (${offboardData.total})` : ''}`}
+            label={<Box sx={{ display: 'flex', alignItems: 'center' }}>{`Offboarding${offboardData?.total > 0 ? ` (${offboardData.total})` : ''}`}<InfoButton tooltip="Remove users from LMS groups when they're deactivated in Impartner CRM. Keeps partner groups clean and accurate." /></Box>}
           />
         </Tabs>
       </Box>
@@ -1977,11 +2630,11 @@ const UserManagement = () => {
 
           {/* Summary Stats */}
           <StatsRow columns={5}>
-            <StatCard icon="📋" value={stats.totalCrm} label="CRM Contacts" variant="default" />
-            <StatCard icon="👥" value={stats.totalLms} label="LMS Users" variant="default" />
-            <StatCard icon="✅" value={`${stats.matchRate}%`} label="Match Rate" variant="success" />
-            <StatCard icon="⚠️" value={stats.totalMissing} label="Missing from LMS" variant="warning" />
-            <StatCard icon="📧" value={stats.personalEmails} label="Personal Emails" variant="default" />
+            <StatCard icon="📋" value={stats.totalCrm} label="CRM Contacts" variant="default" infoTooltip="Total contacts in the Impartner CRM database that are linked to active partners." />
+            <StatCard icon="👥" value={stats.totalLms} label="LMS Users" variant="default" infoTooltip="Total users registered in the Northpass LMS system." />
+            <StatCard icon="✅" value={`${stats.matchRate}%`} label="Match Rate" variant="success" infoTooltip="Percentage of CRM contacts that have matching LMS accounts (by email)." />
+            <StatCard icon="⚠️" value={stats.totalMissing} label="Missing from LMS" variant="warning" infoTooltip="CRM contacts who don't have an LMS account yet. These can be added using this tool." />
+            <StatCard icon="📧" value={stats.personalEmails} label="Personal Emails" variant="default" infoTooltip="Contacts using personal email domains (gmail, yahoo, etc.) - may need manual verification." />
           </StatsRow>
 
           {missingContacts.length > 0 && (
@@ -2214,25 +2867,29 @@ const UserManagement = () => {
                   icon="🌐" 
                   value={domainData.summary.totalDomains} 
                   label="Partner Domains" 
-                  variant="default" 
+                  variant="default"
+                  infoTooltip="Unique email domains extracted from partner contacts (e.g., acme.com, partner.org)."
                 />
                 <StatCard 
                   icon="👥" 
                   value={domainData.summary.totalUsers.toLocaleString()} 
                   label="Partner Users" 
-                  variant="default" 
+                  variant="default"
+                  infoTooltip="LMS users whose email domain matches a known partner domain."
                 />
                 <StatCard 
                   icon="✅" 
                   value={domainData.summary.usersInPartnerGroups.toLocaleString()} 
                   label="In Partner Groups" 
-                  variant="success" 
+                  variant="success"
+                  infoTooltip="Users already assigned to their correct partner LMS group."
                 />
                 <StatCard 
                   icon="⚠️" 
                   value={domainData.summary.usersNotInPartnerGroups.toLocaleString()} 
                   label="No Partner Group" 
-                  variant="warning" 
+                  variant="warning"
+                  infoTooltip="Users with partner email domains but not in any partner group. May need to be added."
                 />
               </StatsRow>
 
@@ -2370,6 +3027,15 @@ const UserManagement = () => {
                           Not in Group
                         </TableSortLabel>
                       </th>
+                      <th style={{ textAlign: 'center' }}>
+                        <TableSortLabel
+                          active={domainOrderBy === 'notInCrm'}
+                          direction={domainOrderBy === 'notInCrm' ? domainOrder : 'asc'}
+                          onClick={() => handleDomainSortRequest('notInCrm')}
+                        >
+                          Not in CRM
+                        </TableSortLabel>
+                      </th>
                       <th>
                         <TableSortLabel
                           active={domainOrderBy === 'matchedPartner'}
@@ -2407,6 +3073,15 @@ const UserManagement = () => {
                         isCreatingGroup={creatingGroupFor?.partnerId === domainInfo.matchedPartnerId}
                         onAddAllToGroup={handleAddAllToGroup}
                         isAddingToGroup={isAddingToGroup}
+                        onCreateCrmContact={openCreateCrmDialog}
+                        onDisassociateDomain={handleDisassociateDomain}
+                        selectedCrmUsers={selectedCrmUsers}
+                        onCrmUserSelect={toggleCrmUserSelection}
+                        onSelectAllCrmUsers={selectAllCrmUsers}
+                        onBulkCreateCrm={handleBulkCreateCrm}
+                        isBulkCreatingCrm={isBulkCreatingCrm}
+                        onRemoveFromGroup={handleRemoveFromGroup}
+                        removingUserId={removingUserId}
                       />
                     ))}
                   </tbody>
@@ -2474,11 +3149,11 @@ const UserManagement = () => {
           {/* User Breakdown Stats */}
           {orphanBreakdown && (
             <StatsRow columns={5}>
-              <StatCard icon="👥" value={orphanBreakdown.totalUsers.toLocaleString()} label="Total LMS Users" />
-              <StatCard icon="✅" value={orphanBreakdown.linkedPartnerUsers.toLocaleString()} label="Linked Partner Users" variant="success" />
-              <StatCard icon="📊" value={`${orphanBreakdown.percentageLinked}%`} label="Linked Rate" variant="success" />
-              <StatCard icon="❓" value={orphanBreakdown.unlinkedUsers.toLocaleString()} label="Unlinked Users" variant="default" />
-              <StatCard icon="👻" value={orphanSummary?.totalOrphans?.toLocaleString() || '0'} label="Orphans (Domain Match)" variant="warning" />
+              <StatCard icon="👥" value={orphanBreakdown.totalUsers.toLocaleString()} label="Total LMS Users" infoTooltip="All users registered in the Northpass LMS system." />
+              <StatCard icon="✅" value={orphanBreakdown.linkedPartnerUsers.toLocaleString()} label="Linked Partner Users" variant="success" infoTooltip="Users in a partner group OR matched to a CRM contact." />
+              <StatCard icon="📊" value={`${orphanBreakdown.percentageLinked}%`} label="Linked Rate" variant="success" infoTooltip="Percentage of LMS users linked to partners vs total users." />
+              <StatCard icon="❓" value={orphanBreakdown.unlinkedUsers.toLocaleString()} label="Unlinked Users" variant="default" infoTooltip="LMS users not in partner groups and not in CRM. May be internal or customer users." />
+              <StatCard icon="👻" value={orphanSummary?.totalOrphans?.toLocaleString() || '0'} label="Orphans (Domain Match)" variant="warning" infoTooltip="Unlinked users whose email domain matches a partner. These registered directly, bypassing CRM." />
             </StatsRow>
           )}
 
@@ -2944,23 +3619,27 @@ const UserManagement = () => {
                       title="Enrollments"
                       value={selectedUserProfile.stats?.totalEnrollments || 0}
                       icon={<SchoolIcon />}
+                      infoTooltip="Total courses the user has enrolled in (started or completed)."
                     />
                     <StatCard
                       title="Completed"
                       value={selectedUserProfile.stats?.completedCourses || 0}
                       icon={<CheckCircleIcon />}
                       variant="success"
+                      infoTooltip="Courses the user has finished with 100% progress."
                     />
                     <StatCard
                       title="Certifications"
                       value={selectedUserProfile.stats?.certificationCount || 0}
                       icon={<BadgeIcon />}
+                      infoTooltip="Active certifications that haven't expired. Expired certs don't count."
                     />
                     <StatCard
                       title="NPCU"
                       value={selectedUserProfile.stats?.totalNpcu || 0}
                       icon={<SchoolIcon />}
                       variant={selectedUserProfile.stats?.totalNpcu > 0 ? 'success' : 'default'}
+                      infoTooltip="Nintex Partner Certification Units earned from active certifications."
                     />
                   </StatsRow>
 
@@ -3048,7 +3727,11 @@ const UserManagement = () => {
                         sx={{ ml: 2 }}
                         onClick={() => {
                           setAddToGroupUserId(selectedUserProfile.lmsUser?.id);
-                          setSelectedGroupToAdd(selectedUserProfile.crmContact.lms_group_id);
+                          // Pre-select the partner's group if available
+                          const partnerGroup = selectedUserProfile.crmContact.lms_group_id 
+                            ? { id: selectedUserProfile.crmContact.lms_group_id, name: selectedUserProfile.crmContact.lms_group_name }
+                            : null;
+                          setSelectedGroupToAdd(partnerGroup);
                           setShowAddToGroupDialog(true);
                         }}
                       >
@@ -3223,7 +3906,7 @@ const UserManagement = () => {
         <>
           {/* Action Bar */}
           <Box sx={{ display: 'flex', gap: 2, mb: 3, alignItems: 'center', flexWrap: 'wrap' }}>
-            <ActionButton 
+            <ActionButton
               variant="contained"
               color="primary"
               onClick={loadOffboardData}
@@ -3232,30 +3915,65 @@ const UserManagement = () => {
             >
               {offboardLoading ? 'Scanning...' : 'Scan for Offboarding'}
             </ActionButton>
-            
+
             {selectedOffboardUsers.size > 0 && (
-              <ActionButton 
-                variant="contained"
-                color="error"
-                onClick={offboardSelectedUsers}
-                loading={offboarding}
-                icon={<RemoveCircleOutlineIcon />}
-              >
-                {offboarding ? 'Offboarding...' : `Offboard ${selectedOffboardUsers.size} User${selectedOffboardUsers.size > 1 ? 's' : ''}`}
-              </ActionButton>
+              <>
+                <ActionButton
+                  variant="contained"
+                  color="error"
+                  onClick={offboardSelectedUsers}
+                  loading={offboarding}
+                  icon={<RemoveCircleOutlineIcon />}
+                >
+                  {offboarding ? 'Offboarding...' : `Remove from LMS Groups (${selectedOffboardUsers.size})`}
+                </ActionButton>
+
+                <ActionButton
+                  variant="contained"
+                  color="warning"
+                  onClick={deactivateUsersInImpartner}
+                  loading={impartnerDeactivating}
+                  icon={<PersonOffIcon />}
+                >
+                  {impartnerDeactivating ? 'Deactivating...' : `Deactivate in Impartner (${selectedOffboardUsers.size})`}
+                </ActionButton>
+              </>
             )}
           </Box>
 
-          {/* Results Alert */}
+          {/* Impartner Deactivation Options */}
+          {selectedOffboardUsers.size > 0 && (
+            <Card sx={{ p: 2, mb: 3, bgcolor: 'warning.50', border: '1px solid', borderColor: 'warning.main' }}>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                <WarningIcon sx={{ fontSize: 16, mr: 0.5, verticalAlign: 'middle', color: 'warning.main' }} />
+                Deactivation Options
+              </Typography>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={deactivateInLms}
+                    onChange={(e) => setDeactivateInLms(e.target.checked)}
+                    size="small"
+                  />
+                }
+                label={<Typography variant="body2">Also deactivate in LMS (Northpass)</Typography>}
+              />
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 4 }}>
+                When checked, users will be fully deactivated in both Impartner and Northpass LMS.
+              </Typography>
+            </Card>
+          )}
+
+          {/* LMS Offboard Results Alert */}
           {offboardResults && (
-            <Alert 
-              severity={offboardResults.success !== false ? 'success' : 'error'} 
+            <Alert
+              severity={offboardResults.success !== false ? 'success' : 'error'}
               sx={{ mb: 3 }}
               onClose={() => setOffboardResults(null)}
             >
               {offboardResults.success !== false ? (
                 <>
-                  <Typography variant="subtitle2">Offboarding Complete</Typography>
+                  <Typography variant="subtitle2">LMS Offboarding Complete</Typography>
                   <Typography variant="body2">
                     Removed {offboardResults.removed || 0} users from All Partners group.
                     {offboardResults.failed > 0 && ` ${offboardResults.failed} failed.`}
@@ -3263,6 +3981,33 @@ const UserManagement = () => {
                 </>
               ) : (
                 <Typography variant="body2">{offboardResults.error || 'Operation failed'}</Typography>
+              )}
+            </Alert>
+          )}
+
+          {/* Impartner Deactivation Results Alert */}
+          {impartnerDeactivateResults && (
+            <Alert
+              severity={impartnerDeactivateResults.error ? 'error' : impartnerDeactivateResults.impartnerDeactivated > 0 ? 'success' : 'warning'}
+              sx={{ mb: 3 }}
+              onClose={() => setImpartnerDeactivateResults(null)}
+            >
+              {impartnerDeactivateResults.error ? (
+                <Typography variant="body2">{impartnerDeactivateResults.error}</Typography>
+              ) : (
+                <>
+                  <Typography variant="subtitle2">Impartner Deactivation Complete</Typography>
+                  <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                    <li>Impartner: {impartnerDeactivateResults.impartnerDeactivated || 0} deactivated, {impartnerDeactivateResults.impartnerNotFound || 0} not found</li>
+                    {deactivateInLms && <li>LMS: {impartnerDeactivateResults.lmsDeactivated || 0} deactivated</li>}
+                    <li>Local DB: {impartnerDeactivateResults.localDbUpdated || 0} updated</li>
+                  </Box>
+                  {impartnerDeactivateResults.errors?.length > 0 && (
+                    <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
+                      {impartnerDeactivateResults.errors.length} error(s) occurred
+                    </Typography>
+                  )}
+                </>
               )}
             </Alert>
           )}
@@ -3288,24 +4033,28 @@ const UserManagement = () => {
                   value={offboardData.total || 0}
                   subtitle="Users needing offboard"
                   variant={offboardData.total > 0 ? 'warning' : 'success'}
+                  infoTooltip="Total users that should be removed from LMS groups based on CRM status changes."
                 />
                 <StatCard 
                   title="Inactive Partners" 
                   value={offboardData.byReason?.partnerInactive || 0}
                   subtitle="Partner deactivated in CRM"
                   variant={offboardData.byReason?.partnerInactive > 0 ? 'warning' : 'default'}
+                  infoTooltip="Users whose partner organization was deactivated in Impartner CRM."
                 />
                 <StatCard 
                   title="Deleted Groups" 
                   value={offboardData.byReason?.groupDeleted || 0}
                   subtitle="Group removed from LMS"
                   variant={offboardData.byReason?.groupDeleted > 0 ? 'warning' : 'default'}
+                  infoTooltip="Users in LMS groups that no longer exist (group was deleted)."
                 />
                 <StatCard 
                   title="Inactive Users" 
                   value={offboardData.byReason?.userInactive || 0}
                   subtitle="User marked inactive"
                   variant={offboardData.byReason?.userInactive > 0 ? 'warning' : 'default'}
+                  infoTooltip="Individual contacts marked as inactive in the CRM."
                 />
               </StatsRow>
 
@@ -3433,14 +4182,19 @@ const UserManagement = () => {
 
               {/* Info Section */}
               <Alert severity="info" sx={{ mt: 3 }}>
-                <Typography variant="subtitle2">What is Offboarding?</Typography>
+                <Typography variant="subtitle2">Offboarding Options</Typography>
                 <Typography variant="body2" sx={{ mt: 1 }}>
-                  When a partner is deactivated in the CRM or their LMS group is deleted, their users should be 
-                  removed from the <strong>"All Partners"</strong> group. This revokes access to partner-only 
-                  training content while keeping their LMS account and progress intact.
+                  <strong>Remove from LMS Groups:</strong> Removes users from the "All Partners" LMS group,
+                  revoking access to partner training content while keeping their account intact.
                 </Typography>
                 <Typography variant="body2" sx={{ mt: 1 }}>
-                  Users will still have access to non-partner content in the LMS.
+                  <strong>Deactivate in Impartner:</strong> Fully deactivates users in Impartner CRM
+                  (sets IsActive=No and Contact_Status=Inactive). Use this for terminated employees or
+                  users who should no longer have partner portal access.
+                </Typography>
+                <Typography variant="body2" sx={{ mt: 1, fontStyle: 'italic' }}>
+                  Tip: For terminated employees, use "Deactivate in Impartner" with LMS deactivation enabled
+                  for complete removal from both systems.
                 </Typography>
               </Alert>
             </>
@@ -3468,6 +4222,404 @@ const UserManagement = () => {
               </Box>
             </SectionCard>
           )}
+
+          {/* Bulk Offboard Section */}
+          <Divider sx={{ my: 4 }} />
+
+          <SectionCard
+            title="Bulk User Deactivation"
+            icon={<PersonOffIcon />}
+            subtitle="Manually deactivate users in Impartner and/or LMS"
+          >
+            {/* Mode Selection Tabs */}
+            <Tabs
+              value={bulkOffboardMode}
+              onChange={(e, v) => {
+                setBulkOffboardMode(v);
+                setSelectedBulkUsers(new Set());
+                setBulkDeactivateResults(null);
+              }}
+              sx={{ mb: 3, borderBottom: 1, borderColor: 'divider' }}
+            >
+              <Tab value="search" label="Search Users" icon={<SearchIcon />} iconPosition="start" />
+              <Tab value="paste" label="Email List" icon={<EmailIcon />} iconPosition="start" />
+              <Tab value="partner" label="By Partner" icon={<BusinessIcon />} iconPosition="start" />
+            </Tabs>
+
+            {/* Bulk Deactivate Results */}
+            {bulkDeactivateResults && (
+              <Alert
+                severity={bulkDeactivateResults.error ? 'error' : bulkDeactivateResults.impartnerDeactivated > 0 ? 'success' : 'warning'}
+                sx={{ mb: 3 }}
+                onClose={() => setBulkDeactivateResults(null)}
+              >
+                {bulkDeactivateResults.error ? (
+                  <Typography variant="body2">{bulkDeactivateResults.error}</Typography>
+                ) : (
+                  <>
+                    <Typography variant="subtitle2">Bulk Deactivation Complete</Typography>
+                    <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                      <li>Impartner: {bulkDeactivateResults.impartnerDeactivated || 0} deactivated, {bulkDeactivateResults.impartnerNotFound || 0} not found</li>
+                      {bulkDeactivateInLms && <li>LMS: {bulkDeactivateResults.lmsDeactivated || 0} deactivated</li>}
+                      <li>Local DB: {bulkDeactivateResults.localDbUpdated || 0} updated</li>
+                    </Box>
+                    {bulkDeactivateResults.errors?.length > 0 && (
+                      <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
+                        {bulkDeactivateResults.errors.length} error(s) occurred
+                      </Typography>
+                    )}
+                  </>
+                )}
+              </Alert>
+            )}
+
+            {/* Search Mode */}
+            {bulkOffboardMode === 'search' && (
+              <Box>
+                <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
+                  <SearchInput
+                    value={bulkSearchQuery}
+                    onChange={(e) => setBulkSearchQuery(e.target.value)}
+                    placeholder="Search by email, name, or company..."
+                    onKeyDown={(e) => e.key === 'Enter' && searchUsersForBulkOffboard()}
+                    sx={{ flex: 1 }}
+                  />
+                  <ActionButton
+                    variant="contained"
+                    onClick={searchUsersForBulkOffboard}
+                    loading={bulkSearchLoading}
+                    icon={<SearchIcon />}
+                  >
+                    Search
+                  </ActionButton>
+                </Box>
+
+                {bulkSearchResults.length > 0 && (
+                  <>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                      <Typography variant="body2" color="text.secondary">
+                        Found {bulkSearchResults.length} users
+                      </Typography>
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                        <Button size="small" onClick={selectAllBulkUsers}>
+                          Select All ({bulkSearchResults.length})
+                        </Button>
+                        {selectedBulkUsers.size > 0 && (
+                          <Button size="small" onClick={clearBulkSelection}>
+                            Clear ({selectedBulkUsers.size})
+                          </Button>
+                        )}
+                      </Box>
+                    </Box>
+
+                    <Box sx={{ maxHeight: 400, overflowY: 'auto', mb: 3 }}>
+                      {bulkSearchResults.map((user) => (
+                        <Card
+                          key={user.contact_id}
+                          sx={{
+                            p: 1.5,
+                            mb: 1,
+                            bgcolor: selectedBulkUsers.has(user.contact_id) ? 'action.selected' : 'background.paper',
+                            cursor: 'pointer',
+                            '&:hover': { bgcolor: 'action.hover' }
+                          }}
+                          onClick={() => toggleBulkUser(user.contact_id)}
+                        >
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                            <Checkbox
+                              checked={selectedBulkUsers.has(user.contact_id)}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={() => toggleBulkUser(user.contact_id)}
+                              size="small"
+                            />
+                            <Box sx={{ flex: 1, minWidth: 0 }}>
+                              <Typography variant="body2" noWrap>
+                                {user.first_name} {user.last_name}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary" noWrap>
+                                {user.email}
+                              </Typography>
+                            </Box>
+                            <Box sx={{ textAlign: 'right' }}>
+                              <Typography variant="body2" noWrap>{user.account_name}</Typography>
+                              <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'flex-end' }}>
+                                {user.contact_is_active ? (
+                                  <Chip size="small" label="Active" color="success" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                                ) : (
+                                  <Chip size="small" label="Inactive" color="default" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                                )}
+                                {user.lms_id && (
+                                  <Chip size="small" label="In LMS" color="info" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                                )}
+                              </Box>
+                            </Box>
+                          </Box>
+                        </Card>
+                      ))}
+                    </Box>
+                  </>
+                )}
+              </Box>
+            )}
+
+            {/* Paste Mode */}
+            {bulkOffboardMode === 'paste' && (
+              <Box>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Paste a list of email addresses. Supports comma, semicolon, newline, or space separated.
+                </Typography>
+                <TextField
+                  multiline
+                  rows={6}
+                  fullWidth
+                  placeholder="user1@company.com, user2@company.com&#10;user3@company.com"
+                  value={pastedEmails}
+                  onChange={(e) => setPastedEmails(e.target.value)}
+                  sx={{ mb: 2 }}
+                />
+                <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
+                  <ActionButton
+                    variant="contained"
+                    onClick={parseEmailList}
+                    icon={<SearchIcon />}
+                  >
+                    Parse Emails
+                  </ActionButton>
+                  {parsedEmails.length > 0 && (
+                    <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center' }}>
+                      Found {parsedEmails.length} valid email addresses
+                    </Typography>
+                  )}
+                </Box>
+
+                {parsedEmails.length > 0 && (
+                  <>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                      <Typography variant="body2" color="text.secondary">
+                        {selectedBulkUsers.size} of {parsedEmails.length} selected
+                      </Typography>
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                        <Button size="small" onClick={selectAllBulkUsers}>
+                          Select All
+                        </Button>
+                        {selectedBulkUsers.size > 0 && (
+                          <Button size="small" onClick={clearBulkSelection}>
+                            Clear
+                          </Button>
+                        )}
+                      </Box>
+                    </Box>
+
+                    <Box sx={{ maxHeight: 300, overflowY: 'auto', mb: 3 }}>
+                      {parsedEmails.map((email) => (
+                        <Card
+                          key={email}
+                          sx={{
+                            p: 1,
+                            mb: 0.5,
+                            bgcolor: selectedBulkUsers.has(email) ? 'action.selected' : 'background.paper',
+                            cursor: 'pointer',
+                            '&:hover': { bgcolor: 'action.hover' }
+                          }}
+                          onClick={() => toggleBulkUser(email)}
+                        >
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                            <Checkbox
+                              checked={selectedBulkUsers.has(email)}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={() => toggleBulkUser(email)}
+                              size="small"
+                            />
+                            <Typography variant="body2">{email}</Typography>
+                          </Box>
+                        </Card>
+                      ))}
+                    </Box>
+                  </>
+                )}
+              </Box>
+            )}
+
+            {/* Partner Mode */}
+            {bulkOffboardMode === 'partner' && (
+              <Box>
+                <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
+                  <Autocomplete
+                    options={partnersList}
+                    getOptionLabel={(option) => `${option.account_name} (${option.partner_tier || 'No Tier'})`}
+                    value={partnersList.find(p => p.id === bulkPartnerFilter) || null}
+                    onChange={(_, newValue) => {
+                      setBulkPartnerFilter(newValue?.id || null);
+                      setSelectedBulkUsers(new Set());
+                      if (newValue?.id) {
+                        loadPartnerUsersForOffboard(newValue.id);
+                      } else {
+                        setPartnerUsers([]);
+                      }
+                    }}
+                    renderInput={(params) => (
+                      <TextField {...params} label="Select Partner" placeholder="Search partners..." size="small" />
+                    )}
+                    sx={{ flex: 1 }}
+                    loading={partnerUsersLoading}
+                  />
+                </Box>
+
+                {partnerUsersLoading && (
+                  <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
+                    <CircularProgress size={24} />
+                  </Box>
+                )}
+
+                {!partnerUsersLoading && partnerUsers.length > 0 && (
+                  <>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                      <Typography variant="body2" color="text.secondary">
+                        {partnerUsers.length} users in this partner
+                      </Typography>
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                        <Button size="small" onClick={selectAllBulkUsers}>
+                          Select All ({partnerUsers.length})
+                        </Button>
+                        {selectedBulkUsers.size > 0 && (
+                          <Button size="small" onClick={clearBulkSelection}>
+                            Clear ({selectedBulkUsers.size})
+                          </Button>
+                        )}
+                      </Box>
+                    </Box>
+
+                    <Box sx={{ maxHeight: 400, overflowY: 'auto', mb: 3 }}>
+                      {partnerUsers.map((user) => (
+                        <Card
+                          key={user.contact_id}
+                          sx={{
+                            p: 1.5,
+                            mb: 1,
+                            bgcolor: selectedBulkUsers.has(user.contact_id) ? 'action.selected' : 'background.paper',
+                            cursor: 'pointer',
+                            '&:hover': { bgcolor: 'action.hover' }
+                          }}
+                          onClick={() => toggleBulkUser(user.contact_id)}
+                        >
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                            <Checkbox
+                              checked={selectedBulkUsers.has(user.contact_id)}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={() => toggleBulkUser(user.contact_id)}
+                              size="small"
+                            />
+                            <Box sx={{ flex: 1, minWidth: 0 }}>
+                              <Typography variant="body2" noWrap>
+                                {user.first_name} {user.last_name}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary" noWrap>
+                                {user.email}
+                              </Typography>
+                            </Box>
+                            <Box sx={{ display: 'flex', gap: 0.5 }}>
+                              {user.contact_is_active ? (
+                                <Chip size="small" label="Active" color="success" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                              ) : (
+                                <Chip size="small" label="Inactive" color="default" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                              )}
+                              {user.lms_id && (
+                                <Chip size="small" label="In LMS" color="info" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                              )}
+                            </Box>
+                          </Box>
+                        </Card>
+                      ))}
+                    </Box>
+                  </>
+                )}
+
+                {!partnerUsersLoading && bulkPartnerFilter && partnerUsers.length === 0 && (
+                  <Alert severity="info">
+                    No users found for this partner.
+                  </Alert>
+                )}
+              </Box>
+            )}
+
+            {/* Action Bar */}
+            {selectedBulkUsers.size > 0 && !bulkDeactivating && (
+              <Card sx={{ p: 2, bgcolor: 'error.50', border: '1px solid', borderColor: 'error.main' }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
+                  <Box>
+                    <Typography variant="subtitle2" color="error">
+                      {selectedBulkUsers.size} user(s) selected for deactivation
+                    </Typography>
+                    <FormControlLabel
+                      control={
+                        <Checkbox
+                          checked={bulkDeactivateInLms}
+                          onChange={(e) => setBulkDeactivateInLms(e.target.checked)}
+                          size="small"
+                        />
+                      }
+                      label={<Typography variant="body2">Also deactivate in LMS (Northpass)</Typography>}
+                    />
+                  </Box>
+                  <ActionButton
+                    variant="contained"
+                    color="error"
+                    onClick={executeBulkDeactivation}
+                    loading={bulkDeactivating}
+                    icon={<PersonOffIcon />}
+                  >
+                    Deactivate {selectedBulkUsers.size} User(s)
+                  </ActionButton>
+                </Box>
+              </Card>
+            )}
+
+            {/* Progress Indicator */}
+            {bulkDeactivating && (
+              <Card sx={{ p: 3, bgcolor: 'warning.50', border: '1px solid', borderColor: 'warning.main' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+                  <CircularProgress size={24} color="warning" />
+                  <Typography variant="subtitle1" color="warning.dark">
+                    Deactivating Users...
+                  </Typography>
+                </Box>
+                <Box sx={{ mb: 2 }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                    <Typography variant="body2" color="text.secondary">
+                      Progress: {bulkDeactivateProgress.current} of {bulkDeactivateProgress.total}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {bulkDeactivateProgress.total > 0
+                        ? Math.round((bulkDeactivateProgress.current / bulkDeactivateProgress.total) * 100)
+                        : 0}%
+                    </Typography>
+                  </Box>
+                  <LinearProgress
+                    variant="determinate"
+                    value={bulkDeactivateProgress.total > 0
+                      ? (bulkDeactivateProgress.current / bulkDeactivateProgress.total) * 100
+                      : 0}
+                    color="warning"
+                    sx={{ height: 8, borderRadius: 1 }}
+                  />
+                </Box>
+                {bulkDeactivateProgress.currentEmail && (
+                  <Typography variant="body2" color="text.secondary" noWrap>
+                    Processing: {bulkDeactivateProgress.currentEmail}
+                  </Typography>
+                )}
+              </Card>
+            )}
+
+            {/* Info */}
+            <Alert severity="warning" sx={{ mt: 3 }}>
+              <Typography variant="subtitle2">Bulk Deactivation Warning</Typography>
+              <Typography variant="body2">
+                This will permanently deactivate users in Impartner CRM (IsActive=No, Contact_Status=Inactive).
+                {bulkDeactivateInLms && ' Users will also be deactivated in Northpass LMS.'}
+              </Typography>
+            </Alert>
+          </SectionCard>
         </>
       )}
 
@@ -3611,16 +4763,22 @@ const UserManagement = () => {
         </DialogTitle>
         <DialogContent>
           <Box sx={{ pt: 1 }}>
-            <Autocomplete
-              options={Array.from(groups.values()).filter(g => g.name !== 'All Partners')}
-              getOptionLabel={(option) => option.name}
-              value={selectedGroupToAdd}
-              onChange={(_, newValue) => setSelectedGroupToAdd(newValue)}
-              renderInput={(params) => (
-                <TextField {...params} label="Select Group" placeholder="Search for a group..." />
-              )}
-              isOptionEqualToValue={(option, value) => option.id === value.id}
-            />
+            {dialogGroupsLoading ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+                <CircularProgress size={24} />
+              </Box>
+            ) : (
+              <Autocomplete
+                options={dialogGroupsList}
+                getOptionLabel={(option) => option?.name || ''}
+                value={selectedGroupToAdd}
+                onChange={(_, newValue) => setSelectedGroupToAdd(newValue)}
+                renderInput={(params) => (
+                  <TextField {...params} label="Select Group" placeholder="Search for a group..." />
+                )}
+                isOptionEqualToValue={(option, value) => option?.id === value?.id}
+              />
+            )}
           </Box>
         </DialogContent>
         <DialogActions>
@@ -3628,7 +4786,7 @@ const UserManagement = () => {
           <Button 
             variant="contained" 
             onClick={addUserToGroupAction}
-            disabled={!selectedGroupToAdd || addingToGroup}
+            disabled={!selectedGroupToAdd || addingToGroup || dialogGroupsLoading}
             startIcon={addingToGroup ? <CircularProgress size={16} /> : <GroupAddIcon />}
           >
             {addingToGroup ? 'Adding...' : 'Add to Group'}

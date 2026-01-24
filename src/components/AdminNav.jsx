@@ -41,6 +41,7 @@ import {
   School,
   ContactPage,
   Email,
+  Visibility,
 } from '@mui/icons-material';
 import { useAuth } from '../context/AuthContext';
 
@@ -61,7 +62,8 @@ const NAV_SECTIONS = [
     id: 'reports',
     label: 'Reports',
     items: [
-      { id: 'analytics', label: 'Analytics', path: '/admin/analytics', icon: <Timeline />, permission: { category: 'reports', action: 'view' } },
+      { id: 'analytics', label: 'Partner Analytics', path: '/admin/analytics', icon: <Timeline />, permission: { category: 'reports', action: 'view' } },
+      { id: 'widget-analytics', label: 'Dashboard Views', path: '/admin/widget-analytics', icon: <Visibility />, permission: { category: 'reports', action: 'view' } },
       { id: 'dbreports', label: 'Reports', path: '/admin/dbreports', icon: <Assessment />, permission: { category: 'reports', action: 'view' } },
       { id: 'leads', label: 'Lead Reports', path: '/admin/leads', icon: <ContactPage />, permission: { category: 'reports', action: 'view' } },
       { id: 'owners', label: 'Owner Report', path: '/admin/owners', icon: <Dashboard />, permission: { category: 'reports', action: 'view' } },

@@ -58,6 +58,7 @@ import {
   ActionButton,
   LoadingState,
   EmptyState,
+  InfoButton,
 } from './ui/NintexUI';
 
 // Tab Panel component
@@ -355,9 +356,9 @@ const CertificationCategories = () => {
       {/* Tabs */}
       <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
         <Tabs value={tabIndex} onChange={(e, v) => setTabIndex(v)}>
-          <Tab label="Courses" icon={<SchoolIcon />} iconPosition="start" />
-          <Tab label="Categorization Rules" icon={<RuleIcon />} iconPosition="start" />
-          <Tab label="Partner Stats" icon={<BusinessIcon />} iconPosition="start" />
+          <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Courses<InfoButton tooltip="View all courses with their certification category, NPCU value, and categorization status." /></Box>} icon={<SchoolIcon />} iconPosition="start" />
+          <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Categorization Rules<InfoButton tooltip="Define rules to automatically categorize courses based on name patterns (e.g., 'K2' → Nintex K2)." /></Box>} icon={<RuleIcon />} iconPosition="start" />
+          <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Partner Stats<InfoButton tooltip="View aggregated certification counts by category for each partner organization." /></Box>} icon={<BusinessIcon />} iconPosition="start" />
         </Tabs>
       </Box>
 

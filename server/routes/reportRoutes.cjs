@@ -30,33 +30,23 @@ router.get('/partner-npcu', async (req, res) => {
     if (!forceRefresh && isCacheValid('partner-npcu')) {
       return res.json(reportCache['partner-npcu'].data);
     }
+    // OPTIMIZED: Use partner_npcu_cache instead of expensive 5-table JOIN
     const report = await query(`
-      SELECT 
+      SELECT
+        p.id,
         p.account_name,
         p.partner_tier,
         p.account_region,
         p.account_owner,
-        COUNT(DISTINCT c.id) as contact_count,
-        COUNT(DISTINCT CASE WHEN c.lms_user_id IS NOT NULL THEN c.id END) as lms_users,
-        -- Only count NPCU from non-expired certifications
-        SUM(CASE 
-          WHEN e.status = 'completed' AND c.npcu_value > 0 
-               AND (e.expires_at IS NULL OR e.expires_at > NOW()) 
-          THEN c.npcu_value 
-          ELSE 0 
-        END) as total_npcu,
-        -- Only count non-expired certifications
-        COUNT(DISTINCT CASE 
-          WHEN e.status = 'completed' AND c.is_certification = 1 
-               AND (e.expires_at IS NULL OR e.expires_at > NOW()) 
-          THEN e.id 
-        END) as certifications
+        (SELECT COUNT(*) FROM contacts ct WHERE ct.partner_id = p.id) as contact_count,
+        COALESCE(g.user_count, 0) as lms_users,
+        COALESCE(nc.active_npcu, 0) as total_npcu,
+        COALESCE(nc.total_certifications, 0) as certifications,
+        COALESCE(nc.certified_users, 0) as certified_users
       FROM partners p
-      LEFT JOIN contacts ct ON ct.partner_id = p.id
-      LEFT JOIN lms_users u ON u.id = ct.lms_user_id
-      LEFT JOIN lms_enrollments e ON e.user_id = u.id
-      LEFT JOIN lms_courses c ON c.id = e.course_id
-      GROUP BY p.id
+      LEFT JOIN lms_groups g ON g.partner_id = p.id
+      LEFT JOIN partner_npcu_cache nc ON nc.partner_id = p.id
+      WHERE p.is_active = TRUE
       ORDER BY total_npcu DESC
     `);
     setCache('partner-npcu', report);
@@ -69,11 +59,12 @@ router.get('/partner-npcu', async (req, res) => {
 router.get('/certification-gaps', async (req, res) => {
   try {
     const forceRefresh = req.query.refresh === 'true';
-    if (!forceRefresh && isCacheValid('certification-gaps')) {
-      return res.json(reportCache['certification-gaps'].data);
-    }
     const { tier } = req.query;
-    
+    const cacheKey = `certification-gaps-${tier || 'all'}`;
+    if (!forceRefresh && isCacheValid(cacheKey)) {
+      return res.json(reportCache[cacheKey].data);
+    }
+
     // Fetch tier requirements from database
     const tiers = await query('SELECT name, npcu_required FROM partner_tiers WHERE is_active = TRUE');
     const tierRequirements = {};
@@ -89,19 +80,18 @@ router.get('/certification-gaps', async (req, res) => {
       tierRequirements['Aggregator'] = 5;
     }
 
+    // OPTIMIZED: Use partner_npcu_cache instead of expensive 5-table JOIN
     let sql = `
-      SELECT 
+      SELECT
         p.id,
         p.account_name,
         p.partner_tier,
         p.account_region,
-        COALESCE(SUM(CASE WHEN e.status = 'completed' AND c.npcu_value > 0 THEN c.npcu_value ELSE 0 END), 0) as current_npcu
+        p.account_owner,
+        COALESCE(nc.active_npcu, 0) as current_npcu
       FROM partners p
-      LEFT JOIN contacts ct ON ct.partner_id = p.id
-      LEFT JOIN lms_users u ON u.id = ct.lms_user_id
-      LEFT JOIN lms_enrollments e ON e.user_id = u.id
-      LEFT JOIN lms_courses c ON c.id = e.course_id
-      WHERE 1=1
+      LEFT JOIN partner_npcu_cache nc ON nc.partner_id = p.id
+      WHERE p.is_active = TRUE
     `;
     const params = [];
 
@@ -110,7 +100,7 @@ router.get('/certification-gaps', async (req, res) => {
       params.push(tier);
     }
 
-    sql += ' GROUP BY p.id ORDER BY p.partner_tier, current_npcu';
+    sql += ' ORDER BY p.partner_tier, current_npcu';
 
     const results = await query(sql, params);
     const report = results.map(r => ({
@@ -118,7 +108,7 @@ router.get('/certification-gaps', async (req, res) => {
       required_npcu: tierRequirements[r.partner_tier] || 0,
       npcu_gap: Math.max(0, (tierRequirements[r.partner_tier] || 0) - r.current_npcu)
     }));
-    setCache('certification-gaps', report);
+    setCache(cacheKey, report);
     res.json(report);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -128,10 +118,12 @@ router.get('/certification-gaps', async (req, res) => {
 router.get('/partner-leaderboard', async (req, res) => {
   try {
     const forceRefresh = req.query.refresh === 'true';
-    if (!forceRefresh && isCacheValid('partner-leaderboard')) {
-      return res.json(reportCache['partner-leaderboard'].data);
-    }
     const { tier, region, limit = 50 } = req.query;
+    // Cache key must include filters to avoid returning wrong cached data
+    const cacheKey = `partner-leaderboard-${tier || 'all'}-${region || 'all'}-${limit}`;
+    if (!forceRefresh && isCacheValid(cacheKey)) {
+      return res.json(reportCache[cacheKey].data);
+    }
     
     let sql = `
       SELECT 
@@ -148,7 +140,7 @@ router.get('/partner-leaderboard', async (req, res) => {
       FROM partners p
       LEFT JOIN lms_groups g ON g.partner_id = p.id
       LEFT JOIN partner_npcu_cache nc ON nc.partner_id = p.id
-      WHERE 1=1
+      WHERE p.is_active = TRUE
     `;
     const params = [];
     if (tier) {
@@ -164,7 +156,7 @@ router.get('/partner-leaderboard', async (req, res) => {
     params.push(parseInt(limit));
     
     const results = await query(sql, params);
-    setCache('partner-leaderboard', results);
+    setCache(cacheKey, results);
     res.json(results);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -430,7 +422,7 @@ router.get('/user-certifications', async (req, res) => {
     const { partnerId, tier, region, search, limit = 1000, offset = 0 } = req.query;
     
     let sql = `
-      SELECT 
+      SELECT
         c.id as contact_id,
         c.email,
         c.first_name,
@@ -439,21 +431,22 @@ router.get('/user-certifications', async (req, res) => {
         p.account_name,
         p.partner_tier,
         p.account_region,
+        p.is_active as partner_is_active,
         u.id as lms_user_id,
         u.status as lms_status,
         COUNT(DISTINCT CASE WHEN e.status = 'completed' THEN e.id END) as completed_courses,
         -- Only count non-expired certifications
-        COUNT(DISTINCT CASE 
-          WHEN e.status = 'completed' AND co.is_certification = 1 
-               AND (e.expires_at IS NULL OR e.expires_at > NOW()) 
-          THEN e.id 
+        COUNT(DISTINCT CASE
+          WHEN e.status = 'completed' AND co.is_certification = 1
+               AND (e.expires_at IS NULL OR e.expires_at > NOW())
+          THEN e.id
         END) as certifications,
         -- Only count NPCU from non-expired certifications
-        COALESCE(SUM(CASE 
-          WHEN e.status = 'completed' AND co.npcu_value > 0 
-               AND (e.expires_at IS NULL OR e.expires_at > NOW()) 
-          THEN co.npcu_value 
-          ELSE 0 
+        COALESCE(SUM(CASE
+          WHEN e.status = 'completed' AND co.npcu_value > 0
+               AND (e.expires_at IS NULL OR e.expires_at > NOW())
+          THEN co.npcu_value
+          ELSE 0
         END), 0) as total_npcu,
         MAX(e.completed_at) as last_completion
       FROM contacts c
@@ -483,8 +476,8 @@ router.get('/user-certifications', async (req, res) => {
       params.push(term, term, term, term);
     }
 
-    sql += ' GROUP BY c.id, c.email, c.first_name, c.last_name, c.title, p.account_name, p.partner_tier, p.account_region, u.id, u.status';
-    sql += ' ORDER BY total_npcu DESC, p.account_name';
+    sql += ' GROUP BY c.id, c.email, c.first_name, c.last_name, c.title, p.account_name, p.partner_tier, p.account_region, p.is_active, u.id, u.status';
+    sql += ' ORDER BY p.is_active DESC, total_npcu DESC, p.account_name';
     sql += ' LIMIT ? OFFSET ?';
     params.push(parseInt(limit), parseInt(offset));
 
@@ -501,7 +494,7 @@ router.get('/contacts-not-in-lms', async (req, res) => {
     const { tier, region, owner, excludePersonal, limit = 1000, offset = 0 } = req.query;
     
     let sql = `
-      SELECT 
+      SELECT
         c.id,
         c.email,
         c.first_name,
@@ -510,7 +503,8 @@ router.get('/contacts-not-in-lms', async (req, res) => {
         p.account_name,
         p.partner_tier,
         p.account_region,
-        p.account_owner
+        p.account_owner,
+        p.is_active as partner_is_active
       FROM contacts c
       INNER JOIN partners p ON p.id = c.partner_id
       WHERE c.lms_user_id IS NULL
@@ -536,7 +530,7 @@ router.get('/contacts-not-in-lms', async (req, res) => {
                AND c.email NOT LIKE '%@outlook.com'`;
     }
 
-    sql += ' ORDER BY p.partner_tier, p.account_name, c.last_name';
+    sql += ' ORDER BY p.is_active DESC, p.partner_tier, p.account_name, c.last_name';
     sql += ' LIMIT ? OFFSET ?';
     params.push(parseInt(limit), parseInt(offset));
 
@@ -555,19 +549,20 @@ router.get('/partners-without-groups', async (req, res) => {
       return res.json(reportCache['partners-without-groups'].data);
     }
     const results = await query(`
-      SELECT 
+      SELECT
         p.id,
         p.account_name,
         p.partner_tier,
         p.account_region,
         p.account_owner,
+        p.is_active,
         COUNT(DISTINCT c.id) as contact_count
       FROM partners p
       LEFT JOIN contacts c ON c.partner_id = p.id
       LEFT JOIN lms_groups g ON g.partner_id = p.id
       WHERE g.id IS NULL
       GROUP BY p.id
-      ORDER BY p.partner_tier, p.account_name
+      ORDER BY p.is_active DESC, p.partner_tier, p.account_name
     `);
     setCache('partners-without-groups', results);
     res.json(results);
@@ -655,12 +650,13 @@ router.get('/owner-accounts', async (req, res) => {
     }
     
     const results = await query(`
-      SELECT 
+      SELECT
         p.id,
         p.account_name,
         p.partner_tier,
         p.account_region,
         p.account_owner,
+        p.is_active,
         p.primary_user_name,
         p.primary_user_email,
         p.salesforce_id,
@@ -676,7 +672,7 @@ router.get('/owner-accounts', async (req, res) => {
       LEFT JOIN lms_groups g ON g.partner_id = p.id
       LEFT JOIN partner_npcu_cache nc ON nc.partner_id = p.id
       WHERE p.account_owner = ?
-      ORDER BY p.account_name
+      ORDER BY p.is_active DESC, p.account_name
     `, [owner]);
     
     setCache(cacheKey, results);
@@ -1671,6 +1667,359 @@ router.post('/partner-users/send-bulk-reports', async (req, res) => {
     });
   } catch (error) {
     console.error('Bulk send error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// Partner User List for PAM Export
+// ============================================
+
+// Get all users for a specific partner with CRM and LMS status
+router.get('/partner-users-export/:partnerId', async (req, res) => {
+  try {
+    const { partnerId } = req.params;
+
+    // Get partner info
+    const [partner] = await query(`
+      SELECT id, account_name, partner_tier, account_region, account_owner, is_active
+      FROM partners WHERE id = ?
+    `, [partnerId]);
+
+    if (!partner) {
+      return res.status(404).json({ error: 'Partner not found' });
+    }
+
+    // Get all contacts/users for this partner with their CRM and LMS status
+    // OPTIMIZED: Use LEFT JOIN with aggregation instead of correlated subqueries
+    const users = await query(`
+      SELECT
+        c.id as contact_id,
+        c.email,
+        c.first_name,
+        c.last_name,
+        CONCAT(COALESCE(c.first_name, ''), ' ', COALESCE(c.last_name, '')) as full_name,
+        c.title,
+        c.is_active as crm_active,
+        c.impartner_id,
+        c.lms_user_id,
+        u.id as lms_id,
+        u.email as lms_email,
+        u.status as lms_status,
+        u.is_active as lms_active,
+        u.deactivated_at as lms_deactivated_at,
+        u.last_active_at,
+        u.created_at_lms as lms_created_at,
+        COALESCE(cert_stats.npcu_earned, 0) as npcu_earned,
+        COALESCE(cert_stats.certifications, 0) as certifications
+      FROM contacts c
+      LEFT JOIN lms_users u ON u.id = c.lms_user_id
+      LEFT JOIN (
+        SELECT
+          e.user_id,
+          SUM(CASE WHEN course.npcu_value > 0 THEN course.npcu_value ELSE 0 END) as npcu_earned,
+          COUNT(CASE WHEN course.is_certification = 1 THEN 1 END) as certifications
+        FROM lms_enrollments e
+        JOIN lms_courses course ON course.id = e.course_id
+        WHERE e.status = 'completed'
+          AND (e.expires_at IS NULL OR e.expires_at > NOW())
+        GROUP BY e.user_id
+      ) cert_stats ON cert_stats.user_id = u.id
+      WHERE c.partner_id = ?
+      ORDER BY c.last_name, c.first_name
+    `, [partnerId]);
+
+    // Format statuses for readability
+    const formattedUsers = users.map(user => ({
+      ...user,
+      crm_status: user.crm_active ? 'Active' : 'Inactive',
+      lms_status_display: !user.lms_id
+        ? 'Not Registered'
+        : (user.lms_active ? 'Active' : 'Deactivated'),
+      in_lms: !!user.lms_id
+    }));
+
+    res.json({
+      partner,
+      users: formattedUsers,
+      summary: {
+        total: users.length,
+        crmActive: users.filter(u => u.crm_active).length,
+        crmInactive: users.filter(u => !u.crm_active).length,
+        inLms: users.filter(u => u.lms_id).length,
+        lmsActive: users.filter(u => u.lms_id && u.lms_active).length,
+        lmsDeactivated: users.filter(u => u.lms_id && !u.lms_active).length,
+        notInLms: users.filter(u => !u.lms_id).length
+      }
+    });
+  } catch (error) {
+    console.error('Partner users export error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// Regional Leaderboard with Smart Ranking
+// Use case: Find partners with specific expertise (e.g., K2 in Germany)
+// Formula: Score = CategoryCerts × sqrt(CertRate) × ln(TotalUsers + 10)
+// ============================================
+
+router.get('/regional-leaderboard', async (req, res) => {
+  try {
+    const forceRefresh = req.query.refresh === 'true';
+    const { region, country, category, tier, limit = 50 } = req.query;
+    const cacheKey = `regional-leaderboard-${region || 'all'}-${country || 'all'}-${category || 'all'}-${tier || 'all'}`;
+
+    if (!forceRefresh && isCacheValid(cacheKey)) {
+      return res.json(reportCache[cacheKey].data);
+    }
+
+    // Build WHERE conditions
+    let conditions = ['p.is_active = TRUE'];
+    const params = [];
+
+    if (region) {
+      conditions.push('p.account_region = ?');
+      params.push(region);
+    }
+    if (country) {
+      conditions.push('p.country = ?');
+      params.push(country);
+    }
+    if (tier) {
+      conditions.push('p.partner_tier = ?');
+      params.push(tier);
+    }
+
+    const whereClause = conditions.join(' AND ');
+
+    // Main query with certification category breakdown
+    // Uses partner's denormalized cert counts for speed, with category breakdown from enrollments
+    const sql = `
+      SELECT
+        p.id,
+        p.account_name,
+        p.partner_tier,
+        p.account_region,
+        p.country,
+        p.account_owner,
+        -- User counts
+        (SELECT COUNT(*) FROM contacts ct WHERE ct.partner_id = p.id AND ct.is_active = TRUE) as crm_users,
+        COALESCE(g.user_count, 0) as lms_users,
+        -- Overall stats from cache
+        COALESCE(nc.active_npcu, 0) as total_npcu,
+        COALESCE(nc.total_certifications, 0) as total_certs,
+        COALESCE(nc.certified_users, 0) as certified_users,
+        -- Denormalized category counts from partners table (fast)
+        COALESCE(p.cert_count_nintex_ce, 0) as ce_certs,
+        COALESCE(p.cert_count_nintex_k2, 0) as k2_certs,
+        COALESCE(p.cert_count_nintex_salesforce, 0) as salesforce_certs,
+        COALESCE(p.cert_count_go_to_market, 0) as gtm_certs
+      FROM partners p
+      LEFT JOIN lms_groups g ON g.partner_id = p.id
+      LEFT JOIN partner_npcu_cache nc ON nc.partner_id = p.id
+      WHERE ${whereClause}
+    `;
+
+    const partners = await query(sql, params);
+
+    // Calculate smart scores for each partner
+    const scoredPartners = partners.map(p => {
+      const totalUsers = Math.max(p.crm_users, p.lms_users, 1); // At least 1 to avoid division by zero
+      const certRate = p.certified_users / totalUsers;
+      const scaleFactor = Math.log(totalUsers + 10); // Diminishing returns for size
+
+      // Calculate category-specific scores
+      const categoryScores = {
+        ce: p.ce_certs * Math.sqrt(certRate) * scaleFactor,
+        k2: p.k2_certs * Math.sqrt(certRate) * scaleFactor,
+        salesforce: p.salesforce_certs * Math.sqrt(certRate) * scaleFactor,
+        gtm: p.gtm_certs * Math.sqrt(certRate) * scaleFactor
+      };
+
+      // Overall score (sum of all category scores OR use specific category if filtered)
+      let primaryScore;
+      let categoryLabel = 'Overall';
+      if (category) {
+        const catKey = category.toLowerCase().replace('_', '');
+        primaryScore = categoryScores[catKey] || categoryScores[category] || 0;
+        categoryLabel = category;
+      } else {
+        primaryScore = categoryScores.ce + categoryScores.k2 + categoryScores.salesforce + categoryScores.gtm;
+      }
+
+      return {
+        ...p,
+        cert_rate: Math.round(certRate * 1000) / 10, // Percentage with 1 decimal
+        scale_factor: Math.round(scaleFactor * 100) / 100,
+        category_scores: categoryScores,
+        score: Math.round(primaryScore * 100) / 100,
+        score_category: categoryLabel
+      };
+    });
+
+    // Sort by score descending and limit
+    const sortedPartners = scoredPartners
+      .filter(p => p.score > 0 || !category) // If category filtered, only show partners with that category
+      .sort((a, b) => b.score - a.score)
+      .slice(0, parseInt(limit));
+
+    // Add rank
+    sortedPartners.forEach((p, idx) => {
+      p.rank = idx + 1;
+    });
+
+    // Build summary stats
+    const summary = {
+      total_partners: partners.length,
+      partners_with_certs: partners.filter(p => p.total_certs > 0).length,
+      avg_cert_rate: Math.round(
+        (partners.reduce((sum, p) => sum + (p.certified_users / Math.max(p.crm_users, p.lms_users, 1)), 0) / partners.length) * 1000
+      ) / 10,
+      total_ce: partners.reduce((sum, p) => sum + p.ce_certs, 0),
+      total_k2: partners.reduce((sum, p) => sum + p.k2_certs, 0),
+      total_salesforce: partners.reduce((sum, p) => sum + p.salesforce_certs, 0),
+      total_gtm: partners.reduce((sum, p) => sum + p.gtm_certs, 0),
+      filters: { region, country, category, tier }
+    };
+
+    const result = {
+      partners: sortedPartners,
+      summary,
+      scoring: {
+        formula: 'Score = CategoryCerts × √(CertRate) × ln(TotalUsers + 10)',
+        explanation: 'Balances absolute certification count with engagement rate and partner size'
+      }
+    };
+
+    setCache(cacheKey, result);
+    res.json(result);
+  } catch (error) {
+    console.error('Regional leaderboard error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get available countries for a region (for cascading filter)
+router.get('/regional-leaderboard/countries', async (req, res) => {
+  try {
+    const { region } = req.query;
+
+    let sql = `
+      SELECT DISTINCT country, COUNT(*) as partner_count
+      FROM partners
+      WHERE is_active = TRUE
+        AND country IS NOT NULL AND country != ''
+    `;
+    const params = [];
+
+    if (region) {
+      sql += ' AND account_region = ?';
+      params.push(region);
+    }
+
+    sql += ' GROUP BY country ORDER BY partner_count DESC, country';
+
+    const countries = await query(sql, params);
+    res.json(countries);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get category breakdown for a specific partner (detail view)
+router.get('/regional-leaderboard/partner/:partnerId', async (req, res) => {
+  try {
+    const { partnerId } = req.params;
+
+    // Get partner basic info
+    const [partner] = await query(`
+      SELECT
+        p.id,
+        p.account_name,
+        p.partner_tier,
+        p.account_region,
+        p.country,
+        p.account_owner,
+        p.primary_user_name,
+        p.primary_user_email,
+        (SELECT COUNT(*) FROM contacts ct WHERE ct.partner_id = p.id AND ct.is_active = TRUE) as crm_users,
+        COALESCE(g.user_count, 0) as lms_users,
+        COALESCE(nc.active_npcu, 0) as total_npcu,
+        COALESCE(nc.total_certifications, 0) as total_certs,
+        COALESCE(nc.certified_users, 0) as certified_users
+      FROM partners p
+      LEFT JOIN lms_groups g ON g.partner_id = p.id
+      LEFT JOIN partner_npcu_cache nc ON nc.partner_id = p.id
+      WHERE p.id = ?
+    `, [partnerId]);
+
+    if (!partner) {
+      return res.status(404).json({ error: 'Partner not found' });
+    }
+
+    // Get detailed certification breakdown by category and course
+    const certDetails = await query(`
+      SELECT
+        co.certification_category,
+        co.name as course_name,
+        co.npcu_value,
+        COUNT(DISTINCT e.id) as completions,
+        COUNT(DISTINCT e.user_id) as unique_users
+      FROM lms_enrollments e
+      INNER JOIN lms_courses co ON co.id = e.course_id AND co.npcu_value > 0
+      INNER JOIN lms_group_members gm ON gm.user_id = e.user_id
+      INNER JOIN lms_groups g ON g.id = gm.group_id AND g.partner_id = ?
+      WHERE e.status = 'completed'
+        AND (e.expires_at IS NULL OR e.expires_at > NOW())
+      GROUP BY co.id, co.certification_category, co.name, co.npcu_value
+      ORDER BY co.certification_category, completions DESC
+    `, [partnerId]);
+
+    // Group by category
+    const byCategory = {};
+    certDetails.forEach(cert => {
+      const cat = cert.certification_category || 'other';
+      if (!byCategory[cat]) {
+        byCategory[cat] = {
+          category: cat,
+          total_certs: 0,
+          total_npcu: 0,
+          courses: []
+        };
+      }
+      byCategory[cat].total_certs += cert.completions;
+      byCategory[cat].total_npcu += cert.npcu_value * cert.completions;
+      byCategory[cat].courses.push(cert);
+    });
+
+    // Get certified users list
+    const certifiedUsers = await query(`
+      SELECT
+        u.id,
+        u.email,
+        u.first_name,
+        u.last_name,
+        COUNT(DISTINCT e.id) as cert_count,
+        SUM(co.npcu_value) as total_npcu
+      FROM lms_users u
+      INNER JOIN lms_group_members gm ON gm.user_id = u.id
+      INNER JOIN lms_groups g ON g.id = gm.group_id AND g.partner_id = ?
+      INNER JOIN lms_enrollments e ON e.user_id = u.id AND e.status = 'completed'
+      INNER JOIN lms_courses co ON co.id = e.course_id AND co.npcu_value > 0
+      WHERE (e.expires_at IS NULL OR e.expires_at > NOW())
+      GROUP BY u.id
+      ORDER BY total_npcu DESC
+      LIMIT 20
+    `, [partnerId]);
+
+    res.json({
+      partner,
+      categories: Object.values(byCategory),
+      top_certified_users: certifiedUsers
+    });
+  } catch (error) {
+    console.error('Partner detail error:', error);
     res.status(500).json({ error: error.message });
   }
 });

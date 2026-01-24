@@ -19,7 +19,7 @@ import {
   Groups, Map, Person, Warning, CheckCircle, Star, TrendingUp as Rocket,
   Info
 } from '@mui/icons-material';
-import { PageHeader, PageContent, StatCard, StatsRow, ActionButton } from './ui/NintexUI';
+import { PageHeader, PageContent, StatCard, StatsRow, ActionButton, InfoButton } from './ui/NintexUI';
 import './AnalyticsDashboard.css';
 
 const API_BASE = '/api/db';
@@ -268,7 +268,7 @@ export default function AnalyticsDashboard() {
   const [tabLoading, setTabLoading] = useState(false); // Loading state for tab-specific data
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState(0);
-  const [monthRange, setMonthRange] = useState(12);
+  const [monthRange, setMonthRange] = useState(24);
   
   // Track which tabs have been loaded (for lazy loading)
   const [loadedTabs, setLoadedTabs] = useState(new Set([0])); // Tab 0 loads with initial
@@ -726,14 +726,14 @@ export default function AnalyticsDashboard() {
             variant="scrollable"
             scrollButtons="auto"
           >
-            <Tab label="Monthly Trends" icon={<CalendarMonth />} iconPosition="start" />
-            <Tab label="Weekly Activity" icon={<BarChart />} iconPosition="start" />
-            <Tab label="Compliance" icon={<Assessment />} iconPosition="start" />
-            <Tab label="Partner Engagement" icon={<Speed />} iconPosition="start" />
-            <Tab label="Tier Progression" icon={<Rocket />} iconPosition="start" />
-            <Tab label="User Segments" icon={<Groups />} iconPosition="start" />
-            <Tab label="Regional" icon={<Map />} iconPosition="start" />
-            <Tab label="Owner Performance" icon={<Person />} iconPosition="start" />
+            <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Monthly Trends<InfoButton tooltip="Month-by-month breakdown of users, enrollments, completions, and certifications. Includes MoM (month-over-month) changes." /></Box>} icon={<CalendarMonth />} iconPosition="start" />
+            <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Weekly Activity<InfoButton tooltip="Week-by-week activity breakdown showing enrollments, completions, and certifications. Good for spotting recent trends." /></Box>} icon={<BarChart />} iconPosition="start" />
+            <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Compliance<InfoButton tooltip="Partner compliance status by tier. Shows which partners meet their tier requirements and identifies gaps." /></Box>} icon={<Assessment />} iconPosition="start" />
+            <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Partner Engagement<InfoButton tooltip="Engagement scores and metrics by partner. Higher scores indicate active learning and certification progress." /></Box>} icon={<Speed />} iconPosition="start" />
+            <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Tier Progression<InfoButton tooltip="Partners approaching tier upgrades or at risk of downgrade. Based on NPCU credits vs tier requirements." /></Box>} icon={<Rocket />} iconPosition="start" />
+            <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>User Segments<InfoButton tooltip="LMS users segmented by activity level: Active (30 days), Recent (90 days), Lapsed, Dormant, and Never Active." /></Box>} icon={<Groups />} iconPosition="start" />
+            <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Regional<InfoButton tooltip="Performance comparison across geographic regions. Shows users, completion rates, and certifications by region." /></Box>} icon={<Map />} iconPosition="start" />
+            <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Owner Performance<InfoButton tooltip="Account owner portfolio metrics. Shows partner counts, activation rates, and LMS adoption by owner." /></Box>} icon={<Person />} iconPosition="start" />
           </Tabs>
           
           {/* Tab loading indicator */}

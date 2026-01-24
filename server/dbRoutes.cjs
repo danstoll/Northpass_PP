@@ -922,19 +922,21 @@ router.post('/users/create-lms', async (req, res) => {
 });
 
 /**
- * Create contact in CRM (local database) 
+ * Create contact in CRM (Impartner + local database) 
  * POST /api/db/users/create-crm
- * Body: { email, firstName, lastName, partnerId, title? }
+ * Body: { email, firstName, lastName, partnerId, title?, pushToImpartner? }
+ * 
+ * If pushToImpartner is true (default), also creates user in Impartner PRM
  */
 router.post('/users/create-crm', async (req, res) => {
   try {
-    const { email, firstName, lastName, partnerId, title } = req.body;
+    const { email, firstName, lastName, partnerId, title, pushToImpartner = true } = req.body;
     
     if (!email) {
       return res.status(400).json({ error: 'Email is required' });
     }
 
-    // Check if contact already exists
+    // Check if contact already exists locally
     const [existingContact] = await query('SELECT id, email FROM contacts WHERE LOWER(email) = ?', [email.toLowerCase()]);
     if (existingContact) {
       return res.status(409).json({ 
@@ -946,22 +948,115 @@ router.post('/users/create-crm', async (req, res) => {
     // Get partner info if specified
     let partnerInfo = null;
     if (partnerId) {
-      const [partner] = await query('SELECT id, account_name, partner_tier FROM partners WHERE id = ?', [partnerId]);
+      const [partner] = await query('SELECT id, account_name, partner_tier, impartner_id FROM partners WHERE id = ?', [partnerId]);
       partnerInfo = partner;
     }
 
     // Check if user exists in LMS to link
     const [lmsUser] = await query('SELECT id FROM lms_users WHERE LOWER(email) = ?', [email.toLowerCase()]);
 
-    // Create contact
+    let impartnerId = null;
+    let impartnerError = null;
+
+    // Push to Impartner if requested and partner has impartner_id
+    if (pushToImpartner && partnerInfo?.impartner_id) {
+      try {
+        const IMPARTNER_CONFIG = {
+          host: 'https://prod.impartner.live',
+          apiKey: 'H4nFg5b!TGS5FpkN6koWTKWxN7wjZBwFN@w&CW*LT8@ed26CJfE$nfqemN$%X2RK2n9VGqB&8htCf@gyZ@7#J9WR$2B8go6Y1z@fVECzrkGj8XinsWD!4C%E^o2DKypw',
+          tenantId: '1'
+        };
+
+        const impartnerResponse = await fetch(`${IMPARTNER_CONFIG.host}/api/objects/v1/User`, {
+          method: 'PUT',  // PUT is for create in Impartner API
+          headers: {
+            'Authorization': `prm-key ${IMPARTNER_CONFIG.apiKey}`,
+            'X-PRM-TenantId': IMPARTNER_CONFIG.tenantId,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            Email: email,
+            UserName: email,  // Required - use email as username
+            FirstName: firstName || '',
+            LastName: lastName || '',
+            AccountId: partnerInfo.impartner_id,
+            IsActive: true,
+            Title: title || ''
+          })
+        });
+
+        if (impartnerResponse.ok) {
+          const impartnerData = await impartnerResponse.json();
+          // Impartner PUT response: { data: { id: ..., ...}, success: true }
+          impartnerId = impartnerData.data?.id || impartnerData.Id || impartnerData.id;
+          console.log(`✅ Created user ${email} in Impartner with ID ${impartnerId}`);
+        } else {
+          const errorText = await impartnerResponse.text();
+          
+          // Check if user already exists (NOT_UNIQUE error) - look them up instead
+          if (errorText.includes('NOT_UNIQUE') || errorText.includes('not a unique value')) {
+            console.log(`⚠️ User ${email} already exists in Impartner, looking up...`);
+            try {
+              // Search for existing user by email
+              const searchResponse = await fetch(`${IMPARTNER_CONFIG.host}/api/objects/v1/User`, {
+                method: 'POST',  // POST is search in Impartner
+                headers: {
+                  'Authorization': `prm-key ${IMPARTNER_CONFIG.apiKey}`,
+                  'X-PRM-TenantId': IMPARTNER_CONFIG.tenantId,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  select: ['Id', 'Email', 'FirstName', 'LastName', 'AccountId'],
+                  where: [{ field: 'Email', op: '=', value: email }]
+                })
+              });
+              
+              if (searchResponse.ok) {
+                const searchData = await searchResponse.json();
+                if (searchData.data?.results?.length > 0) {
+                  impartnerId = searchData.data.results[0].id;
+                  console.log(`✅ Found existing user ${email} in Impartner with ID ${impartnerId}`);
+                }
+              }
+            } catch (searchErr) {
+              console.warn(`⚠️ Could not look up existing user ${email}: ${searchErr.message}`);
+            }
+          }
+          
+          if (!impartnerId) {
+            impartnerError = `Impartner API error (${impartnerResponse.status}): ${errorText}`;
+            console.warn(`⚠️ Failed to create user in Impartner: ${impartnerError}`);
+          }
+        }
+      } catch (impartnerErr) {
+        impartnerError = `Impartner connection error: ${impartnerErr.message}`;
+        console.warn(`⚠️ Impartner connection failed: ${impartnerErr.message}`);
+      }
+    }
+
+    // Create contact in local database (always)
     const result = await query(`
-      INSERT INTO contacts (email, first_name, last_name, title, partner_id, lms_user_id, is_active, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, TRUE, NOW())
-    `, [email.toLowerCase(), firstName || '', lastName || '', title || '', partnerId || null, lmsUser?.id || null]);
+      INSERT INTO contacts (email, first_name, last_name, title, partner_id, lms_user_id, impartner_id, is_active, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, NOW())
+    `, [
+      email.toLowerCase(), 
+      firstName || '', 
+      lastName || '', 
+      title || null,  // Use null instead of empty string for optional title
+      partnerId || null, 
+      lmsUser?.id || null, 
+      impartnerId || null
+    ]);
 
     res.json({
       success: true,
-      message: 'Contact created in CRM',
+      message: impartnerId 
+        ? 'Contact created in Impartner CRM and local database' 
+        : impartnerError 
+          ? `Contact created in local database (Impartner failed: ${impartnerError})`
+          : 'Contact created in local database',
+      pushedToImpartner: !!impartnerId,
+      impartnerError: impartnerError,
       contact: {
         id: result.insertId,
         email: email.toLowerCase(),
@@ -970,11 +1065,230 @@ router.post('/users/create-crm', async (req, res) => {
         title,
         partnerId,
         partnerName: partnerInfo?.account_name,
-        lmsUserId: lmsUser?.id || null
+        lmsUserId: lmsUser?.id || null,
+        impartnerId
       }
     });
   } catch (error) {
     console.error('Create CRM contact error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Bulk create CRM contacts in Impartner and local database
+ * POST /api/db/users/bulk-create-crm
+ * Body: { users: [{ email, firstName, lastName }], partnerId, pushToImpartner? }
+ */
+router.post('/users/bulk-create-crm', async (req, res) => {
+  try {
+    const { users, partnerId, pushToImpartner = true } = req.body;
+    
+    if (!users || !Array.isArray(users) || users.length === 0) {
+      return res.status(400).json({ error: 'users array is required' });
+    }
+    
+    if (!partnerId) {
+      return res.status(400).json({ error: 'partnerId is required' });
+    }
+
+    // Get partner info
+    const [partnerInfo] = await query('SELECT id, account_name, partner_tier, impartner_id FROM partners WHERE id = ?', [partnerId]);
+    if (!partnerInfo) {
+      return res.status(404).json({ error: 'Partner not found' });
+    }
+
+    const IMPARTNER_CONFIG = {
+      host: 'https://prod.impartner.live',
+      apiKey: 'H4nFg5b!TGS5FpkN6koWTKWxN7wjZBwFN@w&CW*LT8@ed26CJfE$nfqemN$%X2RK2n9VGqB&8htCf@gyZ@7#J9WR$2B8go6Y1z@fVECzrkGj8XinsWD!4C%E^o2DKypw',
+      tenantId: '1'
+    };
+
+    const results = {
+      success: 0,
+      failed: 0,
+      impartnerSuccess: 0,
+      localOnly: 0,
+      errors: [],
+      created: []
+    };
+
+    for (const user of users) {
+      const { email, firstName, lastName } = user;
+      
+      if (!email) {
+        results.failed++;
+        results.errors.push({ email: 'unknown', error: 'Email is required' });
+        continue;
+      }
+
+      try {
+        // Check if contact already exists locally
+        const [existingContact] = await query('SELECT id, email, impartner_id FROM contacts WHERE LOWER(email) = ?', [email.toLowerCase()]);
+        
+        // If contact exists but has no impartner_id, try to link them
+        if (existingContact && !existingContact.impartner_id && pushToImpartner && partnerInfo.impartner_id) {
+          console.log(`⚠️ Contact ${email} exists locally without impartner_id, attempting to link...`);
+          try {
+            // Search for existing user in Impartner
+            const searchResponse = await fetch(`${IMPARTNER_CONFIG.host}/api/objects/v1/User`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `prm-key ${IMPARTNER_CONFIG.apiKey}`,
+                'X-PRM-TenantId': IMPARTNER_CONFIG.tenantId,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                select: ['Id', 'Email', 'FirstName', 'LastName', 'AccountId'],
+                where: [{ field: 'Email', op: '=', value: email }]
+              })
+            });
+            
+            if (searchResponse.ok) {
+              const searchData = await searchResponse.json();
+              if (searchData.data?.results?.length > 0) {
+                const impartnerId = searchData.data.results[0].id;
+                await query('UPDATE contacts SET impartner_id = ? WHERE id = ?', [impartnerId, existingContact.id]);
+                console.log(`✅ Linked existing contact ${email} to Impartner ID ${impartnerId}`);
+                results.success++;
+                results.impartnerSuccess++;
+                results.created.push({ id: existingContact.id, email, impartnerId, linked: true });
+                continue;
+              }
+            }
+          } catch (searchErr) {
+            console.warn(`⚠️ Could not look up ${email} in Impartner: ${searchErr.message}`);
+          }
+          // If lookup failed, still count as failed
+          results.failed++;
+          results.errors.push({ email, error: 'Contact exists locally but could not find in Impartner' });
+          continue;
+        }
+        
+        if (existingContact) {
+          results.failed++;
+          results.errors.push({ email, error: 'Contact already exists' });
+          continue;
+        }
+
+        // Check if user exists in LMS to link
+        const [lmsUser] = await query('SELECT id FROM lms_users WHERE LOWER(email) = ?', [email.toLowerCase()]);
+
+        let impartnerId = null;
+        let impartnerError = null;
+
+        // Push to Impartner if requested and partner has impartner_id
+        if (pushToImpartner && partnerInfo.impartner_id) {
+          try {
+            const impartnerResponse = await fetch(`${IMPARTNER_CONFIG.host}/api/objects/v1/User`, {
+              method: 'PUT',  // PUT is for create in Impartner API
+              headers: {
+                'Authorization': `prm-key ${IMPARTNER_CONFIG.apiKey}`,
+                'X-PRM-TenantId': IMPARTNER_CONFIG.tenantId,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                Email: email,
+                UserName: email,  // Required - use email as username
+                FirstName: firstName || '',
+                LastName: lastName || '',
+                AccountId: partnerInfo.impartner_id,
+                IsActive: true
+              })
+            });
+
+            if (impartnerResponse.ok) {
+              const impartnerData = await impartnerResponse.json();
+              // Impartner PUT response: { data: { id: ..., ...}, success: true }
+              impartnerId = impartnerData.data?.id || impartnerData.Id || impartnerData.id;
+              console.log(`✅ Created user ${email} in Impartner with ID ${impartnerId}`);
+              results.impartnerSuccess++;
+            } else {
+              const errorText = await impartnerResponse.text();
+              
+              // Check if user already exists (NOT_UNIQUE error) - look them up instead
+              if (errorText.includes('NOT_UNIQUE') || errorText.includes('not a unique value')) {
+                console.log(`⚠️ User ${email} already exists in Impartner, looking up...`);
+                try {
+                  // Search for existing user by email
+                  const searchResponse = await fetch(`${IMPARTNER_CONFIG.host}/api/objects/v1/User`, {
+                    method: 'POST',  // POST is search in Impartner
+                    headers: {
+                      'Authorization': `prm-key ${IMPARTNER_CONFIG.apiKey}`,
+                      'X-PRM-TenantId': IMPARTNER_CONFIG.tenantId,
+                      'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                      select: ['Id', 'Email', 'FirstName', 'LastName', 'AccountId'],
+                      where: [{ field: 'Email', op: '=', value: email }]
+                    })
+                  });
+                  
+                  if (searchResponse.ok) {
+                    const searchData = await searchResponse.json();
+                    if (searchData.data?.results?.length > 0) {
+                      impartnerId = searchData.data.results[0].id;
+                      console.log(`✅ Found existing user ${email} in Impartner with ID ${impartnerId}`);
+                      results.impartnerSuccess++;
+                    }
+                  }
+                } catch (searchErr) {
+                  console.warn(`⚠️ Could not look up existing user ${email}: ${searchErr.message}`);
+                }
+              }
+              
+              if (!impartnerId) {
+                impartnerError = `Impartner API error (${impartnerResponse.status}): ${errorText}`;
+                console.warn(`⚠️ Failed to create user ${email} in Impartner: ${impartnerError}`);
+              }
+            }
+          } catch (impartnerErr) {
+            impartnerError = `Impartner connection error: ${impartnerErr.message}`;
+          }
+        }
+
+        // Create contact in local database
+        const dbResult = await query(`
+          INSERT INTO contacts (email, first_name, last_name, partner_id, lms_user_id, impartner_id, is_active, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, TRUE, NOW())
+        `, [
+          email.toLowerCase(), 
+          firstName || '', 
+          lastName || '', 
+          partnerId, 
+          lmsUser?.id || null, 
+          impartnerId || null
+        ]);
+
+        results.success++;
+        if (impartnerId) {
+          // Already counted in impartnerSuccess
+        } else if (impartnerError) {
+          results.localOnly++;
+        }
+        
+        results.created.push({
+          id: dbResult.insertId,
+          email: email.toLowerCase(),
+          impartnerId,
+          impartnerError
+        });
+
+      } catch (userError) {
+        results.failed++;
+        results.errors.push({ email, error: userError.message });
+      }
+    }
+
+    console.log(`✅ Bulk CRM creation complete: ${results.success} created (${results.impartnerSuccess} in Impartner), ${results.failed} failed`);
+
+    res.json({
+      success: true,
+      message: `Created ${results.success} contacts`,
+      results
+    });
+  } catch (error) {
+    console.error('Bulk CRM creation error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1401,7 +1715,7 @@ router.get('/lms/partner-domain-analysis', async (req, res) => {
   try {
     // First, get all partner domains
     const partners = await query(`
-      SELECT id, account_name, partner_tier, domains
+      SELECT id, account_name, partner_tier, domains, is_active
       FROM partners
       WHERE domains IS NOT NULL AND domains != '[]'
     `);
@@ -1415,7 +1729,8 @@ router.get('/lms/partner-domain-analysis', async (req, res) => {
           partnerDomainLookup.set(domain.toLowerCase(), {
             partnerId: p.id,
             partnerName: p.account_name,
-            partnerTier: p.partner_tier
+            partnerTier: p.partner_tier,
+            partnerIsActive: p.is_active === 1 || p.is_active === true
           });
         });
       }
@@ -1564,6 +1879,7 @@ router.get('/lms/partner-domain-analysis', async (req, res) => {
           matchedPartner: partnerInfo.partnerName,
           matchedPartnerId: partnerInfo.partnerId,
           partnerTier: partnerInfo.partnerTier,
+          partnerIsActive: partnerInfo.partnerIsActive,
           partnerGroupId: partnerGroup?.id || null,
           partnerGroupName: partnerGroup?.name || null,
           users: []
@@ -1628,6 +1944,66 @@ router.get('/lms/partner-domain-analysis', async (req, res) => {
     });
   } catch (error) {
     console.error('Partner domain analysis error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Disassociate a domain from a partner (remove domain from partner's domains array)
+ */
+router.post('/lms/disassociate-domain', async (req, res) => {
+  try {
+    const { domain, partnerId } = req.body;
+    
+    if (!domain || !partnerId) {
+      return res.status(400).json({ error: 'domain and partnerId are required' });
+    }
+    
+    // Get current partner domains
+    const [partner] = await query(
+      'SELECT id, account_name, domains FROM partners WHERE id = ?',
+      [partnerId]
+    );
+    
+    if (!partner) {
+      return res.status(404).json({ error: 'Partner not found' });
+    }
+    
+    // Parse current domains
+    let currentDomains = [];
+    if (partner.domains) {
+      currentDomains = typeof partner.domains === 'string' 
+        ? JSON.parse(partner.domains) 
+        : partner.domains;
+    }
+    
+    // Remove the domain (case-insensitive)
+    const domainLower = domain.toLowerCase();
+    const updatedDomains = currentDomains.filter(d => d.toLowerCase() !== domainLower);
+    
+    if (currentDomains.length === updatedDomains.length) {
+      return res.status(404).json({ error: `Domain "${domain}" not found in partner's domains` });
+    }
+    
+    // Update partner with new domains list
+    await query(
+      'UPDATE partners SET domains = ? WHERE id = ?',
+      [JSON.stringify(updatedDomains), partnerId]
+    );
+    
+    console.log(`✅ Disassociated domain "${domain}" from partner "${partner.account_name}" (ID: ${partnerId})`);
+    
+    res.json({
+      success: true,
+      message: `Domain "${domain}" removed from ${partner.account_name}`,
+      partnerName: partner.account_name,
+      domain,
+      previousDomainCount: currentDomains.length,
+      newDomainCount: updatedDomains.length,
+      remainingDomains: updatedDomains
+    });
+  } catch (error) {
+    console.error('Disassociate domain error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -2398,6 +2774,7 @@ router.get('/dashboard/group', async (req, res) => {
       group: {
         id: group.id,
         name: displayName,
+        partnerId: group.partner_id || null,  // For analytics tracking
         memberCount: users.length,        // Total LMS users in group
         certifiedCount: certifiedUsersOnly.length,  // Users with active certifications
         inProgressCount: inProgressUsersOnly.length,  // Users with in-progress but no certs
@@ -3125,8 +3502,19 @@ router.get('/tasks/:taskType', async (req, res) => {
   }
 });
 
-// Enable/disable a task
+// Enable/disable a task (POST toggle for backward compatibility)
 router.post('/tasks/:taskType/toggle', async (req, res) => {
+  try {
+    const { enabled } = req.body;
+    const task = await taskScheduler.setTaskEnabled(req.params.taskType, enabled);
+    res.json({ success: true, task });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Enable/disable a task (PUT enabled - used by EmailSchedules)
+router.put('/tasks/:taskType/enabled', async (req, res) => {
   try {
     const { enabled } = req.body;
     const task = await taskScheduler.setTaskEnabled(req.params.taskType, enabled);
@@ -3165,7 +3553,8 @@ router.put('/tasks/:taskType/config', async (req, res) => {
 // Update task interval
 router.put('/tasks/:taskType/interval', async (req, res) => {
   try {
-    const { intervalMinutes } = req.body;
+    // Accept both camelCase and snake_case for compatibility
+    const intervalMinutes = req.body.intervalMinutes || req.body.interval_minutes;
     if (!intervalMinutes || intervalMinutes < 1) {
       return res.status(400).json({ error: 'Invalid interval (minimum 1 minute)' });
     }
@@ -3185,6 +3574,78 @@ router.put('/tasks/:taskType/interval', async (req, res) => {
     const task = await taskScheduler.getTask(req.params.taskType);
     res.json({ success: true, task });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update task schedule (day and time for weekly reports)
+router.put('/tasks/:taskType/schedule', async (req, res) => {
+  try {
+    const { schedule_day, schedule_time } = req.body;
+
+    // Validate schedule_day (0-6, where 0=Sunday)
+    if (schedule_day !== null && schedule_day !== undefined) {
+      const day = parseInt(schedule_day);
+      if (isNaN(day) || day < 0 || day > 6) {
+        return res.status(400).json({ error: 'Invalid schedule_day (must be 0-6, where 0=Sunday)' });
+      }
+    }
+
+    // Validate schedule_time (HH:MM or HH:MM:SS format)
+    if (schedule_time) {
+      const timeRegex = /^([01]?[0-9]|2[0-3]):([0-5][0-9])(:[0-5][0-9])?$/;
+      if (!timeRegex.test(schedule_time)) {
+        return res.status(400).json({ error: 'Invalid schedule_time (must be HH:MM or HH:MM:SS format)' });
+      }
+    }
+
+    // Format time to include seconds if not present
+    let formattedTime = schedule_time;
+    if (schedule_time && !schedule_time.includes(':')) {
+      formattedTime = schedule_time + ':00';
+    } else if (schedule_time && schedule_time.split(':').length === 2) {
+      formattedTime = schedule_time + ':00';
+    }
+
+    // Update task with new schedule
+    const result = await query(`
+      UPDATE scheduled_tasks
+      SET schedule_day = ?,
+          schedule_time = ?,
+          updated_at = NOW()
+      WHERE task_type = ?
+    `, [schedule_day, formattedTime, req.params.taskType]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    // Recalculate next_run_at based on new schedule
+    const [task] = await query('SELECT * FROM scheduled_tasks WHERE task_type = ?', [req.params.taskType]);
+    if (task && task.schedule_day !== null && task.schedule_time) {
+      // Calculate next scheduled run time
+      const scheduleDay = parseInt(task.schedule_day) + 1; // MySQL DAYOFWEEK: 1=Sun, 2=Mon
+      await query(`
+        UPDATE scheduled_tasks
+        SET next_run_at = CASE
+          WHEN DAYOFWEEK(NOW()) = ? AND TIME(NOW()) < ?
+            THEN CONCAT(DATE(NOW()), ' ', ?)
+          WHEN DAYOFWEEK(NOW()) < ?
+            THEN CONCAT(DATE_ADD(DATE(NOW()), INTERVAL ? - DAYOFWEEK(NOW()) DAY), ' ', ?)
+          ELSE
+            CONCAT(DATE_ADD(DATE(NOW()), INTERVAL 7 - DAYOFWEEK(NOW()) + ? DAY), ' ', ?)
+        END
+        WHERE task_type = ?
+      `, [scheduleDay, task.schedule_time, task.schedule_time,
+          scheduleDay, scheduleDay, task.schedule_time,
+          scheduleDay, task.schedule_time,
+          req.params.taskType]);
+    }
+
+    const updatedTask = await taskScheduler.getTask(req.params.taskType);
+    res.json({ success: true, task: updatedTask });
+  } catch (error) {
+    console.error('Error updating task schedule:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -3240,6 +3701,20 @@ router.post('/tasks/:taskType/run', async (req, res) => {
       .catch(err => console.error(`Task ${req.params.taskType} failed:`, err.message));
     
     res.json({ success: true, message: 'Task started' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Trigger daily sync chain (orchestrated full sync)
+router.post('/tasks/daily-sync-chain/trigger', async (req, res) => {
+  try {
+    // Start the chain but don't wait for it (it takes 1-2 hours)
+    taskScheduler.runDailySyncChain()
+      .then(result => console.log('Daily sync chain completed:', result.status))
+      .catch(err => console.error('Daily sync chain failed:', err.message));
+
+    res.json({ success: true, message: 'Daily sync chain started. Check sync logs for progress.' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3484,23 +3959,34 @@ function getClientIp(req) {
 router.post('/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    
+
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password required' });
     }
-    
+
     // Gather metadata for login history
     const metadata = {
       ipAddress: getClientIp(req),
       userAgent: req.headers['user-agent']
     };
-    
+
     const result = await login(email, password, metadata);
-    
+
     if (!result.success) {
       return res.status(401).json({ error: result.error });
     }
-    
+
+    // Set nintex_viewer cookie for widget analytics tracking
+    // This identifies the viewer as a Nintex staff member when viewing partner dashboards
+    if (email && email.toLowerCase().endsWith('@nintex.com')) {
+      res.cookie('nintex_viewer', email, {
+        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+        httpOnly: false, // Accessible by JavaScript for tracking
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax'
+      });
+    }
+
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -3512,6 +3998,10 @@ router.post('/auth/logout', async (req, res) => {
   try {
     const token = req.headers.authorization?.replace('Bearer ', '');
     await logout(token);
+
+    // Clear the nintex_viewer cookie
+    res.clearCookie('nintex_viewer');
+
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });

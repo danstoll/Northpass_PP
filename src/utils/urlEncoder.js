@@ -67,11 +67,11 @@ export const generateEncodedUrl = (baseUrl, params) => {
 
 /**
  * Extracts parameters from current URL, handling both encoded and regular formats
- * @returns {Object} Object containing company/group name and tier
+ * @returns {Object} Object containing company/group name, tier, and viewer info
  */
 export const extractUrlParams = () => {
   const urlParams = new URLSearchParams(window.location.search);
-  
+
   // First, try to get encoded data parameter
   const encodedData = urlParams.get('data');
   if (encodedData) {
@@ -80,18 +80,23 @@ export const extractUrlParams = () => {
       return {
         groupName: decoded.group || decoded.company,
         tier: decoded.tier,
+        viewer: decoded.viewer || null,  // 'nintex', 'partner', or null
+        viewerEmail: decoded.viewerEmail || null,
         isEncoded: true
       };
     }
   }
-  
+
   // Fall back to regular parameters for backward compatibility
   const groupName = urlParams.get('group') || urlParams.get('company');
   const tier = urlParams.get('tier');
-  
+  const viewer = urlParams.get('viewer');  // Allow ?viewer=nintex as fallback
+
   return {
     groupName,
     tier,
+    viewer,
+    viewerEmail: null,
     isEncoded: false
   };
 };

@@ -32,6 +32,41 @@ function updateTaskProgress(taskType, stage, current, total, details = null) {
     taskInfo.progress = { stage, current, total, details, updatedAt: new Date() };
   }
 }
+
+/**
+ * Calculate next run time based on schedule_day and schedule_time
+ * @param {Object} task - Task with schedule_day (0-6, 0=Sun) and schedule_time (HH:MM:SS)
+ * @returns {string|null} SQL expression for next_run_at, or null to use interval_minutes
+ */
+function calculateNextScheduledRun(task) {
+  // If no schedule_day/schedule_time set, use interval-based scheduling
+  if (task.schedule_day === null || task.schedule_day === undefined || !task.schedule_time) {
+    return null;
+  }
+
+  const scheduleDay = parseInt(task.schedule_day); // 0=Sunday, 1=Monday, etc.
+  const scheduleTime = task.schedule_time; // HH:MM:SS format
+
+  // Calculate next occurrence of this day/time
+  // SQL: Find next occurrence of the specified day at the specified time
+  // DAYOFWEEK in MySQL: 1=Sunday, 2=Monday, ..., 7=Saturday
+  // We store 0=Sunday, 1=Monday, ..., 6=Saturday, so add 1 for MySQL
+  const mysqlDay = scheduleDay + 1;
+
+  // Calculate days until next occurrence
+  // If today is the scheduled day but time has passed, go to next week
+  return `
+    CASE
+      WHEN DAYOFWEEK(NOW()) = ${mysqlDay} AND TIME(NOW()) < '${scheduleTime}'
+        THEN CONCAT(DATE(NOW()), ' ', '${scheduleTime}')
+      WHEN DAYOFWEEK(NOW()) < ${mysqlDay}
+        THEN CONCAT(DATE_ADD(DATE(NOW()), INTERVAL ${mysqlDay} - DAYOFWEEK(NOW()) DAY), ' ', '${scheduleTime}')
+      ELSE
+        CONCAT(DATE_ADD(DATE(NOW()), INTERVAL 7 - DAYOFWEEK(NOW()) + ${mysqlDay} DAY), ' ', '${scheduleTime}')
+    END
+  `;
+}
+
 const CHECK_INTERVAL_MS = 60000; // Check every minute
 
 /**
@@ -203,16 +238,29 @@ async function runTask(task) {
     // Calculate duration
     const durationSeconds = Math.round((Date.now() - startTime) / 1000);
     
-    // Update success
-    await query(`
-      UPDATE scheduled_tasks SET
-        last_status = 'success',
-        last_error = NULL,
-        last_duration_seconds = ?,
-        run_count = run_count + 1,
-        next_run_at = DATE_ADD(NOW(), INTERVAL ? MINUTE)
-      WHERE id = ?
-    `, [durationSeconds, task.interval_minutes, task.id]);
+    // Update success - use scheduled day/time if configured, otherwise use interval
+    const scheduledNextRun = calculateNextScheduledRun(task);
+    if (scheduledNextRun) {
+      await query(`
+        UPDATE scheduled_tasks SET
+          last_status = 'success',
+          last_error = NULL,
+          last_duration_seconds = ?,
+          run_count = run_count + 1,
+          next_run_at = ${scheduledNextRun}
+        WHERE id = ?
+      `, [durationSeconds, task.id]);
+    } else {
+      await query(`
+        UPDATE scheduled_tasks SET
+          last_status = 'success',
+          last_error = NULL,
+          last_duration_seconds = ?,
+          run_count = run_count + 1,
+          next_run_at = DATE_ADD(NOW(), INTERVAL ? MINUTE)
+        WHERE id = ?
+      `, [durationSeconds, task.interval_minutes, task.id]);
+    }
     
     await query(`
       UPDATE task_run_history SET
@@ -392,7 +440,15 @@ async function executeTask(taskType, config) {
     // PAM Weekly Report - send reports to enabled PAMs
     case 'pam_weekly_report':
       return await runPamWeeklyReports(config);
-    
+
+    // Executive Weekly Report - send global rollup to configured recipients
+    case 'executive_weekly_report':
+      return await runExecutiveWeeklyReport(config);
+
+    // Daily Sync Chain - orchestrated full sync of all data
+    case 'daily_sync_chain':
+      return await runDailySyncChain(config);
+
     default:
       throw new Error(`Unknown task type: ${taskType}`);
   }
@@ -895,89 +951,92 @@ async function runSyncToImpartner(config) {
   
   try {
     // Step 1: Recalculate partner certification counts and NPCU
-    // Only include partners with valid tiers
+    // Use a single consolidated query instead of per-partner queries (N+1 optimization)
     const tierList = VALID_TIERS.map(t => `'${t}'`).join(',');
-    const partners = await query(`
-      SELECT p.id, p.account_name, g.id as group_id, p.cert_counts_updated_at,
-             p.cert_count_nintex_ce as prev_ce, p.cert_count_nintex_k2 as prev_k2,
-             p.cert_count_nintex_salesforce as prev_sf, p.cert_count_go_to_market as prev_gtm,
-             p.total_npcu as prev_npcu
+
+    // Single query to calculate all partner cert counts and NPCU at once
+    const partnerStats = await query(`
+      SELECT
+        p.id as partner_id,
+        COALESCE(SUM(CASE WHEN c.certification_category = 'nintex_ce' THEN 1 ELSE 0 END), 0) as cert_ce,
+        COALESCE(SUM(CASE WHEN c.certification_category = 'nintex_k2' THEN 1 ELSE 0 END), 0) as cert_k2,
+        COALESCE(SUM(CASE WHEN c.certification_category = 'nintex_salesforce' THEN 1 ELSE 0 END), 0) as cert_sf,
+        COALESCE(SUM(CASE WHEN c.certification_category = 'go_to_market' THEN 1 ELSE 0 END), 0) as cert_gtm,
+        COALESCE(SUM(c.npcu_value), 0) as total_npcu
       FROM partners p
-      LEFT JOIN lms_groups g ON g.partner_id = p.id
+      INNER JOIN lms_groups g ON g.partner_id = p.id
+      INNER JOIN lms_group_members gm ON gm.group_id = g.id
+      INNER JOIN lms_enrollments e ON e.user_id = gm.user_id
+      INNER JOIN lms_courses c ON c.id = e.course_id
+      WHERE p.partner_tier IN (${tierList})
+        AND p.is_active = TRUE
+        AND e.status = 'completed'
+        AND c.npcu_value > 0
+        AND (e.expires_at IS NULL OR e.expires_at > NOW())
+      GROUP BY p.id
+    `);
+
+    // Build a map for quick lookup
+    const statsMap = new Map();
+    for (const row of partnerStats) {
+      statsMap.set(row.partner_id, row);
+    }
+
+    // Get all valid partners (including those with zero certs)
+    const partners = await query(`
+      SELECT p.id
+      FROM partners p
       WHERE p.partner_tier IN (${tierList})
         AND p.is_active = TRUE
     `);
-    
+
+    updateTaskProgress('sync_to_impartner', `Updating ${partners.length} partners`, 10, 100);
+
+    // Batch update partners using UPDATE with CASE statements
+    // Process in batches of 100 for large partner sets
+    const BATCH_SIZE = 100;
     let recalcCount = 0;
-    for (const partner of partners) {
-      if (!partner.group_id) continue;
-      
-      try {
-        // Count certifications by category
-        const counts = await query(`
-          SELECT 
-            c.certification_category as category,
-            COUNT(*) as cert_count
-          FROM lms_enrollments e
-          JOIN lms_courses c ON c.id = e.course_id
-          JOIN lms_group_members gm ON gm.user_id = e.user_id
-          WHERE gm.group_id = ?
-            AND e.status = 'completed'
-            AND c.npcu_value > 0
-            AND c.certification_category IS NOT NULL
-            AND (e.expires_at IS NULL OR e.expires_at > NOW())
-          GROUP BY c.certification_category
-        `, [partner.group_id]);
-        
-        // Calculate total NPCU
-        const [npcuResult] = await query(`
-          SELECT COALESCE(SUM(c.npcu_value), 0) as total_npcu
-          FROM lms_enrollments e
-          JOIN lms_courses c ON c.id = e.course_id
-          JOIN lms_group_members gm ON gm.user_id = e.user_id
-          WHERE gm.group_id = ?
-            AND e.status = 'completed'
-            AND c.npcu_value > 0
-            AND (e.expires_at IS NULL OR e.expires_at > NOW())
-        `, [partner.group_id]);
-        
-        // Build counts object
-        const certCounts = { nintex_ce: 0, nintex_k2: 0, nintex_salesforce: 0, go_to_market: 0 };
-        for (const row of counts) {
-          if (row.category && certCounts.hasOwnProperty(row.category)) {
-            certCounts[row.category] = row.cert_count;
-          }
-        }
-        
-        // Update partner
-        await query(`
-          UPDATE partners SET
-            cert_count_nintex_ce = ?,
-            cert_count_nintex_k2 = ?,
-            cert_count_nintex_salesforce = ?,
-            cert_count_go_to_market = ?,
-            has_gtm_certification = ?,
-            total_npcu = ?,
-            cert_counts_updated_at = NOW()
-          WHERE id = ?
-        `, [
-          certCounts.nintex_ce, certCounts.nintex_k2, certCounts.nintex_salesforce,
-          certCounts.go_to_market, certCounts.go_to_market > 0, npcuResult?.total_npcu || 0,
-          partner.id
-        ]);
-        
-        recalcCount++;
-      } catch (err) {
-        console.error(`[Sync To Impartner] Error recalculating partner ${partner.id}:`, err.message);
+
+    for (let i = 0; i < partners.length; i += BATCH_SIZE) {
+      const batch = partners.slice(i, i + BATCH_SIZE);
+
+      // Build CASE statements for batch update
+      const ids = batch.map(p => p.id);
+      const caseStatements = {
+        ce: [], k2: [], sf: [], gtm: [], hasGtm: [], npcu: []
+      };
+
+      for (const p of batch) {
+        const stats = statsMap.get(p.id) || { cert_ce: 0, cert_k2: 0, cert_sf: 0, cert_gtm: 0, total_npcu: 0 };
+        caseStatements.ce.push(`WHEN ${p.id} THEN ${stats.cert_ce}`);
+        caseStatements.k2.push(`WHEN ${p.id} THEN ${stats.cert_k2}`);
+        caseStatements.sf.push(`WHEN ${p.id} THEN ${stats.cert_sf}`);
+        caseStatements.gtm.push(`WHEN ${p.id} THEN ${stats.cert_gtm}`);
+        caseStatements.hasGtm.push(`WHEN ${p.id} THEN ${stats.cert_gtm > 0 ? 1 : 0}`);
+        caseStatements.npcu.push(`WHEN ${p.id} THEN ${stats.total_npcu}`);
       }
-      
-      // Update progress
-      if (recalcCount % 50 === 0) {
-        updateTaskProgress('sync_to_impartner', `Recalculating: ${recalcCount}/${partners.length}`, 
-          Math.round((recalcCount / partners.length) * 30), 100);
-      }
+
+      const idList = ids.join(',');
+
+      await query(`
+        UPDATE partners SET
+          cert_count_nintex_ce = CASE id ${caseStatements.ce.join(' ')} END,
+          cert_count_nintex_k2 = CASE id ${caseStatements.k2.join(' ')} END,
+          cert_count_nintex_salesforce = CASE id ${caseStatements.sf.join(' ')} END,
+          cert_count_go_to_market = CASE id ${caseStatements.gtm.join(' ')} END,
+          has_gtm_certification = CASE id ${caseStatements.hasGtm.join(' ')} END,
+          total_npcu = CASE id ${caseStatements.npcu.join(' ')} END,
+          cert_counts_updated_at = NOW()
+        WHERE id IN (${idList})
+      `);
+
+      recalcCount += batch.length;
+
+      // Update progress every batch
+      updateTaskProgress('sync_to_impartner', `Recalculating: ${recalcCount}/${partners.length}`,
+        Math.round((recalcCount / partners.length) * 30), 100);
     }
-    
+
     results.recalculated = recalcCount;
     console.log(`[Sync To Impartner] Recalculated ${recalcCount} partners`);
     
@@ -986,15 +1045,15 @@ async function runSyncToImpartner(config) {
     updateTaskProgress('sync_to_impartner', 'Step 2: Fetching partners for Impartner sync', 30, 100);
     
     let partnersQuery = `
-      SELECT 
-        p.id, p.account_name, p.salesforce_id, p.partner_tier,
+      SELECT
+        p.id, p.account_name, p.salesforce_id, p.impartner_id, p.partner_tier,
         p.cert_count_nintex_ce, p.cert_count_nintex_k2,
         p.cert_count_nintex_salesforce, p.cert_count_go_to_market,
         p.total_npcu, p.cert_counts_updated_at,
         g.name as lms_group_name
       FROM partners p
       LEFT JOIN lms_groups g ON g.partner_id = p.id
-      WHERE p.salesforce_id IS NOT NULL
+      WHERE (p.salesforce_id IS NOT NULL OR p.impartner_id IS NOT NULL)
         AND p.cert_counts_updated_at IS NOT NULL
         AND p.partner_tier IN (${tierList})
         AND p.is_active = TRUE
@@ -1071,9 +1130,10 @@ async function runSyncToImpartner(config) {
         const encodedData = Buffer.from(JSON.stringify(urlData)).toString('base64');
         portalUrl = `https://ptrlrndb.prod.ntxgallery.com/?data=${encodedData}`;
       }
-      
+
       return {
         CrmId: p.salesforce_id,
+        ImpartnerId: p.impartner_id,  // Direct Impartner ID if available
         Name: p.account_name,
         Nintex_CE_Certifications__cf: p.cert_count_nintex_ce || 0,
         Nintex_K2_Certifications__cf: p.cert_count_nintex_k2 || 0,
@@ -1086,16 +1146,21 @@ async function runSyncToImpartner(config) {
         LMS_User_Count: lmsUserCounts[p.id] || 0
       };
     });
-    
-    // Step 3: Lookup Impartner Account IDs
+
+    // Step 3: Lookup Impartner Account IDs (only for those without direct impartner_id)
     updateTaskProgress('sync_to_impartner', 'Step 3: Looking up Impartner accounts', 40, 100);
-    
+
     const crmIdToImpartnerId = new Map();
     const crmId15ToImpartnerId = new Map(); // For 15-char prefix matching
     const lookupBatchSize = 100;
-    
-    for (let i = 0; i < syncPayload.length; i += lookupBatchSize) {
-      const batchCrmIds = syncPayload.slice(i, i + lookupBatchSize).map(p => p.CrmId);
+
+    // Filter to only partners that need lookup (no direct impartner_id)
+    const partnersNeedingLookup = syncPayload.filter(p => !p.ImpartnerId && p.CrmId);
+    console.log(`[Sync To Impartner] ${syncPayload.length - partnersNeedingLookup.length} partners have direct Impartner ID, ${partnersNeedingLookup.length} need CrmId lookup`);
+
+    for (let i = 0; i < partnersNeedingLookup.length; i += lookupBatchSize) {
+      const batchCrmIds = partnersNeedingLookup.slice(i, i + lookupBatchSize).map(p => p.CrmId).filter(Boolean);
+      if (batchCrmIds.length === 0) continue;
       const crmIdFilter = batchCrmIds.map(id => `CrmId = '${id}'`).join(' or ');
       
       try {
@@ -1143,9 +1208,13 @@ async function runSyncToImpartner(config) {
     
     for (const p of syncPayload) {
       let impartnerId = null;
-      
-      // Try exact match first
-      if (crmIdToImpartnerId.has(p.CrmId)) {
+
+      // First check if we have direct Impartner ID
+      if (p.ImpartnerId) {
+        impartnerId = p.ImpartnerId;
+      }
+      // Try exact CrmId match
+      else if (crmIdToImpartnerId.has(p.CrmId)) {
         impartnerId = crmIdToImpartnerId.get(p.CrmId);
       }
       // If no match and CrmId is 18 chars, try 15-char prefix
@@ -1161,7 +1230,7 @@ async function runSyncToImpartner(config) {
           impartnerId = crmId15ToImpartnerId.get(p.CrmId);
         }
       }
-      
+
       if (impartnerId) {
         matchedCount++;
         updatePayload.push({
@@ -1670,6 +1739,44 @@ function getSchedulerStatus() {
 }
 
 /**
+ * Executive Weekly Report Task
+ * Sends global certification rollup to configured recipients
+ */
+async function runExecutiveWeeklyReport(config) {
+  const executiveReportService = require('./executiveReportService.cjs');
+
+  const results = {
+    recordsProcessed: 0,
+    sent: 0,
+    failed: 0,
+    errors: []
+  };
+
+  updateTaskProgress('executive_weekly_report', 'Building executive report', 0, 100);
+
+  try {
+    updateTaskProgress('executive_weekly_report', 'Sending to recipients', 50, 100);
+
+    const sendResults = await executiveReportService.sendExecutiveReport();
+
+    results.sent = sendResults.sent;
+    results.failed = sendResults.failed;
+    results.errors = sendResults.errors;
+    results.recordsProcessed = sendResults.sent + sendResults.failed;
+
+    updateTaskProgress('executive_weekly_report', 'Complete', 100, 100);
+
+    console.log(`📊 Executive report sent: ${results.sent} successful, ${results.failed} failed`);
+  } catch (err) {
+    results.error = err.message;
+    updateTaskProgress('executive_weekly_report', `Failed: ${err.message}`, 100, 100);
+    throw err;
+  }
+
+  return results;
+}
+
+/**
  * Enable or disable system alerts for task failures
  * @param {boolean} enabled - Whether to enable alerts
  */
@@ -1677,6 +1784,248 @@ function setSystemAlertsEnabled(enabled) {
   systemAlertsEnabled = enabled;
   console.log(`📢 System alerts ${enabled ? 'enabled' : 'disabled'}`);
   return systemAlertsEnabled;
+}
+
+/**
+ * Orchestrated Daily Sync Chain
+ * Runs all sync tasks in dependency order with validation between steps
+ *
+ * Dependency Chain:
+ * 1. sync_courses + impartner_sync (parallel - no dependencies)
+ * 2. sync_npcu (depends on courses)
+ * 3. sync_users (foundation for enrollments)
+ * 4. sync_groups (links users to partners)
+ * 5. sync_enrollments (needs users, groups, courses with NPCU)
+ * 6. sync_to_impartner (aggregates and pushes cert counts)
+ */
+async function runDailySyncChain(options = {}) {
+  const lmsSyncService = require('./lmsSyncService.cjs');
+  const impartnerSyncService = require('./impartnerSyncService.cjs');
+
+  const startTime = Date.now();
+  const chainId = `daily_${Date.now()}`;
+
+  const results = {
+    chainId,
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    status: 'running',
+    steps: [],
+    totalDurationSeconds: 0,
+    error: null
+  };
+
+  // Log chain start
+  let logId = null;
+  try {
+    const logResult = await query(
+      `INSERT INTO sync_logs (sync_type, status, started_at, details) VALUES (?, ?, NOW(), ?)`,
+      ['daily_sync_chain', 'running', JSON.stringify({ chainId, steps: [] })]
+    );
+    logId = logResult.insertId;
+  } catch (err) {
+    console.error('[Daily Sync Chain] Failed to create log:', err.message);
+  }
+
+  console.log('═══════════════════════════════════════════════════════════════');
+  console.log('🔄 DAILY SYNC CHAIN STARTED');
+  console.log(`   Chain ID: ${chainId}`);
+  console.log('═══════════════════════════════════════════════════════════════');
+
+  // Define the sync chain steps
+  const steps = [
+    {
+      name: 'sync_courses',
+      description: 'Sync courses from LMS',
+      fn: async () => await lmsSyncService.syncCourses({ forceFullSync: true }),
+      required: true,
+      parallel: 'tier1'
+    },
+    {
+      name: 'impartner_sync',
+      description: 'Sync partners and contacts from Impartner',
+      fn: async () => await impartnerSyncService.syncAll({ mode: 'full' }),
+      required: true,
+      parallel: 'tier1'
+    },
+    {
+      name: 'sync_npcu',
+      description: 'Apply NPCU values to courses',
+      fn: async () => await lmsSyncService.syncCourseProperties(),
+      required: true,
+      dependsOn: ['sync_courses']
+    },
+    {
+      name: 'sync_users',
+      description: 'Sync users from LMS',
+      fn: async () => await lmsSyncService.syncUsers({ forceFullSync: true }),
+      required: true,
+      dependsOn: ['sync_npcu']
+    },
+    {
+      name: 'sync_groups',
+      description: 'Sync groups and partner links',
+      fn: async () => await lmsSyncService.syncGroups({ forceFullSync: true }),
+      required: true,
+      dependsOn: ['sync_users', 'impartner_sync']
+    },
+    {
+      name: 'sync_enrollments',
+      description: 'Sync user enrollments',
+      fn: async () => await lmsSyncService.syncEnrollments({ forceFullSync: true }),
+      required: true,
+      dependsOn: ['sync_groups']
+    },
+    {
+      name: 'sync_to_impartner',
+      description: 'Push cert counts to Impartner',
+      fn: async () => await runSyncToImpartner({ mode: 'full' }),
+      required: false, // Non-critical - failures shouldn't stop chain
+      dependsOn: ['sync_enrollments']
+    }
+  ];
+
+  // Track completed steps for dependency checking
+  const completedSteps = new Set();
+  const stepResults = new Map();
+
+  // Helper to run a step
+  async function runStep(step) {
+    const stepStart = Date.now();
+    const stepResult = {
+      name: step.name,
+      description: step.description,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      status: 'running',
+      durationSeconds: 0,
+      result: null,
+      error: null
+    };
+
+    console.log(`\n┌─────────────────────────────────────────────────────────────┐`);
+    console.log(`│ Step: ${step.name.padEnd(52)} │`);
+    console.log(`│ ${step.description.padEnd(59)} │`);
+    console.log(`└─────────────────────────────────────────────────────────────┘`);
+
+    try {
+      stepResult.result = await step.fn();
+      stepResult.status = 'completed';
+      completedSteps.add(step.name);
+      console.log(`✅ ${step.name} completed successfully`);
+    } catch (err) {
+      stepResult.status = 'failed';
+      stepResult.error = err.message;
+      console.error(`❌ ${step.name} failed: ${err.message}`);
+
+      if (step.required) {
+        throw new Error(`Required step ${step.name} failed: ${err.message}`);
+      }
+    }
+
+    stepResult.completedAt = new Date().toISOString();
+    stepResult.durationSeconds = Math.round((Date.now() - stepStart) / 1000);
+    results.steps.push(stepResult);
+    stepResults.set(step.name, stepResult);
+
+    // Update log with progress
+    if (logId) {
+      try {
+        await query(
+          `UPDATE sync_logs SET details = ? WHERE id = ?`,
+          [JSON.stringify({ chainId, steps: results.steps }), logId]
+        );
+      } catch (logErr) { /* ignore */ }
+    }
+
+    return stepResult;
+  }
+
+  try {
+    // Run Tier 1 steps in parallel (no dependencies)
+    const tier1Steps = steps.filter(s => s.parallel === 'tier1');
+    if (tier1Steps.length > 0) {
+      console.log('\n📦 Running Tier 1 (parallel): ' + tier1Steps.map(s => s.name).join(', '));
+      await Promise.all(tier1Steps.map(step => runStep(step)));
+    }
+
+    // Run remaining steps sequentially (respecting dependencies)
+    const sequentialSteps = steps.filter(s => !s.parallel);
+    for (const step of sequentialSteps) {
+      // Check dependencies
+      if (step.dependsOn) {
+        const missingDeps = step.dependsOn.filter(dep => !completedSteps.has(dep));
+        if (missingDeps.length > 0) {
+          console.log(`⏭️ Skipping ${step.name} - missing dependencies: ${missingDeps.join(', ')}`);
+          results.steps.push({
+            name: step.name,
+            status: 'skipped',
+            error: `Missing dependencies: ${missingDeps.join(', ')}`
+          });
+          continue;
+        }
+      }
+
+      await runStep(step);
+    }
+
+    results.status = 'completed';
+    console.log('\n═══════════════════════════════════════════════════════════════');
+    console.log('✅ DAILY SYNC CHAIN COMPLETED SUCCESSFULLY');
+    console.log('═══════════════════════════════════════════════════════════════');
+
+  } catch (err) {
+    results.status = 'failed';
+    results.error = err.message;
+
+    console.log('\n═══════════════════════════════════════════════════════════════');
+    console.error('❌ DAILY SYNC CHAIN FAILED');
+    console.error(`   Error: ${err.message}`);
+    console.log('═══════════════════════════════════════════════════════════════');
+
+    // Send alert for chain failure
+    if (systemAlertsEnabled) {
+      try {
+        const { sendSyncErrorAlert } = require('./notificationService.cjs');
+        await sendSyncErrorAlert(`Daily sync chain failed: ${err.message}`);
+      } catch (alertErr) {
+        console.error('Failed to send alert:', alertErr.message);
+      }
+    }
+  }
+
+  results.completedAt = new Date().toISOString();
+  results.totalDurationSeconds = Math.round((Date.now() - startTime) / 1000);
+
+  // Update final log
+  if (logId) {
+    try {
+      await query(
+        `UPDATE sync_logs SET
+          status = ?,
+          completed_at = NOW(),
+          records_processed = ?,
+          details = ?
+        WHERE id = ?`,
+        [
+          results.status,
+          results.steps.filter(s => s.status === 'completed').length,
+          JSON.stringify(results),
+          logId
+        ]
+      );
+    } catch (logErr) {
+      console.error('Failed to update sync log:', logErr.message);
+    }
+  }
+
+  console.log(`\n📊 Chain Summary:`);
+  console.log(`   Total Duration: ${results.totalDurationSeconds} seconds`);
+  console.log(`   Steps Completed: ${results.steps.filter(s => s.status === 'completed').length}/${steps.length}`);
+  console.log(`   Steps Failed: ${results.steps.filter(s => s.status === 'failed').length}`);
+  console.log(`   Steps Skipped: ${results.steps.filter(s => s.status === 'skipped').length}`);
+
+  return results;
 }
 
 module.exports = {
@@ -1692,5 +2041,6 @@ module.exports = {
   saveManualAnalysis,
   getSchedulerStatus,
   setSystemAlertsEnabled,
-  runGroupAnalysis // Export for manual runs
+  runGroupAnalysis, // Export for manual runs
+  runDailySyncChain // Export for orchestrated daily sync
 };

@@ -22,7 +22,7 @@ import {
   Tooltip as RechartsTooltip, Legend, ResponsiveContainer, ComposedChart, ReferenceLine
 } from 'recharts';
 import {
-  PageHeader, PageContent, StatCard, StatsRow, ActionButton, FilterSelect, TierBadge
+  PageHeader, PageContent, StatCard, StatsRow, ActionButton, FilterSelect, TierBadge, InfoButton
 } from './ui/NintexUI';
 import './ActivityTimeline.css';
 
@@ -337,10 +337,10 @@ export default function ActivityTimeline({ onBack }) {
           {/* Tabs */}
           <Paper sx={{ mb: 3 }}>
             <Tabs value={activeTab} onChange={(e, v) => setActiveTab(v)} sx={{ borderBottom: 1, borderColor: 'divider' }}>
-              <Tab label="Timeline Charts" icon={<ShowChart />} iconPosition="start" />
-              <Tab label="Partner Insights" icon={<Groups />} iconPosition="start" />
-              <Tab label="Regional Analysis" icon={<Map />} iconPosition="start" />
-              <Tab label="Data Table" icon={<TimelineIcon />} iconPosition="start" />
+              <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Timeline Charts<InfoButton tooltip="Interactive charts showing enrollment and completion activity over time with trend analysis and anomaly detection." /></Box>} icon={<ShowChart />} iconPosition="start" />
+              <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Partner Insights<InfoButton tooltip="Analyze individual partner performance including activity levels, completion rates, and engagement metrics." /></Box>} icon={<Groups />} iconPosition="start" />
+              <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Regional Analysis<InfoButton tooltip="Compare activity and performance metrics across different geographic regions." /></Box>} icon={<Map />} iconPosition="start" />
+              <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Data Table<InfoButton tooltip="Raw timeline data in tabular format for detailed analysis and export." /></Box>} icon={<TimelineIcon />} iconPosition="start" />
             </Tabs>
 
             <Box sx={{ p: 3 }}>

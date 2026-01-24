@@ -27,7 +27,6 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
-  Divider,
   Grid
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -35,11 +34,14 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import EmailIcon from '@mui/icons-material/Email';
 import SendIcon from '@mui/icons-material/Send';
-import HistoryIcon from '@mui/icons-material/History';
 import SettingsIcon from '@mui/icons-material/Settings';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
-import { PageHeader, StatCard, StatsRow, SectionCard, ActionButton } from './ui/NintexUI';
+import DeleteIcon from '@mui/icons-material/Delete';
+import AddIcon from '@mui/icons-material/Add';
+import AssessmentIcon from '@mui/icons-material/Assessment';
+import GroupIcon from '@mui/icons-material/Group';
+import { PageHeader, StatCard, StatsRow, SectionCard } from './ui/NintexUI';
 
 /**
  * EmailSchedules Component
@@ -55,27 +57,66 @@ function EmailSchedules() {
   const [pamStats, setPamStats] = useState(null);
   const [emailLogs, setEmailLogs] = useState([]);
   const [runningTask, setRunningTask] = useState(null);
-  
+
+  // Executive report state
+  const [execTask, setExecTask] = useState(null);
+  const [execRecipients, setExecRecipients] = useState([]);
+  const [availableUsers, setAvailableUsers] = useState([]);
+  const [selectedUserId, setSelectedUserId] = useState('');
+  const [addingRecipient, setAddingRecipient] = useState(false);
+
   // Dialog state
   const [configDialog, setConfigDialog] = useState({ open: false, task: null });
-  const [newInterval, setNewInterval] = useState('');
-  
+  const [scheduleDay, setScheduleDay] = useState('1'); // Monday default
+  const [scheduleTime, setScheduleTime] = useState('08:00');
+
   // Test email dialog state
-  const [testEmailDialog, setTestEmailDialog] = useState({ open: false });
+  const [testEmailDialog, setTestEmailDialog] = useState({ open: false, type: 'pam' });
   const [testEmail, setTestEmail] = useState('');
   const [sendingTest, setSendingTest] = useState(false);
+
+  // Recipients dialog state
+  const [recipientsDialog, setRecipientsDialog] = useState(false);
   
-  // Fetch scheduled task for PAM reports
-  const fetchPamTask = useCallback(async () => {
+  // Fetch scheduled tasks (PAM and Executive reports)
+  const fetchTasks = useCallback(async () => {
     try {
       const response = await fetch('/api/db/tasks');
       if (response.ok) {
         const data = await response.json();
-        const task = data.tasks?.find(t => t.task_type === 'pam_weekly_report');
-        setPamTask(task || null);
+        const pamT = data.tasks?.find(t => t.task_type === 'pam_weekly_report');
+        const execT = data.tasks?.find(t => t.task_type === 'executive_weekly_report');
+        setPamTask(pamT || null);
+        setExecTask(execT || null);
       }
     } catch (err) {
-      console.error('Failed to fetch PAM task:', err);
+      console.error('Failed to fetch tasks:', err);
+    }
+  }, []);
+
+  // Fetch executive report recipients
+  const fetchExecRecipients = useCallback(async () => {
+    try {
+      const response = await fetch('/api/db/pams/executive-report/recipients');
+      if (response.ok) {
+        const data = await response.json();
+        setExecRecipients(data.recipients || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch executive recipients:', err);
+    }
+  }, []);
+
+  // Fetch available users for recipient selection (admin users from portal)
+  const fetchAvailableUsers = useCallback(async () => {
+    try {
+      const response = await fetch('/api/db/pams/executive-report/available-users');
+      if (response.ok) {
+        const data = await response.json();
+        setAvailableUsers(data.users || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch available users:', err);
     }
   }, []);
   
@@ -108,9 +149,9 @@ function EmailSchedules() {
   // Load all data
   const loadData = useCallback(async () => {
     setLoading(true);
-    await Promise.all([fetchPamTask(), fetchPamStats(), fetchEmailLogs()]);
+    await Promise.all([fetchTasks(), fetchPamStats(), fetchEmailLogs(), fetchExecRecipients(), fetchAvailableUsers()]);
     setLoading(false);
-  }, [fetchPamTask, fetchPamStats, fetchEmailLogs]);
+  }, [fetchTasks, fetchPamStats, fetchEmailLogs, fetchExecRecipients, fetchAvailableUsers]);
   
   useEffect(() => {
     loadData();
@@ -138,7 +179,7 @@ function EmailSchedules() {
       
       if (response.ok) {
         setSuccess(`${task.task_name} ${enabled ? 'enabled' : 'disabled'}`);
-        fetchPamTask();
+        fetchTasks();
       } else {
         const data = await response.json();
         setError(data.error || 'Failed to update task');
@@ -148,30 +189,45 @@ function EmailSchedules() {
     }
   };
   
-  // Update task interval
-  const updateTaskInterval = async () => {
-    if (!configDialog.task || !newInterval) return;
-    
+  // Update task schedule (day, time, and interval)
+  const updateTaskSchedule = async () => {
+    if (!configDialog.task) return;
+
     try {
-      const response = await fetch(`/api/db/tasks/${configDialog.task.task_type}/interval`, {
+      // Update schedule day/time
+      const scheduleResponse = await fetch(`/api/db/tasks/${configDialog.task.task_type}/schedule`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ interval_minutes: parseInt(newInterval) })
+        body: JSON.stringify({
+          schedule_day: parseInt(scheduleDay),
+          schedule_time: scheduleTime
+        })
       });
-      
-      if (response.ok) {
-        setSuccess(`${configDialog.task.task_name} interval updated to ${newInterval} minutes`);
-        setConfigDialog({ open: false, task: null });
-        fetchPamTask();
-      } else {
-        const data = await response.json();
-        setError(data.error || 'Failed to update interval');
+
+      if (!scheduleResponse.ok) {
+        const data = await scheduleResponse.json();
+        setError(data.error || 'Failed to update schedule');
+        return;
       }
+
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      setSuccess(`${configDialog.task.task_name} scheduled for ${dayNames[parseInt(scheduleDay)]} at ${scheduleTime}`);
+      setConfigDialog({ open: false, task: null });
+      fetchTasks();
     } catch (err) {
       setError(err.message);
     }
   };
-  
+
+  // Open config dialog with task's current schedule
+  const openConfigDialog = (task) => {
+    if (task) {
+      setScheduleDay(task.schedule_day?.toString() || '1');
+      setScheduleTime(task.schedule_time?.substring(0, 5) || '08:00');
+    }
+    setConfigDialog({ open: true, task });
+  };
+
   // Run PAM reports now
   const runPamReportsNow = async () => {
     setRunningTask('pam_weekly_report');
@@ -196,26 +252,31 @@ function EmailSchedules() {
     }
   };
   
-  // Send test email
+  // Send test email (PAM or Executive)
   const sendTestEmail = async () => {
     if (!testEmail) {
       setError('Please enter an email address');
       return;
     }
-    
+
     setSendingTest(true);
     try {
-      const response = await fetch('/api/db/pams/send-test', {
+      const endpoint = testEmailDialog.type === 'executive'
+        ? '/api/db/pams/executive-report/send-test'
+        : '/api/db/pams/send-test';
+
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: testEmail })
       });
-      
+
       const data = await response.json();
-      
+
       if (response.ok) {
-        setSuccess(`Test email sent to ${testEmail}`);
-        setTestEmailDialog({ open: false });
+        const reportType = testEmailDialog.type === 'executive' ? 'Executive Report' : 'PAM Report';
+        setSuccess(`Test ${reportType} email sent to ${testEmail}`);
+        setTestEmailDialog({ open: false, type: 'pam' });
         setTestEmail('');
         fetchEmailLogs();
       } else {
@@ -225,6 +286,89 @@ function EmailSchedules() {
       setError(err.message);
     } finally {
       setSendingTest(false);
+    }
+  };
+
+  // Run Executive Report now
+  const runExecReportNow = async () => {
+    setRunningTask('executive_weekly_report');
+    try {
+      const response = await fetch('/api/db/pams/executive-report/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setSuccess(`Executive report sent to ${data.sent} recipient(s)`);
+        fetchEmailLogs();
+      } else {
+        setError(data.error || 'Failed to send executive report');
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRunningTask(null);
+    }
+  };
+
+  // Add executive recipient
+  const addExecRecipient = async () => {
+    if (!selectedUserId) {
+      setError('Please select a user');
+      return;
+    }
+
+    const selectedUser = availableUsers.find(u => u.id === parseInt(selectedUserId));
+    if (!selectedUser) {
+      setError('Selected user not found');
+      return;
+    }
+
+    setAddingRecipient(true);
+    try {
+      const response = await fetch('/api/db/pams/executive-report/recipients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: selectedUser.email,
+          name: `${selectedUser.first_name} ${selectedUser.last_name}`.trim()
+        })
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setSuccess(`Added ${selectedUser.email} to executive report recipients`);
+        setSelectedUserId('');
+        fetchExecRecipients();
+      } else {
+        setError(data.error || 'Failed to add recipient');
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAddingRecipient(false);
+    }
+  };
+
+  // Remove executive recipient
+  const removeExecRecipient = async (id, email) => {
+    try {
+      const response = await fetch(`/api/db/pams/executive-report/recipients/${id}`, {
+        method: 'DELETE'
+      });
+
+      if (response.ok) {
+        setSuccess(`Removed ${email} from executive report recipients`);
+        fetchExecRecipients();
+      } else {
+        const data = await response.json();
+        setError(data.error || 'Failed to remove recipient');
+      }
+    } catch (err) {
+      setError(err.message);
     }
   };
   
@@ -350,8 +494,7 @@ function EmailSchedules() {
                     color="primary"
                     variant="outlined"
                     onClick={() => {
-                      setNewInterval(pamTask?.interval_minutes?.toString() || '10080');
-                      setConfigDialog({ open: true, task: pamTask });
+                      openConfigDialog(pamTask);
                     }}
                     sx={{ cursor: 'pointer' }}
                   />
@@ -395,10 +538,7 @@ function EmailSchedules() {
                     </Tooltip>
                     <Tooltip title="Settings">
                       <IconButton
-                        onClick={() => {
-                          setNewInterval(pamTask?.interval_minutes?.toString() || '10080');
-                          setConfigDialog({ open: true, task: pamTask });
-                        }}
+                        onClick={() => openConfigDialog(pamTask)}
                         size="small"
                       >
                         <SettingsIcon />
@@ -408,12 +548,88 @@ function EmailSchedules() {
                 </TableCell>
               </TableRow>
               
-              {/* Placeholder for future email tasks */}
-              <TableRow sx={{ backgroundColor: '#fafafa' }}>
-                <TableCell colSpan={7} align="center" sx={{ py: 2 }}>
-                  <Typography variant="body2" color="text.secondary" fontStyle="italic">
-                    More scheduled notifications coming soon...
+              {/* Executive Weekly Report Task */}
+              <TableRow>
+                <TableCell>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <span style={{ fontSize: '1.25rem' }}>📊</span>
+                    <Typography variant="body1" fontWeight={600}>
+                      Executive Weekly Report
+                    </Typography>
+                  </Box>
+                </TableCell>
+                <TableCell>
+                  <Typography variant="body2" color="text.secondary">
+                    Global certification rollup to {execRecipients.length} executive recipient{execRecipients.length !== 1 ? 's' : ''}
                   </Typography>
+                </TableCell>
+                <TableCell align="center">
+                  <Chip
+                    label={formatInterval(execTask?.interval_minutes)}
+                    size="small"
+                    color="secondary"
+                    variant="outlined"
+                    onClick={() => openConfigDialog(execTask)}
+                    sx={{ cursor: 'pointer' }}
+                  />
+                </TableCell>
+                <TableCell align="center">
+                  <Typography variant="body2" color={execTask?.enabled ? 'success.main' : 'text.secondary'}>
+                    {getNextRunDisplay(execTask)}
+                  </Typography>
+                </TableCell>
+                <TableCell align="center">
+                  <Typography variant="body2" color="text.secondary">
+                    {execTask?.last_run_at
+                      ? new Date(execTask.last_run_at).toLocaleString()
+                      : 'Never'}
+                  </Typography>
+                </TableCell>
+                <TableCell align="center">
+                  <Switch
+                    checked={execTask?.enabled || false}
+                    onChange={(e) => toggleTaskEnabled(execTask, e.target.checked)}
+                    disabled={!execTask}
+                  />
+                </TableCell>
+                <TableCell align="center">
+                  <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
+                    <Tooltip title="Run Now">
+                      <span>
+                        <IconButton
+                          color="secondary"
+                          onClick={runExecReportNow}
+                          disabled={runningTask === 'executive_weekly_report' || execRecipients.length === 0}
+                          size="small"
+                        >
+                          {runningTask === 'executive_weekly_report' ? (
+                            <CircularProgress size={20} />
+                          ) : (
+                            <PlayArrowIcon />
+                          )}
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                    <Tooltip title="Manage Recipients">
+                      <IconButton
+                        onClick={() => setRecipientsDialog(true)}
+                        size="small"
+                        color="secondary"
+                      >
+                        <GroupIcon />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Settings">
+                      <IconButton
+                        onClick={() => {
+                          openConfigDialog(execTask);
+                        }}
+                        size="small"
+                      >
+                        <SettingsIcon />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
                 </TableCell>
               </TableRow>
             </TableBody>
@@ -451,46 +667,44 @@ function EmailSchedules() {
             <CardContent>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
                 <EmailIcon color="warning" />
-                <Typography variant="subtitle1" fontWeight={600}>Test Email</Typography>
+                <Typography variant="subtitle1" fontWeight={600}>Test PAM Email</Typography>
               </Box>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                Send a test notification to any email address to preview content and formatting.
+                Send a sample PAM report email to preview content and formatting.
               </Typography>
               <Button
                 variant="outlined"
                 color="warning"
                 startIcon={sendingTest ? <CircularProgress size={16} /> : <EmailIcon />}
-                onClick={() => setTestEmailDialog({ open: true })}
+                onClick={() => setTestEmailDialog({ open: true, type: 'pam' })}
                 disabled={sendingTest}
                 fullWidth
               >
-                Send Test Email
+                Test PAM Report
               </Button>
             </CardContent>
           </Card>
         </Grid>
-        
+
         <Grid item xs={12} sm={6} md={3}>
-          <Card variant="outlined">
+          <Card variant="outlined" sx={{ borderColor: 'secondary.main', borderWidth: 2 }}>
             <CardContent>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                <ScheduleIcon color="primary" />
-                <Typography variant="subtitle1" fontWeight={600}>Schedule Settings</Typography>
+                <AssessmentIcon color="secondary" />
+                <Typography variant="subtitle1" fontWeight={600}>Test Executive Report</Typography>
               </Box>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                Currently set to run every {formatInterval(pamTask?.interval_minutes)}. 
-                Typical settings: weekly (10080 min) or daily (1440 min).
+                Send a sample executive rollup report to preview the format.
               </Typography>
               <Button
                 variant="outlined"
-                startIcon={<SettingsIcon />}
-                onClick={() => {
-                  setNewInterval(pamTask?.interval_minutes?.toString() || '10080');
-                  setConfigDialog({ open: true, task: pamTask });
-                }}
+                color="secondary"
+                startIcon={sendingTest ? <CircularProgress size={16} /> : <AssessmentIcon />}
+                onClick={() => setTestEmailDialog({ open: true, type: 'executive' })}
+                disabled={sendingTest}
                 fullWidth
               >
-                Configure Schedule
+                Test Exec Report
               </Button>
             </CardContent>
           </Card>
@@ -501,7 +715,7 @@ function EmailSchedules() {
             <CardContent>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
                 <EmailIcon color="primary" />
-                <Typography variant="subtitle1" fontWeight={600}>Manage Recipients</Typography>
+                <Typography variant="subtitle1" fontWeight={600}>Manage PAM Recipients</Typography>
               </Box>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                 View and manage PAM email settings. Enable or disable reports for individual PAMs.
@@ -513,6 +727,29 @@ function EmailSchedules() {
                 fullWidth
               >
                 Manage PAMs
+              </Button>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} sm={6} md={3}>
+          <Card variant="outlined">
+            <CardContent>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                <GroupIcon color="secondary" />
+                <Typography variant="subtitle1" fontWeight={600}>Executive Recipients</Typography>
+              </Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Manage who receives the weekly executive certification rollup report.
+              </Typography>
+              <Button
+                variant="outlined"
+                color="secondary"
+                startIcon={<GroupIcon />}
+                onClick={() => setRecipientsDialog(true)}
+                fullWidth
+              >
+                Manage ({execRecipients.length})
               </Button>
             </CardContent>
           </Card>
@@ -588,71 +825,91 @@ function EmailSchedules() {
         <DialogTitle>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <ScheduleIcon />
-            Configure Schedule: {configDialog.task?.task_name || 'PAM Weekly Reports'}
+            Configure Schedule: {configDialog.task?.task_name || 'Weekly Report'}
           </Box>
         </DialogTitle>
         <DialogContent>
           <Box sx={{ pt: 2 }}>
-            <FormControl fullWidth sx={{ mb: 3 }}>
-              <InputLabel>Frequency</InputLabel>
-              <Select
-                value={newInterval}
-                onChange={(e) => setNewInterval(e.target.value)}
-                label="Frequency"
-              >
-                <MenuItem value="60">Hourly (60 minutes)</MenuItem>
-                <MenuItem value="360">Every 6 hours</MenuItem>
-                <MenuItem value="720">Every 12 hours</MenuItem>
-                <MenuItem value="1440">Daily (1440 minutes)</MenuItem>
-                <MenuItem value="10080">Weekly (10080 minutes)</MenuItem>
-                <MenuItem value="20160">Every 2 weeks</MenuItem>
-                <MenuItem value="43200">Monthly (30 days)</MenuItem>
-              </Select>
-            </FormControl>
-            
-            <TextField
-              fullWidth
-              label="Custom Interval (minutes)"
-              type="number"
-              value={newInterval}
-              onChange={(e) => setNewInterval(e.target.value)}
-              helperText="Or enter a custom interval in minutes"
-            />
-            
-            <Box sx={{ mt: 3, p: 2, backgroundColor: '#f5f5f5', borderRadius: 1 }}>
-              <Typography variant="body2" color="text.secondary">
-                <strong>Current Setting:</strong> {formatInterval(configDialog.task?.interval_minutes)}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                <strong>New Setting:</strong> {formatInterval(parseInt(newInterval))}
+            <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 2 }}>
+              Schedule when this report should be sent each week
+            </Typography>
+
+            <Grid container spacing={2} sx={{ mb: 3 }}>
+              <Grid item xs={6}>
+                <FormControl fullWidth>
+                  <InputLabel>Day of Week</InputLabel>
+                  <Select
+                    value={scheduleDay}
+                    onChange={(e) => setScheduleDay(e.target.value)}
+                    label="Day of Week"
+                  >
+                    <MenuItem value="0">Sunday</MenuItem>
+                    <MenuItem value="1">Monday</MenuItem>
+                    <MenuItem value="2">Tuesday</MenuItem>
+                    <MenuItem value="3">Wednesday</MenuItem>
+                    <MenuItem value="4">Thursday</MenuItem>
+                    <MenuItem value="5">Friday</MenuItem>
+                    <MenuItem value="6">Saturday</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  fullWidth
+                  label="Time"
+                  type="time"
+                  value={scheduleTime}
+                  onChange={(e) => setScheduleTime(e.target.value)}
+                  InputLabelProps={{ shrink: true }}
+                />
+              </Grid>
+            </Grid>
+
+            <Box sx={{ p: 2, backgroundColor: '#e3f2fd', borderRadius: 1, mb: 2 }}>
+              <Typography variant="body2" color="primary">
+                <strong>Schedule:</strong> Every {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][parseInt(scheduleDay)]} at {scheduleTime}
               </Typography>
             </Box>
+
+            {configDialog.task?.schedule_day !== null && configDialog.task?.schedule_time && (
+              <Box sx={{ p: 2, backgroundColor: '#f5f5f5', borderRadius: 1 }}>
+                <Typography variant="body2" color="text.secondary">
+                  <strong>Current Schedule:</strong> {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][configDialog.task.schedule_day]} at {configDialog.task.schedule_time?.substring(0, 5)}
+                </Typography>
+              </Box>
+            )}
           </Box>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfigDialog({ open: false, task: null })}>
             Cancel
           </Button>
-          <Button variant="contained" onClick={updateTaskInterval}>
-            Save Changes
+          <Button variant="contained" onClick={updateTaskSchedule}>
+            Save Schedule
           </Button>
         </DialogActions>
       </Dialog>
       
       {/* Test Email Dialog */}
-      <Dialog open={testEmailDialog.open} onClose={() => setTestEmailDialog({ open: false })} maxWidth="sm" fullWidth>
+      <Dialog open={testEmailDialog.open} onClose={() => setTestEmailDialog({ open: false, type: 'pam' })} maxWidth="sm" fullWidth>
         <DialogTitle>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <EmailIcon color="warning" />
-            Send Test Email
+            {testEmailDialog.type === 'executive' ? (
+              <AssessmentIcon color="secondary" />
+            ) : (
+              <EmailIcon color="warning" />
+            )}
+            Send Test {testEmailDialog.type === 'executive' ? 'Executive Report' : 'PAM Report'}
           </Box>
         </DialogTitle>
         <DialogContent>
           <Box sx={{ pt: 2 }}>
             <Alert severity="info" sx={{ mb: 3 }}>
-              This will send a sample PAM Weekly Report email with test data to the email address you enter.
+              {testEmailDialog.type === 'executive'
+                ? 'This will send a sample Executive Weekly Report with live certification data to the email address you enter.'
+                : 'This will send a sample PAM Weekly Report email with test data to the email address you enter.'}
             </Alert>
-            
+
             <TextField
               fullWidth
               label="Email Address"
@@ -661,22 +918,136 @@ function EmailSchedules() {
               onChange={(e) => setTestEmail(e.target.value)}
               placeholder="Enter your email address"
               autoFocus
-              helperText="The test email will show sample partner data and formatting"
+              helperText={testEmailDialog.type === 'executive'
+                ? 'The executive report includes global certification metrics, regional breakdowns, and PAM performance'
+                : 'The test email will show sample partner data and formatting'}
             />
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => { setTestEmailDialog({ open: false }); setTestEmail(''); }}>
+          <Button onClick={() => { setTestEmailDialog({ open: false, type: 'pam' }); setTestEmail(''); }}>
             Cancel
           </Button>
-          <Button 
-            variant="contained" 
-            color="warning"
+          <Button
+            variant="contained"
+            color={testEmailDialog.type === 'executive' ? 'secondary' : 'warning'}
             onClick={sendTestEmail}
             disabled={!testEmail || sendingTest}
             startIcon={sendingTest ? <CircularProgress size={16} /> : <SendIcon />}
           >
             {sendingTest ? 'Sending...' : 'Send Test'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Executive Recipients Dialog */}
+      <Dialog open={recipientsDialog} onClose={() => setRecipientsDialog(false)} maxWidth="md" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <GroupIcon color="secondary" />
+            Executive Report Recipients
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 2 }}>
+            <Alert severity="info" sx={{ mb: 3 }}>
+              These recipients will receive the weekly executive certification rollup report containing global metrics, regional breakdowns, and PAM performance data.
+            </Alert>
+
+            {/* Add Recipient Form */}
+            <Box sx={{ display: 'flex', gap: 2, mb: 3, alignItems: 'flex-start' }}>
+              <FormControl sx={{ flex: 1 }} size="small">
+                <InputLabel>Select User</InputLabel>
+                <Select
+                  value={selectedUserId}
+                  onChange={(e) => setSelectedUserId(e.target.value)}
+                  label="Select User"
+                >
+                  <MenuItem value="">
+                    <em>Select a user...</em>
+                  </MenuItem>
+                  {availableUsers
+                    .filter(u => !execRecipients.some(r => r.email === u.email))
+                    .sort((a, b) => `${a.first_name} ${a.last_name}`.localeCompare(`${b.first_name} ${b.last_name}`))
+                    .map(user => (
+                      <MenuItem key={user.id} value={user.id}>
+                        {user.first_name} {user.last_name} ({user.email})
+                      </MenuItem>
+                    ))}
+                </Select>
+              </FormControl>
+              <Button
+                variant="contained"
+                color="secondary"
+                startIcon={addingRecipient ? <CircularProgress size={16} /> : <AddIcon />}
+                onClick={addExecRecipient}
+                disabled={!selectedUserId || addingRecipient}
+              >
+                Add
+              </Button>
+            </Box>
+
+            {/* Recipients List */}
+            <TableContainer component={Paper} variant="outlined">
+              <Table size="small">
+                <TableHead>
+                  <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
+                    <TableCell sx={{ fontWeight: 600 }}>Name</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Email</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Added</TableCell>
+                    <TableCell sx={{ fontWeight: 600, textAlign: 'center' }}>Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {execRecipients.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={4} align="center" sx={{ py: 4 }}>
+                        <Typography color="text.secondary">
+                          No recipients configured. Add recipients above to enable the executive report.
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    execRecipients.map((recipient) => (
+                      <TableRow key={recipient.id}>
+                        <TableCell>{recipient.name || '-'}</TableCell>
+                        <TableCell>{recipient.email}</TableCell>
+                        <TableCell>
+                          <Typography variant="body2" color="text.secondary">
+                            {new Date(recipient.created_at).toLocaleDateString()}
+                          </Typography>
+                        </TableCell>
+                        <TableCell align="center">
+                          <Tooltip title="Remove recipient">
+                            <IconButton
+                              size="small"
+                              color="error"
+                              onClick={() => removeExecRecipient(recipient.id, recipient.email)}
+                            >
+                              <DeleteIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRecipientsDialog(false)}>
+            Close
+          </Button>
+          <Button
+            variant="contained"
+            color="secondary"
+            startIcon={runningTask === 'executive_weekly_report' ? <CircularProgress size={16} /> : <SendIcon />}
+            onClick={() => { runExecReportNow(); setRecipientsDialog(false); }}
+            disabled={execRecipients.length === 0 || runningTask === 'executive_weekly_report'}
+          >
+            Send Report Now
           </Button>
         </DialogActions>
       </Dialog>

@@ -1696,7 +1696,12 @@ function DatabaseReports() {
                 </Box>
                 <DataTable
                   columns={[
-                    { id: 'account_name', label: 'Partner Name', render: (val) => <span style={{ fontWeight: 500 }}>{val}</span> },
+                    { id: 'account_name', label: 'Partner Name', render: (val, row) => (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <span style={{ fontWeight: 500 }}>{val}</span>
+                        {row.is_active === 0 && <StatusChip status="inactive" label="Inactive" />}
+                      </Box>
+                    )},
                     { id: 'partner_tier', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Tier <InfoTooltip metricKey="tier" /></Box>, render: (val) => val ? <TierBadge tier={val} /> : '-' },
                     { id: 'account_region', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Region <InfoTooltip metricKey="region" /></Box> },
                     { id: 'account_owner', label: <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>Owner <InfoTooltip metricKey="owner" /></Box> },

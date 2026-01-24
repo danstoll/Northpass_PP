@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run build:*)",
+      "Bash(npm run deploy:*)",
+      "Bash(npm run:*)",
+      "Bash(dir:*)",
+      "Bash(ssh:*)",
+      "Bash(powershell:*)",
+      "Bash(curl:*)",
+      "Bash(plink -batch NTXPTRAdmin@ptrlrndb.prod.ntxgallery.com \"cd /home/NTXPTRAdmin/northpass-portal && npm install node-fetch\":*)",
+      "Bash(python3:*)",
+      "Bash(npx eslint:*)",
+      "Bash(plink -batch -pw 'w4Qq$LD&vZKod6v7oED7Gt&A' NTXPTRAdmin@20.125.24.28 \"cd /home/NTXPTRAdmin && git clone https://github.com/umami-software/umami.git 2>&1 || echo ''Already exists''\")",
+      "Bash(node:*)",
+      "Bash(npm install:*)",
+      "Bash(mysql -h 20.29.25.238 -P 31337 -u root -pP6Rof2DQo5wZqa9yM7y6 northpass_portal -e \"SELECT COUNT\\(*\\) as total, COUNT\\(salesforce_id\\) as with_sf_id, COUNT\\(impartner_id\\) as with_imp_id FROM partners WHERE is_active = TRUE;\")",
+      "Bash(Select-String -Pattern 'Portalesc|vince' -Context 0,10)",
+      "Bash(findstr:*)"
+    ]
+  }
+}

@@ -227,6 +227,16 @@ if (modularRoutes) {
   app.use('/api/db/pams', mountModularRoutes, modularRoutes.pamRoutes);
   app.use('/api/db/notifications', mountModularRoutes, modularRoutes.notificationRoutes);
   app.use('/api/db/leads', mountModularRoutes, modularRoutes.leadRoutes);
+
+  // Tracking routes (page view analytics)
+  try {
+    const trackingRoutes = require('./server/routes/trackingRoutes.cjs');
+    app.use('/api/track', trackingRoutes);
+    console.log('✅ Tracking routes mounted at /api/track/*');
+  } catch (err) {
+    console.warn('⚠️ Tracking routes not loaded:', err.message);
+  }
+
   console.log('✅ Modular routes mounted at /api/db/*');
 }
 
