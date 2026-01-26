@@ -138,6 +138,27 @@ try {
     exit 1
 }
 
+# Step 4b: Upload documentation site
+Write-Step "Step 4b: Uploading Documentation Site"
+try {
+    # Build docs if not already built
+    if (-not (Test-Path "docs-site/build")) {
+        Write-Info "Building documentation site..."
+        Push-Location "docs-site"
+        npm run build
+        Pop-Location
+    }
+    
+    # Create remote docs-site/build directory and upload
+    Invoke-SSH "mkdir -p $($Config.RemotePath)/docs-site/build"
+    Invoke-SCP "docs-site/build/*" "$($Config.RemotePath)/docs-site/build/"
+    
+    if ($LASTEXITCODE -ne 0) { throw "Docs upload failed" }
+    Write-Success "Documentation site uploaded to $($Config.RemotePath)/docs-site/build/"
+} catch {
+    Write-Warn "Documentation upload failed: $_"
+}
+
 # Step 5: Install dependencies and restart
 Write-Step "Step 5: Installing Dependencies and Restarting Server"
 try {

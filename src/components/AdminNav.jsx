@@ -42,6 +42,7 @@ import {
   ContactPage,
   Email,
   Visibility,
+  HelpOutline,
 } from '@mui/icons-material';
 import { useAuth } from '../context/AuthContext';
 
@@ -340,6 +341,22 @@ const AdminNav = ({ currentPage, onLogout, mobileOpen, onMobileClose }) => {
       {/* Bottom Actions */}
       <Box sx={{ borderTop: '1px solid rgba(255,255,255,0.1)' }}>
         <List sx={{ py: 1 }}>
+          <ListItem disablePadding sx={{ px: 1 }}>
+            <ListItemButton
+              component="a"
+              href="/docs/"
+              target="_blank"
+              sx={{ borderRadius: 1 }}
+            >
+              <ListItemIcon sx={{ minWidth: 40, color: 'text.secondary' }}>
+                <HelpOutline />
+              </ListItemIcon>
+              <ListItemText 
+                primary="Documentation"
+                primaryTypographyProps={{ variant: 'body2' }}
+              />
+            </ListItemButton>
+          </ListItem>
           <ListItem disablePadding sx={{ px: 1 }}>
             <ListItemButton
               onClick={() => handleNavClick('/')}

@@ -259,6 +259,28 @@ try {
   console.warn('⚠️ Impartner routes not loaded:', err.message);
 }
 
+// Serve documentation site at /docs/
+app.use('/docs', express.static(path.join(__dirname, 'docs-site', 'build'), {
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, filePath) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    // HTML files should not be cached
+    if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    }
+    // JS/CSS with hashes can be cached for 1 year
+    else if (filePath.match(/\.(js|css)$/)) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
+  }
+}));
+
+// Fallback for docs SPA routes
+app.get('/docs/*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'docs-site', 'build', 'index.html'));
+});
+
 // Serve static assets FIRST with proper caching (before security headers)
 // Hashed JS/CSS files are cache-safe for 1 year
 app.use('/assets', express.static(path.join(__dirname, 'dist', 'assets'), {
