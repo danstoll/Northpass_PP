@@ -10,14 +10,14 @@ import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Select, MenuItem, FormControl, InputLabel, Chip, Alert, CircularProgress,
   LinearProgress, Tooltip, IconButton, ToggleButton, ToggleButtonGroup,
-  Divider
+  Divider, Slider, Switch, FormControlLabel
 } from '@mui/material';
 import {
   TrendingUp, TrendingDown, TrendingFlat, People, School, EmojiEvents,
   CalendarMonth, Refresh, Download, Timeline, Assessment, BarChart,
   ArrowUpward, ArrowDownward, Remove, FilterList, Clear, Speed,
   Groups, Map, Person, Warning, CheckCircle, Star, TrendingUp as Rocket,
-  Info
+  Info, EventAvailable, DateRange
 } from '@mui/icons-material';
 import { PageHeader, PageContent, StatCard, StatsRow, ActionButton, InfoButton } from './ui/NintexUI';
 import {
@@ -164,52 +164,109 @@ function CustomChartTooltip({ active, payload, label }) {
   );
 }
 
-// Helper to prepare YoY comparison data from monthly trends
-function prepareYoyComparisonData(userTrends, enrollmentTrends, certTrends) {
-  const currentYear = new Date().getFullYear();
-  const lastYear = currentYear - 1;
-  
-  // Group data by month number (1-12)
-  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+// Fiscal Year constants
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const FISCAL_QUARTER_MAP = {
+  7: 'Q1', 8: 'Q1', 9: 'Q1',   // Jul-Sep = Q1
+  10: 'Q2', 11: 'Q2', 12: 'Q2', // Oct-Dec = Q2
+  1: 'Q3', 2: 'Q3', 3: 'Q3',   // Jan-Mar = Q3
+  4: 'Q4', 5: 'Q4', 6: 'Q4'    // Apr-Jun = Q4
+};
+const CALENDAR_QUARTER_MAP = {
+  1: 'Q1', 2: 'Q1', 3: 'Q1',
+  4: 'Q2', 5: 'Q2', 6: 'Q2',
+  7: 'Q3', 8: 'Q3', 9: 'Q3',
+  10: 'Q4', 11: 'Q4', 12: 'Q4'
+};
+
+// Get fiscal year label (e.g., "FY26" or "2024-25")
+function getFiscalYearLabel(fyYear) {
+  return `FY${fyYear.toString().slice(-2)}`;
+}
+
+// Generate months for a date range
+function generateMonthRange(startYear, endYear, useFiscal) {
+  const months = [];
+  if (useFiscal) {
+    // Fiscal year: July to June
+    for (let year = startYear; year < endYear; year++) {
+      // Jul-Dec of first calendar year
+      for (let month = 7; month <= 12; month++) {
+        months.push({ year, month, label: `${MONTH_NAMES[month - 1]} ${year}`, fy: year + 1 });
+      }
+      // Jan-Jun of next calendar year
+      for (let month = 1; month <= 6; month++) {
+        months.push({ year: year + 1, month, label: `${MONTH_NAMES[month - 1]} ${year + 1}`, fy: year + 1 });
+      }
+    }
+  } else {
+    // Calendar year: January to December
+    for (let year = startYear; year <= endYear; year++) {
+      for (let month = 1; month <= 12; month++) {
+        months.push({ year, month, label: `${MONTH_NAMES[month - 1]} ${year}`, fy: null });
+      }
+    }
+  }
+  return months;
+}
+
+// Helper to prepare YoY comparison data for charts with date range support
+function prepareYoyComparisonDataForRange(userTrends, enrollmentTrends, certTrends, startYear, endYear, useFiscal) {
   const comparison = [];
+  const months = generateMonthRange(startYear, endYear, useFiscal);
   
-  for (let monthNum = 1; monthNum <= 12; monthNum++) {
-    const monthStr = monthNum.toString().padStart(2, '0');
+  // Limit to current date
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+  
+  const filteredMonths = months.filter(m => {
+    if (m.year > currentYear) return false;
+    if (m.year === currentYear && m.month > currentMonth) return false;
+    return true;
+  });
+  
+  for (const m of filteredMonths) {
+    const monthKey = `${m.year}-${m.month.toString().padStart(2, '0')}`;
+    const lastYearMonthKey = `${m.year - 1}-${m.month.toString().padStart(2, '0')}`;
     
-    // Find current year data
-    const currentUserData = userTrends.find(d => d.month === `${currentYear}-${monthStr}`);
-    const lastUserData = userTrends.find(d => d.month === `${lastYear}-${monthStr}`);
+    const currentUserData = userTrends.find(d => d.month === monthKey);
+    const lastUserData = userTrends.find(d => d.month === lastYearMonthKey);
+    const currentEnrollData = enrollmentTrends.find(d => d.month === monthKey);
+    const lastEnrollData = enrollmentTrends.find(d => d.month === lastYearMonthKey);
+    const currentCertData = certTrends.find(d => d.month === monthKey);
+    const lastCertData = certTrends.find(d => d.month === lastYearMonthKey);
     
-    const currentEnrollData = enrollmentTrends.find(d => d.month === `${currentYear}-${monthStr}`);
-    const lastEnrollData = enrollmentTrends.find(d => d.month === `${lastYear}-${monthStr}`);
-    
-    const currentCertData = certTrends.find(d => d.month === `${currentYear}-${monthStr}`);
-    const lastCertData = certTrends.find(d => d.month === `${lastYear}-${monthStr}`);
+    const quarter = useFiscal ? FISCAL_QUARTER_MAP[m.month] : CALENDAR_QUARTER_MAP[m.month];
+    const fyLabel = useFiscal ? ` (${getFiscalYearLabel(m.fy)})` : '';
     
     comparison.push({
-      month: monthNames[monthNum - 1],
-      monthNum,
-      // Users
-      [`users_${currentYear}`]: currentUserData?.newUsers || 0,
-      [`users_${lastYear}`]: lastUserData?.newUsers || 0,
+      month: `${MONTH_NAMES[m.month - 1]} '${m.year.toString().slice(-2)}`,
+      fullLabel: `${MONTH_NAMES[m.month - 1]} ${m.year}${fyLabel}`,
+      quarter,
+      fy: m.fy,
+      year: m.year,
+      monthNum: m.month,
+      // User data
+      users_current: currentUserData?.newUsers || 0,
+      users_previous: lastUserData?.newUsers || 0,
       usersGrowth: currentUserData && lastUserData && lastUserData.newUsers > 0
         ? (((currentUserData.newUsers - lastUserData.newUsers) / lastUserData.newUsers) * 100).toFixed(1)
         : null,
-      // Completions
-      [`completions_${currentYear}`]: currentEnrollData?.completions || 0,
-      [`completions_${lastYear}`]: lastEnrollData?.completions || 0,
-      completionsGrowth: currentEnrollData && lastEnrollData && lastEnrollData.completions > 0
-        ? (((currentEnrollData.completions - lastEnrollData.completions) / lastEnrollData.completions) * 100).toFixed(1)
-        : null,
+      // Enrollments
+      enrollments_current: currentEnrollData?.enrollments || 0,
+      enrollments_previous: lastEnrollData?.enrollments || 0,
+      completions_current: currentEnrollData?.completions || 0,
+      completions_previous: lastEnrollData?.completions || 0,
       // Certifications
-      [`certs_${currentYear}`]: currentCertData?.certifications || 0,
-      [`certs_${lastYear}`]: lastCertData?.certifications || 0,
+      certs_current: currentCertData?.certifications || 0,
+      certs_previous: lastCertData?.certifications || 0,
       certsGrowth: currentCertData && lastCertData && lastCertData.certifications > 0
         ? (((currentCertData.certifications - lastCertData.certifications) / lastCertData.certifications) * 100).toFixed(1)
         : null,
       // NPCU
-      [`npcu_${currentYear}`]: currentCertData?.totalNpcu || 0,
-      [`npcu_${lastYear}`]: lastCertData?.totalNpcu || 0,
+      npcu_current: currentCertData?.totalNpcu || 0,
+      npcu_previous: lastCertData?.totalNpcu || 0,
       npcuGrowth: currentCertData && lastCertData && lastCertData.totalNpcu > 0
         ? (((currentCertData.totalNpcu - lastCertData.totalNpcu) / lastCertData.totalNpcu) * 100).toFixed(1)
         : null,
@@ -219,35 +276,42 @@ function prepareYoyComparisonData(userTrends, enrollmentTrends, certTrends) {
   return comparison;
 }
 
-// Helper to calculate program success metrics
-function calculateProgramMetrics(userTrends, enrollmentTrends, certTrends) {
-  const currentYear = new Date().getFullYear();
-  const currentMonth = new Date().getMonth() + 1;
+// Calculate program metrics for a date range
+function calculateProgramMetricsForRange(data, startYear, endYear, useFiscal) {
+  if (!data || data.length === 0) return {};
   
-  // Get YTD totals for current and last year
-  const currentYearData = userTrends.filter(d => d.month?.startsWith(currentYear.toString()));
-  const lastYearData = userTrends.filter(d => d.month?.startsWith((currentYear - 1).toString()));
+  // Group by fiscal year or calendar year
+  const yearGroups = {};
+  for (const d of data) {
+    const yearKey = useFiscal && d.fy ? d.fy : d.year;
+    if (!yearGroups[yearKey]) {
+      yearGroups[yearKey] = { users: 0, certs: 0, npcu: 0, completions: 0 };
+    }
+    yearGroups[yearKey].users += d.users_current || 0;
+    yearGroups[yearKey].certs += d.certs_current || 0;
+    yearGroups[yearKey].npcu += d.npcu_current || 0;
+    yearGroups[yearKey].completions += d.completions_current || 0;
+  }
   
-  // Calculate cumulative growth
-  const totalUsersThisYear = currentYearData.reduce((sum, d) => sum + (d.newUsers || 0), 0);
-  const totalUsersLastYear = lastYearData.slice(0, currentMonth).reduce((sum, d) => sum + (d.newUsers || 0), 0);
+  const years = Object.keys(yearGroups).sort();
+  const currentYearKey = years[years.length - 1];
+  const lastYearKey = years[years.length - 2];
   
-  const currentYearCerts = certTrends.filter(d => d.month?.startsWith(currentYear.toString()));
-  const lastYearCerts = certTrends.filter(d => d.month?.startsWith((currentYear - 1).toString()));
-  
-  const totalCertsThisYear = currentYearCerts.reduce((sum, d) => sum + (d.certifications || 0), 0);
-  const totalCertsLastYear = lastYearCerts.slice(0, currentMonth).reduce((sum, d) => sum + (d.certifications || 0), 0);
-  
-  const totalNpcuThisYear = currentYearCerts.reduce((sum, d) => sum + (d.totalNpcu || 0), 0);
-  const totalNpcuLastYear = lastYearCerts.slice(0, currentMonth).reduce((sum, d) => sum + (d.totalNpcu || 0), 0);
+  const current = yearGroups[currentYearKey] || {};
+  const previous = yearGroups[lastYearKey] || {};
   
   return {
-    usersGrowth: totalUsersLastYear > 0 ? ((totalUsersThisYear - totalUsersLastYear) / totalUsersLastYear * 100).toFixed(1) : null,
-    certsGrowth: totalCertsLastYear > 0 ? ((totalCertsThisYear - totalCertsLastYear) / totalCertsLastYear * 100).toFixed(1) : null,
-    npcuGrowth: totalNpcuLastYear > 0 ? ((totalNpcuThisYear - totalNpcuLastYear) / totalNpcuLastYear * 100).toFixed(1) : null,
-    totalUsersThisYear,
-    totalCertsThisYear,
-    totalNpcuThisYear
+    currentYearLabel: useFiscal ? getFiscalYearLabel(parseInt(currentYearKey)) : currentYearKey,
+    previousYearLabel: useFiscal ? getFiscalYearLabel(parseInt(lastYearKey)) : lastYearKey,
+    usersGrowth: previous.users > 0 ? ((current.users - previous.users) / previous.users * 100).toFixed(1) : null,
+    certsGrowth: previous.certs > 0 ? ((current.certs - previous.certs) / previous.certs * 100).toFixed(1) : null,
+    npcuGrowth: previous.npcu > 0 ? ((current.npcu - previous.npcu) / previous.npcu * 100).toFixed(1) : null,
+    totalUsersThisYear: current.users,
+    totalCertsThisYear: current.certs,
+    totalNpcuThisYear: current.npcu,
+    totalUsersLastYear: previous.users,
+    totalCertsLastYear: previous.certs,
+    totalNpcuLastYear: previous.npcu
   };
 }
 
@@ -392,6 +456,10 @@ export default function AnalyticsDashboard() {
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState(0);
   const [monthRange, setMonthRange] = useState(24);
+  
+  // Fiscal Year: July 1 - June 30 (Q1=Jul-Sep, Q2=Oct-Dec, Q3=Jan-Mar, Q4=Apr-Jun)
+  const [useFiscalYear, setUseFiscalYear] = useState(true);
+  const [dateRange, setDateRange] = useState([2024, 2026]); // [startYear, endYear]
   
   // Track which tabs have been loaded (for lazy loading)
   const [loadedTabs, setLoadedTabs] = useState(new Set([0])); // Tab 0 loads with initial
@@ -878,21 +946,105 @@ export default function AnalyticsDashboard() {
 
           {/* Program Success - Visual Charts */}
           {activeTab === 0 && (() => {
-            const currentYear = new Date().getFullYear();
-            const lastYear = currentYear - 1;
-            const yoyData = prepareYoyComparisonData(userTrends, enrollmentTrends, certificationTrends);
-            const metrics = calculateProgramMetrics(userTrends, enrollmentTrends, certificationTrends);
+            // Use new date range functions with fiscal year support
+            const yoyData = prepareYoyComparisonDataForRange(userTrends, enrollmentTrends, certificationTrends, dateRange[0], dateRange[1], useFiscalYear);
+            const metrics = calculateProgramMetricsForRange(yoyData, dateRange[0], dateRange[1], useFiscalYear);
+            
+            // Generate year marks for slider
+            const currentCalYear = new Date().getFullYear();
+            const minYear = 2022;
+            const maxYear = currentCalYear + 1;
+            const yearMarks = [];
+            for (let y = minYear; y <= maxYear; y++) {
+              yearMarks.push({ value: y, label: useFiscalYear ? `FY${(y + 1).toString().slice(-2)}` : y.toString() });
+            }
             
             return (
               <Box sx={{ p: 3 }}>
-                {/* Program Success Header */}
-                <Box sx={{ mb: 4, textAlign: 'center' }}>
-                  <Typography variant="h5" fontWeight="bold" gutterBottom sx={{ color: CHART_COLORS.primary }}>
-                    Partner Enablement Program Success
-                  </Typography>
-                  <Typography variant="body1" color="textSecondary">
-                    Year-over-Year comparison: {currentYear} vs {lastYear}
-                  </Typography>
+                {/* Program Success Header with Date Controls */}
+                <Box sx={{ mb: 3 }}>
+                  <Box sx={{ textAlign: 'center', mb: 3 }}>
+                    <Typography variant="h5" fontWeight="bold" gutterBottom sx={{ color: CHART_COLORS.primary }}>
+                      Partner Enablement Program Success
+                    </Typography>
+                    <Typography variant="body1" color="textSecondary">
+                      {useFiscalYear 
+                        ? `Fiscal Year Comparison: ${getFiscalYearLabel(dateRange[0] + 1)} – ${getFiscalYearLabel(dateRange[1])} (July–June)`
+                        : `Calendar Year Comparison: ${dateRange[0]} – ${dateRange[1]}`}
+                    </Typography>
+                  </Box>
+                  
+                  {/* Date Range Controls */}
+                  <Paper sx={{ p: 2, mb: 3, bgcolor: 'grey.50' }} variant="outlined">
+                    <Grid container spacing={3} alignItems="center">
+                      {/* Fiscal Year Toggle */}
+                      <Grid item xs={12} md={3}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <EventAvailable color={useFiscalYear ? 'primary' : 'action'} />
+                          <FormControlLabel
+                            control={
+                              <Switch
+                                checked={useFiscalYear}
+                                onChange={(e) => setUseFiscalYear(e.target.checked)}
+                                color="primary"
+                              />
+                            }
+                            label={
+                              <Box>
+                                <Typography variant="body2" fontWeight="medium">
+                                  Fiscal Year Mode
+                                </Typography>
+                                <Typography variant="caption" color="textSecondary">
+                                  {useFiscalYear ? 'July 1 – June 30' : 'January – December'}
+                                </Typography>
+                              </Box>
+                            }
+                          />
+                        </Box>
+                      </Grid>
+                      
+                      {/* Date Range Slider */}
+                      <Grid item xs={12} md={6}>
+                        <Box sx={{ px: 2 }}>
+                          <Typography variant="body2" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <DateRange fontSize="small" />
+                            Date Range: {useFiscalYear 
+                              ? `${getFiscalYearLabel(dateRange[0] + 1)} to ${getFiscalYearLabel(dateRange[1])}`
+                              : `${dateRange[0]} to ${dateRange[1]}`}
+                          </Typography>
+                          <Slider
+                            value={dateRange}
+                            onChange={(e, newValue) => setDateRange(newValue)}
+                            min={minYear}
+                            max={maxYear}
+                            step={1}
+                            marks={yearMarks}
+                            valueLabelDisplay="auto"
+                            valueLabelFormat={(v) => useFiscalYear ? `FY${(v + 1).toString().slice(-2)}` : v}
+                            sx={{ 
+                              color: CHART_COLORS.primary,
+                              '& .MuiSlider-markLabel': { fontSize: '0.7rem' }
+                            }}
+                          />
+                        </Box>
+                      </Grid>
+                      
+                      {/* Fiscal Quarter Legend */}
+                      <Grid item xs={12} md={3}>
+                        {useFiscalYear && (
+                          <Box sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
+                            <Typography variant="caption" fontWeight="bold" display="block" gutterBottom>
+                              Fiscal Quarters:
+                            </Typography>
+                            <Box component="span" sx={{ display: 'block' }}>Q1: Jul–Sep</Box>
+                            <Box component="span" sx={{ display: 'block' }}>Q2: Oct–Dec</Box>
+                            <Box component="span" sx={{ display: 'block' }}>Q3: Jan–Mar</Box>
+                            <Box component="span" sx={{ display: 'block' }}>Q4: Apr–Jun</Box>
+                          </Box>
+                        )}
+                      </Grid>
+                    </Grid>
+                  </Paper>
                 </Box>
 
                 {/* Key Growth Metrics */}
@@ -935,7 +1087,7 @@ export default function AnalyticsDashboard() {
                 {/* Certifications YoY Chart */}
                 <Paper sx={{ p: 3, mb: 4 }} variant="outlined">
                   <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <EmojiEvents color="warning" /> Certifications: {currentYear} vs {lastYear}
+                    <EmojiEvents color="warning" /> Certifications: {metrics.currentYearLabel || 'Current'} vs {metrics.previousYearLabel || 'Previous'}
                   </Typography>
                   <Box sx={{ width: '100%', height: 350 }}>
                     <ResponsiveContainer width="100%" height="100%">
@@ -946,8 +1098,8 @@ export default function AnalyticsDashboard() {
                         <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} domain={[-100, 200]} />
                         <RechartsTooltip content={<CustomChartTooltip />} />
                         <Legend />
-                        <Bar yAxisId="left" dataKey={`certs_${currentYear}`} fill={CHART_COLORS.thisYear} name={`${currentYear} Certifications`} />
-                        <Bar yAxisId="left" dataKey={`certs_${lastYear}`} fill={CHART_COLORS.lastYear} name={`${lastYear} Certifications`} opacity={0.6} />
+                        <Bar yAxisId="left" dataKey="certs_current" fill={CHART_COLORS.thisYear} name={`${metrics.currentYearLabel || 'Current'} Certifications`} />
+                        <Bar yAxisId="left" dataKey="certs_previous" fill={CHART_COLORS.lastYear} name={`${metrics.previousYearLabel || 'Previous'} Certifications`} opacity={0.6} />
                         <Line yAxisId="right" type="monotone" dataKey="certsGrowth" stroke={CHART_COLORS.success} strokeWidth={2} dot={{ r: 4 }} name="YoY Growth %" />
                         <ReferenceLine yAxisId="right" y={0} stroke="#999" strokeDasharray="3 3" />
                       </ComposedChart>
@@ -958,7 +1110,7 @@ export default function AnalyticsDashboard() {
                 {/* NPCU Earned Trend */}
                 <Paper sx={{ p: 3, mb: 4 }} variant="outlined">
                   <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Assessment color="primary" /> NPCU Earned: {currentYear} vs {lastYear}
+                    <Assessment color="primary" /> NPCU Earned: {metrics.currentYearLabel || 'Current'} vs {metrics.previousYearLabel || 'Previous'}
                   </Typography>
                   <Box sx={{ width: '100%', height: 350 }}>
                     <ResponsiveContainer width="100%" height="100%">
@@ -968,8 +1120,8 @@ export default function AnalyticsDashboard() {
                         <YAxis tick={{ fontSize: 12 }} />
                         <RechartsTooltip content={<CustomChartTooltip />} />
                         <Legend />
-                        <Area type="monotone" dataKey={`npcu_${currentYear}`} fill={CHART_COLORS.thisYear} stroke={CHART_COLORS.thisYear} fillOpacity={0.3} name={`${currentYear} NPCU`} />
-                        <Area type="monotone" dataKey={`npcu_${lastYear}`} fill={CHART_COLORS.lastYear} stroke={CHART_COLORS.lastYear} fillOpacity={0.2} name={`${lastYear} NPCU`} />
+                        <Area type="monotone" dataKey="npcu_current" fill={CHART_COLORS.thisYear} stroke={CHART_COLORS.thisYear} fillOpacity={0.3} name={`${metrics.currentYearLabel || 'Current'} NPCU`} />
+                        <Area type="monotone" dataKey="npcu_previous" fill={CHART_COLORS.lastYear} stroke={CHART_COLORS.lastYear} fillOpacity={0.2} name={`${metrics.previousYearLabel || 'Previous'} NPCU`} />
                       </AreaChart>
                     </ResponsiveContainer>
                   </Box>
@@ -978,7 +1130,7 @@ export default function AnalyticsDashboard() {
                 {/* User Registrations Trend */}
                 <Paper sx={{ p: 3, mb: 4 }} variant="outlined">
                   <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <People color="info" /> New User Registrations: {currentYear} vs {lastYear}
+                    <People color="info" /> New User Registrations: {metrics.currentYearLabel || 'Current'} vs {metrics.previousYearLabel || 'Previous'}
                   </Typography>
                   <Box sx={{ width: '100%', height: 300 }}>
                     <ResponsiveContainer width="100%" height="100%">
@@ -988,8 +1140,8 @@ export default function AnalyticsDashboard() {
                         <YAxis tick={{ fontSize: 12 }} />
                         <RechartsTooltip content={<CustomChartTooltip />} />
                         <Legend />
-                        <Line type="monotone" dataKey={`users_${currentYear}`} stroke={CHART_COLORS.thisYear} strokeWidth={3} dot={{ r: 5 }} name={`${currentYear} Users`} />
-                        <Line type="monotone" dataKey={`users_${lastYear}`} stroke={CHART_COLORS.lastYear} strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} name={`${lastYear} Users`} />
+                        <Line type="monotone" dataKey="users_current" stroke={CHART_COLORS.thisYear} strokeWidth={3} dot={{ r: 5 }} name={`${metrics.currentYearLabel || 'Current'} Users`} />
+                        <Line type="monotone" dataKey="users_previous" stroke={CHART_COLORS.lastYear} strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} name={`${metrics.previousYearLabel || 'Previous'} Users`} />
                       </LineChart>
                     </ResponsiveContainer>
                   </Box>
@@ -998,7 +1150,7 @@ export default function AnalyticsDashboard() {
                 {/* Completions Trend */}
                 <Paper sx={{ p: 3 }} variant="outlined">
                   <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <School color="success" /> Course Completions: {currentYear} vs {lastYear}
+                    <School color="success" /> Course Completions: {metrics.currentYearLabel || 'Current'} vs {metrics.previousYearLabel || 'Previous'}
                   </Typography>
                   <Box sx={{ width: '100%', height: 300 }}>
                     <ResponsiveContainer width="100%" height="100%">
@@ -1008,8 +1160,8 @@ export default function AnalyticsDashboard() {
                         <YAxis tick={{ fontSize: 12 }} />
                         <RechartsTooltip content={<CustomChartTooltip />} />
                         <Legend />
-                        <Bar dataKey={`completions_${currentYear}`} fill={CHART_COLORS.success} name={`${currentYear} Completions`} />
-                        <Bar dataKey={`completions_${lastYear}`} fill={CHART_COLORS.completions} name={`${lastYear} Completions`} opacity={0.5} />
+                        <Bar dataKey="completions_current" fill={CHART_COLORS.success} name={`${metrics.currentYearLabel || 'Current'} Completions`} />
+                        <Bar dataKey="completions_previous" fill={CHART_COLORS.completions} name={`${metrics.previousYearLabel || 'Previous'} Completions`} opacity={0.5} />
                       </ComposedChart>
                     </ResponsiveContainer>
                   </Box>
