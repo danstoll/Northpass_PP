@@ -179,3 +179,71 @@
     font-size: 1.25rem;
   }
 }
+
+/* Program Success Charts */
+.analytics-dashboard .recharts-wrapper {
+  margin: 0 auto;
+}
+
+.analytics-dashboard .recharts-legend-wrapper {
+  font-size: 0.875rem !important;
+}
+
+.analytics-dashboard .recharts-tooltip-wrapper {
+  z-index: 100;
+}
+
+/* Growth Cards */
+.analytics-dashboard .growth-card {
+  text-align: center;
+  padding: 24px;
+  border-radius: 12px;
+  transition: transform 0.2s ease;
+}
+
+.analytics-dashboard .growth-card:hover {
+  transform: translateY(-4px);
+}
+
+.analytics-dashboard .growth-card h3 {
+  font-size: 2.5rem;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+/* Chart containers */
+.analytics-dashboard .chart-container {
+  background: var(--admin-bg-card);
+  border-radius: 8px;
+  padding: 24px;
+  margin-bottom: 24px;
+}
+
+.analytics-dashboard .chart-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+/* Program Success Tab Highlight */
+.analytics-dashboard .MuiTabs-root .MuiTab-root:first-of-type {
+  background: linear-gradient(135deg, rgba(255, 107, 53, 0.05) 0%, rgba(107, 76, 154, 0.05) 100%);
+  border-radius: 8px 8px 0 0;
+}
+
+/* Recharts customization */
+.analytics-dashboard .recharts-cartesian-grid-horizontal line,
+.analytics-dashboard .recharts-cartesian-grid-vertical line {
+  stroke: var(--admin-border-light);
+}
+
+.analytics-dashboard .recharts-text.recharts-cartesian-axis-tick-value {
+  fill: var(--admin-text-secondary);
+}
+
+.analytics-dashboard .recharts-legend-item-text {
+  color: var(--admin-text-primary) !important;
+}

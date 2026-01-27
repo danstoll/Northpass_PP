@@ -20,7 +20,27 @@ import {
   Info
 } from '@mui/icons-material';
 import { PageHeader, PageContent, StatCard, StatsRow, ActionButton, InfoButton } from './ui/NintexUI';
+import {
+  LineChart, Line, AreaChart, Area, BarChart as RechartsBarChart, Bar, XAxis, YAxis, CartesianGrid,
+  Tooltip as RechartsTooltip, Legend, ResponsiveContainer, ComposedChart, ReferenceLine
+} from 'recharts';
 import './AnalyticsDashboard.css';
+
+// Chart colors matching Nintex brand
+const CHART_COLORS = {
+  primary: '#FF6B35',
+  secondary: '#6B4C9A',
+  success: '#28a745',
+  info: '#17a2b8',
+  warning: '#ffc107',
+  danger: '#dc3545',
+  thisYear: '#FF6B35',
+  lastYear: '#6B4C9A',
+  enrollments: '#17a2b8',
+  completions: '#28a745',
+  certifications: '#FF6B35',
+  npcu: '#ffc107'
+};
 
 const API_BASE = '/api/db';
 
@@ -127,6 +147,109 @@ const METRIC_DEFINITIONS = {
     ]
   }
 };
+
+// Custom chart tooltip
+function CustomChartTooltip({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null;
+  
+  return (
+    <Box sx={{ bgcolor: 'background.paper', p: 1.5, border: 1, borderColor: 'divider', borderRadius: 1, boxShadow: 2 }}>
+      <Typography variant="subtitle2" fontWeight="bold">{label}</Typography>
+      {payload.map((entry, index) => (
+        <Typography key={index} variant="body2" sx={{ color: entry.color }}>
+          {entry.name}: {typeof entry.value === 'number' ? entry.value.toLocaleString() : entry.value}
+        </Typography>
+      ))}
+    </Box>
+  );
+}
+
+// Helper to prepare YoY comparison data from monthly trends
+function prepareYoyComparisonData(userTrends, enrollmentTrends, certTrends) {
+  const currentYear = new Date().getFullYear();
+  const lastYear = currentYear - 1;
+  
+  // Group data by month number (1-12)
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const comparison = [];
+  
+  for (let monthNum = 1; monthNum <= 12; monthNum++) {
+    const monthStr = monthNum.toString().padStart(2, '0');
+    
+    // Find current year data
+    const currentUserData = userTrends.find(d => d.month === `${currentYear}-${monthStr}`);
+    const lastUserData = userTrends.find(d => d.month === `${lastYear}-${monthStr}`);
+    
+    const currentEnrollData = enrollmentTrends.find(d => d.month === `${currentYear}-${monthStr}`);
+    const lastEnrollData = enrollmentTrends.find(d => d.month === `${lastYear}-${monthStr}`);
+    
+    const currentCertData = certTrends.find(d => d.month === `${currentYear}-${monthStr}`);
+    const lastCertData = certTrends.find(d => d.month === `${lastYear}-${monthStr}`);
+    
+    comparison.push({
+      month: monthNames[monthNum - 1],
+      monthNum,
+      // Users
+      [`users_${currentYear}`]: currentUserData?.newUsers || 0,
+      [`users_${lastYear}`]: lastUserData?.newUsers || 0,
+      usersGrowth: currentUserData && lastUserData && lastUserData.newUsers > 0
+        ? (((currentUserData.newUsers - lastUserData.newUsers) / lastUserData.newUsers) * 100).toFixed(1)
+        : null,
+      // Completions
+      [`completions_${currentYear}`]: currentEnrollData?.completions || 0,
+      [`completions_${lastYear}`]: lastEnrollData?.completions || 0,
+      completionsGrowth: currentEnrollData && lastEnrollData && lastEnrollData.completions > 0
+        ? (((currentEnrollData.completions - lastEnrollData.completions) / lastEnrollData.completions) * 100).toFixed(1)
+        : null,
+      // Certifications
+      [`certs_${currentYear}`]: currentCertData?.certifications || 0,
+      [`certs_${lastYear}`]: lastCertData?.certifications || 0,
+      certsGrowth: currentCertData && lastCertData && lastCertData.certifications > 0
+        ? (((currentCertData.certifications - lastCertData.certifications) / lastCertData.certifications) * 100).toFixed(1)
+        : null,
+      // NPCU
+      [`npcu_${currentYear}`]: currentCertData?.totalNpcu || 0,
+      [`npcu_${lastYear}`]: lastCertData?.totalNpcu || 0,
+      npcuGrowth: currentCertData && lastCertData && lastCertData.totalNpcu > 0
+        ? (((currentCertData.totalNpcu - lastCertData.totalNpcu) / lastCertData.totalNpcu) * 100).toFixed(1)
+        : null,
+    });
+  }
+  
+  return comparison;
+}
+
+// Helper to calculate program success metrics
+function calculateProgramMetrics(userTrends, enrollmentTrends, certTrends) {
+  const currentYear = new Date().getFullYear();
+  const currentMonth = new Date().getMonth() + 1;
+  
+  // Get YTD totals for current and last year
+  const currentYearData = userTrends.filter(d => d.month?.startsWith(currentYear.toString()));
+  const lastYearData = userTrends.filter(d => d.month?.startsWith((currentYear - 1).toString()));
+  
+  // Calculate cumulative growth
+  const totalUsersThisYear = currentYearData.reduce((sum, d) => sum + (d.newUsers || 0), 0);
+  const totalUsersLastYear = lastYearData.slice(0, currentMonth).reduce((sum, d) => sum + (d.newUsers || 0), 0);
+  
+  const currentYearCerts = certTrends.filter(d => d.month?.startsWith(currentYear.toString()));
+  const lastYearCerts = certTrends.filter(d => d.month?.startsWith((currentYear - 1).toString()));
+  
+  const totalCertsThisYear = currentYearCerts.reduce((sum, d) => sum + (d.certifications || 0), 0);
+  const totalCertsLastYear = lastYearCerts.slice(0, currentMonth).reduce((sum, d) => sum + (d.certifications || 0), 0);
+  
+  const totalNpcuThisYear = currentYearCerts.reduce((sum, d) => sum + (d.totalNpcu || 0), 0);
+  const totalNpcuLastYear = lastYearCerts.slice(0, currentMonth).reduce((sum, d) => sum + (d.totalNpcu || 0), 0);
+  
+  return {
+    usersGrowth: totalUsersLastYear > 0 ? ((totalUsersThisYear - totalUsersLastYear) / totalUsersLastYear * 100).toFixed(1) : null,
+    certsGrowth: totalCertsLastYear > 0 ? ((totalCertsThisYear - totalCertsLastYear) / totalCertsLastYear * 100).toFixed(1) : null,
+    npcuGrowth: totalNpcuLastYear > 0 ? ((totalNpcuThisYear - totalNpcuLastYear) / totalNpcuLastYear * 100).toFixed(1) : null,
+    totalUsersThisYear,
+    totalCertsThisYear,
+    totalNpcuThisYear
+  };
+}
 
 // Info tooltip component
 function InfoTooltip({ metricKey, size = 'small' }) {
@@ -357,43 +480,49 @@ export default function AnalyticsDashboard() {
   const loadTabData = useCallback(async (tabIndex) => {
     if (loadedTabs.has(tabIndex)) return; // Already loaded
     
+    // Tab 0 (Program Success) and Tab 1 (Monthly Trends) use data loaded initially
+    if (tabIndex === 0 || tabIndex === 1) {
+      setLoadedTabs(prev => new Set([...prev, tabIndex]));
+      return;
+    }
+    
     setTabLoading(true);
     const filterParams = buildFilterParams();
     const filterSuffix = filterParams ? `&${filterParams}` : '';
     
     try {
       switch (tabIndex) {
-        case 1: { // Weekly Activity
+        case 2: { // Weekly Activity
           const weekly = await fetch(`${API_BASE}/trends/weekly?weeks=12${filterSuffix}`).then(r => r.json());
           setWeeklySummary(weekly);
           break;
         }
-        case 2: { // Compliance
+        case 3: { // Compliance
           const compliance = await fetch(`${API_BASE}/trends/compliance?${filterParams}`).then(r => r.json());
           setComplianceData(compliance);
           break;
         }
-        case 3: { // Partner Engagement (expensive!)
+        case 4: { // Partner Engagement (expensive!)
           const engagement = await fetch(`${API_BASE}/analytics/engagement-scores?limit=25${filterSuffix}`).then(r => r.json());
           setEngagementScores(engagement?.data || []);
           break;
         }
-        case 4: { // Tier Progression
+        case 5: { // Tier Progression
           const tierProg = await fetch(`${API_BASE}/analytics/tier-progression?${filterParams}`).then(r => r.json());
           setTierProgression(tierProg?.data || null);
           break;
         }
-        case 5: { // User Segments
+        case 6: { // User Segments
           const segments = await fetch(`${API_BASE}/analytics/user-segments?${filterParams}`).then(r => r.json());
           setUserSegments(segments?.data || []);
           break;
         }
-        case 6: { // Regional
+        case 7: { // Regional
           const regional = await fetch(`${API_BASE}/analytics/regional-comparison?${filterParams}`).then(r => r.json());
           setRegionalComparison(regional?.data || []);
           break;
         }
-        case 7: { // Owner Performance
+        case 8: { // Owner Performance
           const owners = await fetch(`${API_BASE}/analytics/owner-performance?${filterParams}`).then(r => r.json());
           setOwnerPerformance(owners?.data || []);
           break;
@@ -726,6 +855,7 @@ export default function AnalyticsDashboard() {
             variant="scrollable"
             scrollButtons="auto"
           >
+            <Tab label={<Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}><Rocket fontSize="small" sx={{ color: '#FF6B35' }} />Program Success<InfoButton tooltip="Visual charts showing partner enablement program success with year-over-year comparisons." /></Box>} icon={<Timeline />} iconPosition="start" sx={{ fontWeight: 'bold' }} />
             <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Monthly Trends<InfoButton tooltip="Month-by-month breakdown of users, enrollments, completions, and certifications. Includes MoM (month-over-month) changes." /></Box>} icon={<CalendarMonth />} iconPosition="start" />
             <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Weekly Activity<InfoButton tooltip="Week-by-week activity breakdown showing enrollments, completions, and certifications. Good for spotting recent trends." /></Box>} icon={<BarChart />} iconPosition="start" />
             <Tab label={<Box sx={{ display: 'flex', alignItems: 'center' }}>Compliance<InfoButton tooltip="Partner compliance status by tier. Shows which partners meet their tier requirements and identifies gaps." /></Box>} icon={<Assessment />} iconPosition="start" />
@@ -746,8 +876,150 @@ export default function AnalyticsDashboard() {
             </Box>
           )}
 
+          {/* Program Success - Visual Charts */}
+          {activeTab === 0 && (() => {
+            const currentYear = new Date().getFullYear();
+            const lastYear = currentYear - 1;
+            const yoyData = prepareYoyComparisonData(userTrends, enrollmentTrends, certificationTrends);
+            const metrics = calculateProgramMetrics(userTrends, enrollmentTrends, certificationTrends);
+            
+            return (
+              <Box sx={{ p: 3 }}>
+                {/* Program Success Header */}
+                <Box sx={{ mb: 4, textAlign: 'center' }}>
+                  <Typography variant="h5" fontWeight="bold" gutterBottom sx={{ color: CHART_COLORS.primary }}>
+                    Partner Enablement Program Success
+                  </Typography>
+                  <Typography variant="body1" color="textSecondary">
+                    Year-over-Year comparison: {currentYear} vs {lastYear}
+                  </Typography>
+                </Box>
+
+                {/* Key Growth Metrics */}
+                <Grid container spacing={3} sx={{ mb: 4 }}>
+                  <Grid item xs={12} md={4}>
+                    <Card sx={{ textAlign: 'center', bgcolor: metrics.usersGrowth > 0 ? 'success.light' : 'warning.light', p: 2 }}>
+                      <Typography variant="h3" fontWeight="bold" color={metrics.usersGrowth > 0 ? 'success.dark' : 'warning.dark'}>
+                        {metrics.usersGrowth > 0 ? '+' : ''}{metrics.usersGrowth || 0}%
+                      </Typography>
+                      <Typography variant="subtitle1">User Registrations YoY</Typography>
+                      <Typography variant="caption" color="textSecondary">
+                        {metrics.totalUsersThisYear?.toLocaleString()} users YTD
+                      </Typography>
+                    </Card>
+                  </Grid>
+                  <Grid item xs={12} md={4}>
+                    <Card sx={{ textAlign: 'center', bgcolor: metrics.certsGrowth > 0 ? 'success.light' : 'warning.light', p: 2 }}>
+                      <Typography variant="h3" fontWeight="bold" color={metrics.certsGrowth > 0 ? 'success.dark' : 'warning.dark'}>
+                        {metrics.certsGrowth > 0 ? '+' : ''}{metrics.certsGrowth || 0}%
+                      </Typography>
+                      <Typography variant="subtitle1">Certifications YoY</Typography>
+                      <Typography variant="caption" color="textSecondary">
+                        {metrics.totalCertsThisYear?.toLocaleString()} certifications YTD
+                      </Typography>
+                    </Card>
+                  </Grid>
+                  <Grid item xs={12} md={4}>
+                    <Card sx={{ textAlign: 'center', bgcolor: metrics.npcuGrowth > 0 ? 'success.light' : 'warning.light', p: 2 }}>
+                      <Typography variant="h3" fontWeight="bold" color={metrics.npcuGrowth > 0 ? 'success.dark' : 'warning.dark'}>
+                        {metrics.npcuGrowth > 0 ? '+' : ''}{metrics.npcuGrowth || 0}%
+                      </Typography>
+                      <Typography variant="subtitle1">NPCU Earned YoY</Typography>
+                      <Typography variant="caption" color="textSecondary">
+                        {metrics.totalNpcuThisYear?.toLocaleString()} NPCU YTD
+                      </Typography>
+                    </Card>
+                  </Grid>
+                </Grid>
+
+                {/* Certifications YoY Chart */}
+                <Paper sx={{ p: 3, mb: 4 }} variant="outlined">
+                  <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <EmojiEvents color="warning" /> Certifications: {currentYear} vs {lastYear}
+                  </Typography>
+                  <Box sx={{ width: '100%', height: 350 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={yoyData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                        <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                        <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
+                        <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} domain={[-100, 200]} />
+                        <RechartsTooltip content={<CustomChartTooltip />} />
+                        <Legend />
+                        <Bar yAxisId="left" dataKey={`certs_${currentYear}`} fill={CHART_COLORS.thisYear} name={`${currentYear} Certifications`} />
+                        <Bar yAxisId="left" dataKey={`certs_${lastYear}`} fill={CHART_COLORS.lastYear} name={`${lastYear} Certifications`} opacity={0.6} />
+                        <Line yAxisId="right" type="monotone" dataKey="certsGrowth" stroke={CHART_COLORS.success} strokeWidth={2} dot={{ r: 4 }} name="YoY Growth %" />
+                        <ReferenceLine yAxisId="right" y={0} stroke="#999" strokeDasharray="3 3" />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </Box>
+                </Paper>
+
+                {/* NPCU Earned Trend */}
+                <Paper sx={{ p: 3, mb: 4 }} variant="outlined">
+                  <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Assessment color="primary" /> NPCU Earned: {currentYear} vs {lastYear}
+                  </Typography>
+                  <Box sx={{ width: '100%', height: 350 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={yoyData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                        <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                        <YAxis tick={{ fontSize: 12 }} />
+                        <RechartsTooltip content={<CustomChartTooltip />} />
+                        <Legend />
+                        <Area type="monotone" dataKey={`npcu_${currentYear}`} fill={CHART_COLORS.thisYear} stroke={CHART_COLORS.thisYear} fillOpacity={0.3} name={`${currentYear} NPCU`} />
+                        <Area type="monotone" dataKey={`npcu_${lastYear}`} fill={CHART_COLORS.lastYear} stroke={CHART_COLORS.lastYear} fillOpacity={0.2} name={`${lastYear} NPCU`} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </Box>
+                </Paper>
+
+                {/* User Registrations Trend */}
+                <Paper sx={{ p: 3, mb: 4 }} variant="outlined">
+                  <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <People color="info" /> New User Registrations: {currentYear} vs {lastYear}
+                  </Typography>
+                  <Box sx={{ width: '100%', height: 300 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={yoyData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                        <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                        <YAxis tick={{ fontSize: 12 }} />
+                        <RechartsTooltip content={<CustomChartTooltip />} />
+                        <Legend />
+                        <Line type="monotone" dataKey={`users_${currentYear}`} stroke={CHART_COLORS.thisYear} strokeWidth={3} dot={{ r: 5 }} name={`${currentYear} Users`} />
+                        <Line type="monotone" dataKey={`users_${lastYear}`} stroke={CHART_COLORS.lastYear} strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} name={`${lastYear} Users`} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </Box>
+                </Paper>
+
+                {/* Completions Trend */}
+                <Paper sx={{ p: 3 }} variant="outlined">
+                  <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <School color="success" /> Course Completions: {currentYear} vs {lastYear}
+                  </Typography>
+                  <Box sx={{ width: '100%', height: 300 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={yoyData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                        <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                        <YAxis tick={{ fontSize: 12 }} />
+                        <RechartsTooltip content={<CustomChartTooltip />} />
+                        <Legend />
+                        <Bar dataKey={`completions_${currentYear}`} fill={CHART_COLORS.success} name={`${currentYear} Completions`} />
+                        <Bar dataKey={`completions_${lastYear}`} fill={CHART_COLORS.completions} name={`${lastYear} Completions`} opacity={0.5} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </Box>
+                </Paper>
+              </Box>
+            );
+          })()}
+
           {/* Monthly Trends Table */}
-          {activeTab === 0 && (
+          {activeTab === 1 && (
             <TableContainer sx={{ maxHeight: 500 }}>
               <Table stickyHeader size="small">
                 <TableHead>
@@ -789,7 +1061,7 @@ export default function AnalyticsDashboard() {
           )}
 
           {/* Weekly Activity */}
-          {activeTab === 1 && (
+          {activeTab === 2 && (
             <TableContainer sx={{ maxHeight: 500 }}>
               <Table stickyHeader size="small">
                 <TableHead>
@@ -826,7 +1098,7 @@ export default function AnalyticsDashboard() {
           )}
 
           {/* Compliance by Tier */}
-          {activeTab === 2 && (
+          {activeTab === 3 && (
             <Box sx={{ p: 3 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
                 <Typography variant="h6">Tier Compliance Summary</Typography>
@@ -879,7 +1151,7 @@ export default function AnalyticsDashboard() {
           )}
 
           {/* Partner Engagement */}
-          {activeTab === 3 && (
+          {activeTab === 4 && (
             <Box sx={{ p: 3 }}>
               <Grid container spacing={3}>
                 {/* Top Engaged Partners */}
@@ -978,7 +1250,7 @@ export default function AnalyticsDashboard() {
           )}
 
           {/* Tier Progression */}
-          {activeTab === 4 && (
+          {activeTab === 5 && (
             <Box sx={{ p: 3 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
                 <Typography variant="h6">Partner Tier Progression</Typography>
@@ -1079,7 +1351,7 @@ export default function AnalyticsDashboard() {
           )}
 
           {/* User Segments */}
-          {activeTab === 5 && (
+          {activeTab === 6 && (
             <Box sx={{ p: 3 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
                 <Typography variant="h6">User Activity Segments</Typography>
@@ -1153,7 +1425,7 @@ export default function AnalyticsDashboard() {
           )}
 
           {/* Regional Comparison */}
-          {activeTab === 6 && (
+          {activeTab === 7 && (
             <Box sx={{ p: 3 }}>
               <TableContainer>
                 <Table>
@@ -1214,7 +1486,7 @@ export default function AnalyticsDashboard() {
           )}
 
           {/* Owner Performance */}
-          {activeTab === 7 && (
+          {activeTab === 8 && (
             <Box sx={{ p: 3 }}>
               <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Person color="primary" /> Partner Account Manager Performance
