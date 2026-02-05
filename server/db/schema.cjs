@@ -6,7 +6,7 @@
 const { query, transaction, getPool } = require('./connection.cjs');
 const crypto = require('crypto');
 
-const SCHEMA_VERSION = 31;
+const SCHEMA_VERSION = 33;
 
 /**
  * Create all database tables
@@ -95,9 +95,11 @@ async function createTables() {
       description TEXT,
       user_count INT DEFAULT 0,
       partner_id INT,
+      last_checked_at TIMESTAMP NULL,
       synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_name (name),
       INDEX idx_partner (partner_id),
+      INDEX idx_last_checked (last_checked_at),
       FOREIGN KEY (partner_id) REFERENCES partners(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
@@ -1912,6 +1914,61 @@ Get started by completing your certifications to help your team meet NPCU goals.
       }
 
       console.log('  ✓ Performance indexes migration complete');
+    }
+
+    // Migration v31 -> v32: Sync optimization columns
+    if (currentVersion < 32) {
+      console.log('📦 Running v32 migration: Add sync optimization columns...');
+
+      // Add last_checked_at to lms_groups for smart group member sync
+      try {
+        await query('ALTER TABLE lms_groups ADD COLUMN last_checked_at TIMESTAMP NULL AFTER partner_id');
+        await query('ALTER TABLE lms_groups ADD INDEX idx_last_checked (last_checked_at)');
+        console.log('  ✓ Added last_checked_at to lms_groups');
+      } catch (err) {
+        if (!err.message.includes('Duplicate')) console.log(`  - lms_groups last_checked_at: ${err.message}`);
+      }
+
+      // Add API call tracking columns to sync_logs
+      try {
+        await query('ALTER TABLE sync_logs ADD COLUMN api_calls_made INT DEFAULT 0 AFTER records_failed');
+        await query('ALTER TABLE sync_logs ADD COLUMN api_calls_saved INT DEFAULT 0 AFTER api_calls_made');
+        await query('ALTER TABLE sync_logs ADD COLUMN cache_hits INT DEFAULT 0 AFTER api_calls_saved');
+        console.log('  ✓ Added API call tracking columns to sync_logs');
+      } catch (err) {
+        if (!err.message.includes('Duplicate')) console.log(`  - sync_logs api_calls: ${err.message}`);
+      }
+
+      console.log('  ✓ Sync optimization migration complete');
+    }
+
+    // Migration v32 -> v33: Reduce sync intervals (optimized syncs are faster)
+    if (currentVersion < 33) {
+      console.log('📦 Running v33 migration: Reduce sync intervals...');
+
+      // Update intervals - since incremental syncs are 91% faster, we can run more frequently
+      const intervalUpdates = [
+        { type: 'sync_users', interval: 60 },      // Was 120 (2hr) -> Now 60 (1hr)
+        { type: 'sync_groups', interval: 60 },     // Was 120 (2hr) -> Now 60 (1hr)
+        { type: 'sync_courses', interval: 120 },   // Was 240 (4hr) -> Now 120 (2hr)
+        { type: 'sync_npcu', interval: 180 },      // Was 360 (6hr) -> Now 180 (3hr)
+        { type: 'sync_enrollments', interval: 120 }, // Was 240 (4hr) -> Now 120 (2hr)
+        { type: 'impartner_sync', interval: 120 }, // Was 360 (6hr) -> Now 120 (2hr)
+      ];
+
+      for (const update of intervalUpdates) {
+        try {
+          await query(
+            'UPDATE scheduled_tasks SET interval_minutes = ? WHERE task_type = ?',
+            [update.interval, update.type]
+          );
+          console.log(`  ✓ Updated ${update.type} interval to ${update.interval} minutes`);
+        } catch (err) {
+          console.log(`  - ${update.type}: ${err.message}`);
+        }
+      }
+
+      console.log('  ✓ Sync intervals updated (more frequent due to optimization)');
     }
 
     await query('UPDATE schema_info SET version = ? WHERE id = 1', [SCHEMA_VERSION]);

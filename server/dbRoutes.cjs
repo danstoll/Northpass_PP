@@ -2438,14 +2438,45 @@ function getProductCategory(courseName) {
   return 'Other';
 }
 
+// Helper function to fix UTF-8 encoding issues (Latin-1/Windows-1252 corruption)
+// Example: "TanÃ¡csadÃ³" should become "Tanácsadó"
+function fixUtf8Encoding(str) {
+  if (!str) return str;
+  
+  try {
+    // Check if string contains common UTF-8 corruption patterns
+    // These occur when UTF-8 bytes are incorrectly interpreted as Latin-1
+    if (str.includes('Ã') || str.includes('Â')) {
+      // Convert to Latin-1 bytes then decode as UTF-8
+      const bytes = new Uint8Array(str.split('').map(c => c.charCodeAt(0)));
+      const decoder = new TextDecoder('utf-8', { fatal: false });
+      const fixed = decoder.decode(bytes);
+      
+      // Only use the fixed version if it's actually different and looks valid
+      if (fixed !== str && !fixed.includes('\uFFFD')) {
+        console.log(`🔧 Fixed encoding: "${str}" → "${fixed}"`);
+        return fixed;
+      }
+    }
+  } catch (e) {
+    // If decoding fails, return original string
+    console.log(`⚠️ Could not fix encoding for: "${str}"`);
+  }
+  
+  return str;
+}
+
 // Get company dashboard data by group name (for CompanyWidget)
 router.get('/dashboard/group', async (req, res) => {
   try {
-    const { name } = req.query;
+    const { name: rawName } = req.query;
     
-    if (!name) {
+    if (!rawName) {
       return res.status(400).json({ error: 'Group name is required' });
     }
+    
+    // Fix potential UTF-8 encoding corruption
+    const name = fixUtf8Encoding(rawName);
     
     let group = null;
     let displayName = name; // Use the requested name as default display name

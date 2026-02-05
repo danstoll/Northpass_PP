@@ -246,17 +246,17 @@ Routes are split into modular files in `server/routes/` for maintainability:
 - AdminPanel (URL Generator) - Removed January 2025, URLs now in Owner Report
 
 ### Database Sync Architecture
-**Schema Version**: 19 (January 2026)
+**Schema Version**: 33 (February 2026)
 
 **scheduled_tasks table**: Full task scheduler with 11 task types:
 - **Data Sync Tasks**:
-  - `sync_users` - Sync LMS users (2h interval)
-  - `sync_groups` - Sync LMS groups (2h interval)
-  - `sync_courses` - Sync course catalog (4h interval)
-  - `sync_npcu` - Sync NPCU values (6h interval)
-  - `sync_enrollments` - Sync user enrollments (4h interval, partner users only)
+  - `sync_users` - Sync LMS users (1h interval, optimized from 2h)
+  - `sync_groups` - Sync LMS groups (1h interval, optimized from 2h)
+  - `sync_courses` - Sync course catalog (2h interval, optimized from 4h)
+  - `sync_npcu` - Sync NPCU values (3h interval, optimized from 6h)
+  - `sync_enrollments` - Sync user enrollments (2h interval, optimized from 4h, partner users only)
   - `lms_sync` - LMS Bundle: All syncs combined (legacy composite task)
-  - `impartner_sync` - Sync partners/contacts FROM Impartner PRM (6h interval)
+  - `impartner_sync` - Sync partners/contacts FROM Impartner PRM (2h interval, optimized from 6h)
   - `sync_to_impartner` - Push cert counts/NPCU TO Impartner (incremental, 6h interval)
 - **Analysis Tasks**:
   - `group_analysis` - Find potential users by domain (6h interval)
@@ -434,6 +434,53 @@ Invoke-RestMethod -Uri "https://ptrlrndb.prod.ntxgallery.com/api/db/sync/courses
 - `groups_full` - Full group sync (fetches all ~1.4K groups)
 - `courses` - Incremental course sync (default)
 - `courses_full` - Full course sync (fetches all ~450 courses)
+
+### Sync Context Cache (February 2026)
+**In-memory cache** that shares data between sync operations during a sync chain, preventing duplicate API calls.
+
+**Module**: [server/db/syncContext.cjs](server/db/syncContext.cjs)
+
+**Cache lifecycle**:
+```javascript
+initSyncContext('chain-id')  // Start new sync session
+getSyncContext()             // Get cached data (groups, users, courses, counts)
+clearSyncContext()           // Cleanup after sync chain completes
+```
+
+**What's cached**:
+- Groups (with user_count): Cached after `syncGroups`, reused in `syncGroupMembers`
+- Sync status: Tracks which syncs have completed
+- API calls saved: Metrics for monitoring optimization effectiveness
+
+**Benefits**:
+- `syncGroupMembers` skips ~1,400 API calls by using cached group counts
+- `findAllPartnerGroupId` uses cache instead of fetching all groups
+
+### API Rate Limit Tuning (February 2026)
+Northpass API allows **10 requests/second**. Rate limiting delays tuned from conservative 500ms to 125ms:
+
+| Operation | Old Delay | New Delay | Improvement |
+|-----------|-----------|-----------|-------------|
+| Page fetching | 500ms | 125ms | **4x faster** |
+| Group membership | 200ms | 125ms | **1.6x faster** |
+| Enrollment fetch | 150ms | 125ms | **1.2x faster** |
+
+**Safety margin**: 8 req/sec actual usage (80% of limit)
+
+### Daily Sync Chain Optimization (February 2026)
+The daily sync chain now uses **incremental mode by default** instead of forcing full syncs:
+
+```javascript
+// OLD: Full sync every time (slow, ~7,500 API calls)
+lmsSyncService.syncCourses({ forceFullSync: true })
+
+// NEW: Incremental by default (~500 API calls)
+lmsSyncService.syncCourses({ forceFullSync: false })
+```
+
+**Schema v32 additions**:
+- `lms_groups.last_checked_at`: Tracks when group membership was last verified
+- `sync_logs.api_calls_made/saved/cache_hits`: Optimization metrics
 
 ## Proxy Configuration
 

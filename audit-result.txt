@@ -1,0 +1,37 @@
+﻿
+
+allPartnersGroupId      : 3d2d008f-a818-4fa0-b448-dcfdac15431d
+allPartnersGroupName    : All Partners
+totalContacts           : 3607
+partnersWithIssues      : {@{partnerId=22686; partnerName=Assimilated Information Systems; tier=Certified; 
+                          partnerGroupId=713302f5-4451-47fb-b09a-9783d6207c37; partnerGroupName=ptr_Assimilated 
+                          Information Systems; needsRename=False; suggestedName=; totalContacts=1; withLms=2; 
+                          withoutLms=0; missingPartnerGroup=System.Object[]; missingAllPartnersGroup=System.Object[]}, 
+                          @{partnerId=22768; partnerName=Born Digital Solutions; tier=Certified; 
+                          partnerGroupId=896e49e1-2852-4e60-be0a-098958f077c8; partnerGroupName=ptr_Born Digital 
+                          Solutions; needsRename=False; suggestedName=; totalContacts=1; withLms=2; withoutLms=0; 
+                          missingPartnerGroup=System.Object[]; missingAllPartnersGroup=System.Object[]}, 
+                          @{partnerId=22780; partnerName=BridgingIT GmbH; tier=Premier; 
+                          partnerGroupId=ffa6bf71-0ceb-4450-ad7c-a925e5be99e3; partnerGroupName=ptr_BridgingIT GmbH; 
+                          needsRename=False; suggestedName=; totalContacts=1; withLms=2; withoutLms=0; 
+                          missingPartnerGroup=System.Object[]; missingAllPartnersGroup=System.Object[]}, 
+                          @{partnerId=22804; partnerName=Camoai; tier=Registered; 
+                          partnerGroupId=7388961a-9fcb-45c1-8ed3-aa5c71ba3230; partnerGroupName=ptr_Camoai; 
+                          needsRename=False; suggestedName=; totalContacts=1; withLms=1; withoutLms=0; 
+                          missingPartnerGroup=System.Object[]; missingAllPartnersGroup=System.Object[]}...}
+missingPartnerGroup     : 80
+missingAllPartnersGroup : 135
+groupsNeedingRename     : 0
+groupsToRename          : {}
+byPartner               : @{22686=; 22768=; 22780=; 22804=; 22815=; 22840=; 22855=; 22859=; 22872=; 22939=; 22958=; 
+                          22981=; 22994=; 23010=; 23011=; 23016=; 23030=; 23033=; 23050=; 23056=; 23062=; 23086=; 
+                          23116=; 23123=; 23128=; 23133=; 23165=; 23169=; 23171=; 23179=; 23182=; 23191=; 23208=; 
+                          23217=; 23229=; 23239=; 23245=; 23250=; 23283=; 23284=; 23289=; 23291=; 23294=; 23319=; 
+                          23328=; 23340=; 23348=; 23375=; 23377=; 23392=; 23396=; 23398=; 23415=; 23419=; 23422=; 
+                          23434=; 23440=; 23473=; 23482=; 23493=; 23498=; 23502=; 23552=; 23553=; 23561=; 23567=; 
+                          23580=; 23583=; 23593=; 23597=; 23611=; 23636=; 23655=; 23659=; 23664=; 23675=; 23677=; 
+                          23680=; 23743=; 23771=; 23825=; 23827=; 23843=; 23844=; 23860=; 23882=; 23883=; 23891=; 
+                          23903=; 23906=; 23918=; 23962=; 23980=; 23990=; 24025=; 24053=; 24056=; 24057=; 24069=}
+
+
+

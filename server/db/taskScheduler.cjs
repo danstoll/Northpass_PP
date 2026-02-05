@@ -12,6 +12,7 @@
  */
 
 const { query } = require('./connection.cjs');
+const { initSyncContext, clearSyncContext, getSyncContext } = require('./syncContext.cjs');
 
 // Environment check - only run scheduler in production
 const IS_PRODUCTION = process.env.NODE_ENV === 'production' || process.env.ENABLE_SCHEDULER === 'true';
@@ -1805,6 +1806,10 @@ async function runDailySyncChain(options = {}) {
   const startTime = Date.now();
   const chainId = `daily_${Date.now()}`;
 
+  // Initialize sync context for cross-operation caching
+  const syncContext = initSyncContext(chainId);
+  console.log(`📦 Sync context initialized (session: ${chainId})`);
+
   const results = {
     chainId,
     startedAt: new Date().toISOString(),
@@ -1833,18 +1838,20 @@ async function runDailySyncChain(options = {}) {
   console.log('═══════════════════════════════════════════════════════════════');
 
   // Define the sync chain steps
+  // OPTIMIZED: Using incremental mode by default to reduce API calls (~91% reduction)
+  // Full sync only runs when explicitly requested or on first-time setup
   const steps = [
     {
       name: 'sync_courses',
-      description: 'Sync courses from LMS',
-      fn: async () => await lmsSyncService.syncCourses({ forceFullSync: true }),
+      description: 'Sync courses from LMS (incremental)',
+      fn: async () => await lmsSyncService.syncCourses({ forceFullSync: false }),
       required: true,
       parallel: 'tier1'
     },
     {
       name: 'impartner_sync',
-      description: 'Sync partners and contacts from Impartner',
-      fn: async () => await impartnerSyncService.syncAll({ mode: 'full' }),
+      description: 'Sync partners and contacts from Impartner (incremental)',
+      fn: async () => await impartnerSyncService.syncAll({ mode: 'incremental' }),
       required: true,
       parallel: 'tier1'
     },
@@ -1857,22 +1864,22 @@ async function runDailySyncChain(options = {}) {
     },
     {
       name: 'sync_users',
-      description: 'Sync users from LMS',
-      fn: async () => await lmsSyncService.syncUsers({ forceFullSync: true }),
+      description: 'Sync users from LMS (incremental)',
+      fn: async () => await lmsSyncService.syncUsers({ forceFullSync: false }),
       required: true,
       dependsOn: ['sync_npcu']
     },
     {
       name: 'sync_groups',
-      description: 'Sync groups and partner links',
-      fn: async () => await lmsSyncService.syncGroups({ forceFullSync: true }),
+      description: 'Sync groups and partner links (incremental)',
+      fn: async () => await lmsSyncService.syncGroups({ forceFullSync: false }),
       required: true,
       dependsOn: ['sync_users', 'impartner_sync']
     },
     {
       name: 'sync_enrollments',
-      description: 'Sync user enrollments',
-      fn: async () => await lmsSyncService.syncEnrollments({ forceFullSync: true }),
+      description: 'Sync user enrollments (incremental)',
+      fn: async () => await lmsSyncService.syncEnrollments({ forceFullSync: false }),
       required: true,
       dependsOn: ['sync_groups']
     },
@@ -2024,6 +2031,17 @@ async function runDailySyncChain(options = {}) {
   console.log(`   Steps Completed: ${results.steps.filter(s => s.status === 'completed').length}/${steps.length}`);
   console.log(`   Steps Failed: ${results.steps.filter(s => s.status === 'failed').length}`);
   console.log(`   Steps Skipped: ${results.steps.filter(s => s.status === 'skipped').length}`);
+
+  // Log sync context stats and cleanup
+  const ctx = getSyncContext();
+  if (ctx) {
+    const ctxStats = ctx.getStats();
+    console.log(`   Cache Hits: ${ctxStats.cacheHits}`);
+    console.log(`   API Calls Saved: ${ctxStats.apiCallsSaved}`);
+    results.cacheStats = ctxStats;
+  }
+  clearSyncContext();
+  console.log(`📦 Sync context cleared`);
 
   return results;
 }

@@ -5,6 +5,7 @@
 
 const https = require('https');
 const { query, transaction } = require('./connection.cjs');
+const { getSyncContext } = require('./syncContext.cjs');
 
 // Import WebSocket emitters (may not be available if run standalone)
 let emitSyncProgress, emitSyncComplete, emitSyncError;
@@ -220,8 +221,8 @@ async function fetchAllPages(endpoint, dataKey = 'data', options = {}) {
       currentUrl = null; // No more pages
     }
     
-    // Rate limiting delay - 500ms to avoid 429 errors
-    await new Promise(resolve => setTimeout(resolve, 500));
+    // Rate limiting delay - 125ms (8 req/sec, well under 10 req/sec limit)
+    await new Promise(resolve => setTimeout(resolve, 125));
   }
 
   return allData;
@@ -301,10 +302,25 @@ async function updateSyncLog(logId, status, stats, error = null, syncType = 'unk
 
 /**
  * Find the "All Partners" group ID
+ * Uses cached groups from sync context if available to avoid duplicate API calls
  */
 async function findAllPartnerGroupId() {
   console.log('🔍 Looking for "All Partners" group...');
-  const groups = await fetchAllPages('/v2/groups');
+  
+  // Check sync context cache first
+  let groups;
+  const ctx = getSyncContext();
+  if (ctx) {
+    groups = ctx.getGroups();
+    if (groups) {
+      console.log(`  📦 Using cached groups (${groups.length} groups from sync context)`);
+    }
+  }
+  
+  // Fallback to API if no cache
+  if (!groups) {
+    groups = await fetchAllPages('/v2/groups');
+  }
   
   const allPartnerGroup = groups.find(g => {
     const name = (g.attributes?.name || '').toLowerCase().trim();
@@ -378,7 +394,8 @@ async function fetchGroupMemberIds(groupId, options = {}) {
     }
 
     // Rate limiting
-    await new Promise(resolve => setTimeout(resolve, 200));
+    // Rate limiting delay - 125ms (optimized from 200ms)
+    await new Promise(resolve => setTimeout(resolve, 125));
   }
   
   console.log(`📥 Found ${allUserIds.length} member IDs in group${apiErrors > 0 ? ` (${apiErrors} API errors)` : ''}`);
@@ -817,6 +834,13 @@ async function syncGroups(logId, onProgress) {
 
     stats.skipped = groups.length - partnerGroups.length;
     console.log(`✅ Groups synced: ${stats.created} new, ${stats.updated} updated, ${stats.skipped} skipped (non-partner), ${stats.failed} failed`);
+    
+    // Cache groups in sync context for other operations
+    const ctx = getSyncContext();
+    if (ctx) {
+      ctx.setGroups(groups);
+      console.log(`  📦 Cached ${groups.length} groups in sync context`);
+    }
   } catch (error) {
     console.error('❌ Group sync failed:', error);
     throw error;
@@ -954,6 +978,13 @@ async function syncGroupsIncremental(logId, onProgress) {
 
     stats.skipped = groups.length - partnerGroups.length;
     console.log(`✅ Groups synced (incremental): ${stats.created} new, ${stats.updated} updated, ${stats.skipped} skipped, ${stats.failed} failed`);
+    
+    // Cache groups in sync context for other operations
+    const ctx = getSyncContext();
+    if (ctx) {
+      ctx.setGroups(groups);
+      console.log(`  📦 Cached ${groups.length} groups in sync context`);
+    }
   } catch (error) {
     console.error('❌ Group sync failed:', error);
     throw error;
@@ -999,8 +1030,9 @@ async function softDeleteGroup(groupId, groupName, reason) {
 }
 
 /**
- * Sync group memberships (optimized with count comparison)
+ * Sync group memberships - OPTIMIZED with cache and count comparison
  * Only syncs groups where member count has changed
+ * Uses cached group data from syncContext to avoid API calls when possible
  * Now tracks which groups fail and why, with soft-delete support
  */
 async function syncGroupMembers(logId, onProgress) {
@@ -1013,110 +1045,143 @@ async function syncGroupMembers(logId, onProgress) {
     skipped: 0, 
     unchanged: 0,
     softDeleted: 0,
+    cacheUsed: false,
+    apiCallsSaved: 0,
     failedGroups: [] // Track which groups failed and why
   };
 
   try {
     // Only sync ACTIVE partner groups (those linked to partners) + the special "All Partners" group
-    const groups = await query(`
-      SELECT g.id, g.name, g.user_count as stored_count, g.partner_id 
+    const dbGroups = await query(`
+      SELECT g.id, g.name, g.user_count as stored_count, g.partner_id, g.last_checked_at, g.synced_at 
       FROM lms_groups g
       WHERE (g.partner_id IS NOT NULL OR LOWER(g.name) = 'all partners')
         AND (g.is_active = TRUE OR g.is_active IS NULL)
       ORDER BY g.name
     `);
-    console.log(`📥 Checking ${groups.length} active partner groups for membership changes...`);
+    console.log(`📥 Found ${dbGroups.length} active partner groups to check...`);
 
-    // Fetch current counts from Northpass API to compare
-    // Use parallel requests with controlled concurrency for better performance
-    const groupsToSync = [];
-    const CONCURRENT_LIMIT = 10; // Max parallel API requests
-
-    // Helper function to check a single group
-    async function checkGroupCount(group) {
-      try {
-        const response = await fetch(`https://api.northpass.com/v2/groups/${group.id}`, {
-          headers: {
-            'X-Api-Key': process.env.NORTHPASS_API_KEY || 'wcU0QRpN9jnPvXEc5KXMiuVWk',
-            'Content-Type': 'application/json'
-          }
-        });
-
-        // Update last_api_check timestamp
-        await query('UPDATE lms_groups SET last_api_check = NOW() WHERE id = ?', [group.id]);
-
-        if (!response.ok) {
-          const statusCode = response.status;
-          let reason;
-
-          if (statusCode === 404) {
-            reason = 'Group not found in LMS (deleted)';
-            await softDeleteGroup(group.id, group.name, reason);
-            return { type: 'softDeleted', group };
-          } else if (statusCode === 403) {
-            reason = 'Access denied (permissions issue)';
-          } else if (statusCode === 429) {
-            reason = 'Rate limited';
+    // OPTIMIZATION: Check if we have cached groups from sync context
+    let groupsToSync = [];
+    const ctx = getSyncContext();
+    const cachedGroups = ctx ? ctx.getGroups() : null;
+    
+    if (cachedGroups && cachedGroups.length > 0) {
+      // Use cached data - no API calls needed for count checking!
+      console.log(`  📦 Using cached group data (${cachedGroups.length} groups) - skipping ${dbGroups.length} API calls`);
+      stats.cacheUsed = true;
+      stats.apiCallsSaved = dbGroups.length;
+      
+      // Build map of cached groups by ID
+      const cachedGroupMap = new Map(cachedGroups.map(g => [g.id, g]));
+      
+      for (const dbGroup of dbGroups) {
+        const cached = cachedGroupMap.get(dbGroup.id);
+        if (cached) {
+          const apiCount = cached.attributes?.user_count || 0;
+          const storedCount = dbGroup.stored_count || 0;
+          
+          if (apiCount !== storedCount) {
+            groupsToSync.push({ ...dbGroup, api_count: apiCount });
           } else {
-            reason = `HTTP ${statusCode}`;
+            stats.unchanged++;
+          }
+        } else {
+          // Group not in cache - might be new or deleted, skip for now
+          stats.skipped++;
+        }
+      }
+    } else {
+      // Fallback to API-based checking (original behavior)
+      console.log(`  📡 No cached data available - checking via API...`);
+      const CONCURRENT_LIMIT = 10; // Max parallel API requests
+
+      // Helper function to check a single group
+      async function checkGroupCount(group) {
+        try {
+          const response = await fetch(`https://api.northpass.com/v2/groups/${group.id}`, {
+            headers: {
+              'X-Api-Key': process.env.NORTHPASS_API_KEY || 'wcU0QRpN9jnPvXEc5KXMiuVWk',
+              'Content-Type': 'application/json'
+            }
+          });
+
+          // Update last_api_check timestamp
+          await query('UPDATE lms_groups SET last_api_check = NOW() WHERE id = ?', [group.id]);
+
+          if (!response.ok) {
+            const statusCode = response.status;
+            let reason;
+
+            if (statusCode === 404) {
+              reason = 'Group not found in LMS (deleted)';
+              await softDeleteGroup(group.id, group.name, reason);
+              return { type: 'softDeleted', group };
+            } else if (statusCode === 403) {
+              reason = 'Access denied (permissions issue)';
+            } else if (statusCode === 429) {
+              reason = 'Rate limited';
+            } else {
+              reason = `HTTP ${statusCode}`;
+            }
+
+            await logSyncFailure('group_members', 'group', group.id, group.name, reason, statusCode);
+            return { type: 'failed', group, reason, status: statusCode };
           }
 
-          await logSyncFailure('group_members', 'group', group.id, group.name, reason, statusCode);
-          return { type: 'failed', group, reason, status: statusCode };
-        }
+          const data = await response.json();
+          const apiCount = data.data?.attributes?.user_count || 0;
+          const storedCount = group.stored_count || 0;
 
-        const data = await response.json();
-        const apiCount = data.data?.attributes?.user_count || 0;
-        const storedCount = group.stored_count || 0;
-
-        if (apiCount !== storedCount) {
-          return { type: 'needsSync', group: { ...group, api_count: apiCount } };
-        } else {
-          return { type: 'unchanged', group };
-        }
-      } catch (e) {
-        await logSyncFailure('group_members', 'group', group.id, group.name, `Exception: ${e.message}`);
-        return { type: 'error', group, reason: e.message };
-      }
-    }
-
-    // Process groups in parallel batches
-    for (let i = 0; i < groups.length; i += CONCURRENT_LIMIT) {
-      const batch = groups.slice(i, i + CONCURRENT_LIMIT);
-      const promises = batch.map(group => checkGroupCount(group));
-      const results = await Promise.all(promises);
-
-      // Process results from this batch
-      for (const result of results) {
-        switch (result.type) {
-          case 'needsSync':
-            groupsToSync.push(result.group);
-            break;
-          case 'unchanged':
-            stats.unchanged++;
-            break;
-          case 'softDeleted':
-            stats.softDeleted++;
-            break;
-          case 'failed':
-            stats.failedGroups.push({ id: result.group.id, name: result.group.name, reason: result.reason, status: result.status });
-            stats.failed++;
-            break;
-          case 'error':
-            stats.failedGroups.push({ id: result.group.id, name: result.group.name, reason: result.reason, status: null });
-            groupsToSync.push(result.group); // Try to sync anyway on network errors
-            break;
+          if (apiCount !== storedCount) {
+            return { type: 'needsSync', group: { ...group, api_count: apiCount } };
+          } else {
+            return { type: 'unchanged', group };
+          }
+        } catch (e) {
+          await logSyncFailure('group_members', 'group', group.id, group.name, `Exception: ${e.message}`);
+          return { type: 'error', group, reason: e.message };
         }
       }
 
-      if (i + CONCURRENT_LIMIT < groups.length) {
-        console.log(`  Checked ${Math.min(i + CONCURRENT_LIMIT, groups.length)}/${groups.length} groups for changes...`);
-        // Small delay between batches to be respectful of rate limits
-        await new Promise(resolve => setTimeout(resolve, 100));
+      // Process groups in parallel batches
+      for (let i = 0; i < dbGroups.length; i += CONCURRENT_LIMIT) {
+        const batch = dbGroups.slice(i, i + CONCURRENT_LIMIT);
+        const promises = batch.map(group => checkGroupCount(group));
+        const results = await Promise.all(promises);
+
+        // Process results from this batch
+        for (const result of results) {
+          switch (result.type) {
+            case 'needsSync':
+              groupsToSync.push(result.group);
+              break;
+            case 'unchanged':
+              stats.unchanged++;
+              break;
+            case 'softDeleted':
+              stats.softDeleted++;
+              break;
+            case 'failed':
+              stats.failedGroups.push({ id: result.group.id, name: result.group.name, reason: result.reason, status: result.status });
+              stats.failed++;
+              break;
+            case 'error':
+              stats.failedGroups.push({ id: result.group.id, name: result.group.name, reason: result.reason, status: null });
+              groupsToSync.push(result.group); // Try to sync anyway on network errors
+              break;
+          }
+        }
+
+        if (i + CONCURRENT_LIMIT < dbGroups.length) {
+          console.log(`  Checked ${Math.min(i + CONCURRENT_LIMIT, dbGroups.length)}/${dbGroups.length} groups for changes...`);
+          // Small delay between batches to be respectful of rate limits
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
       }
     }
     
-    console.log(`📊 Found ${groupsToSync.length} groups with membership changes (${stats.unchanged} unchanged, ${stats.softDeleted} soft-deleted)`);
+    console.log(`📊 Found ${groupsToSync.length} groups with membership changes (${stats.unchanged} unchanged, ${stats.softDeleted} soft-deleted${stats.cacheUsed ? ', used cache' : ''})`);
     
     // Log summary of failures if any
     if (stats.failedGroups.length > 0) {
@@ -1174,9 +1239,9 @@ async function syncGroupMembers(logId, onProgress) {
           }
         }
 
-        // Update user count and mark as active (in case it was previously soft-deleted)
+        // Update user count, last_checked_at, and mark as active (in case it was previously soft-deleted)
         await query(
-          'UPDATE lms_groups SET user_count = ?, is_active = TRUE, deleted_at = NULL, deletion_reason = NULL WHERE id = ?',
+          'UPDATE lms_groups SET user_count = ?, last_checked_at = NOW(), is_active = TRUE, deleted_at = NULL, deletion_reason = NULL WHERE id = ?',
           [memberCount, group.id]
         );
         stats.updated++;
@@ -1186,15 +1251,16 @@ async function syncGroupMembers(logId, onProgress) {
           onProgress && onProgress('group_members', i + 1, groupsToSync.length);
         }
 
-        // Rate limit
-        await new Promise(resolve => setTimeout(resolve, 300));
+        // Rate limit (optimized from 300ms)
+        await new Promise(resolve => setTimeout(resolve, 125));
       } catch (error) {
         stats.failed++;
         console.error(`  Failed to sync members for group ${group.name}:`, error.message);
       }
     }
 
-    console.log(`✅ Group memberships synced: ${stats.processed} memberships, ${stats.updated} groups updated, ${stats.unchanged} unchanged`);
+    const cacheMsg = stats.cacheUsed ? `, saved ${stats.apiCallsSaved} API calls` : '';
+    console.log(`✅ Group memberships synced: ${stats.processed} memberships, ${stats.updated} groups updated, ${stats.unchanged} unchanged${cacheMsg}`);
   } catch (error) {
     console.error('❌ Group members sync failed:', error);
     throw error;
@@ -1678,8 +1744,8 @@ async function syncEnrollments(logId, onProgress) {
           onProgress && onProgress('enrollments', i + 1, users.length);
         }
 
-        // Rate limit between users
-        await new Promise(resolve => setTimeout(resolve, 150));
+        // Rate limit between users (optimized from 150ms)
+        await new Promise(resolve => setTimeout(resolve, 125));
       } catch (error) {
         stats.failed++;
         // Track if it's an API error vs DB error
@@ -1921,8 +1987,8 @@ async function syncEnrollmentsIncremental(logId, onProgress, options = {}) {
           onProgress && onProgress('enrollments', i + 1, users.length);
         }
 
-        // Rate limit between users
-        await new Promise(resolve => setTimeout(resolve, 150));
+        // Rate limit between users (optimized from 150ms)
+        await new Promise(resolve => setTimeout(resolve, 125));
       } catch (error) {
         stats.failed++;
         if (error.isApiError) {
