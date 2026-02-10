@@ -3,135 +3,64 @@
 This directory contains files that are no longer actively used in the production Northpass Partner Portal but are kept for reference or potential future use.
 
 ## Archive Date
-November 28, 2025
+- Original archive: November 28, 2025
+- Major cleanup: February 10, 2026
 
 ## Archived Files Organization
 
-### 📁 demo-scripts/
-**Purpose**: Demo and test scripts used during development
+### 📁 test-scripts/ (February 2026)
+**Purpose**: Test, exploration, and API discovery scripts
+
+**25 files** including:
+- `test-*.cjs` (11) - Impartner API tests, NPCU sync tests, transcript tests
+- `explore-*.cjs` (6) - Impartner field/object exploration
+- `discover-fields.cjs`, `get-schema.cjs`, `list-impartner-objects.cjs` - Schema discovery
+- `setup-umami.ps1` - One-off Umami analytics setup
+- `db-testSync.cjs`, `db-debugSync.cjs`, `db-verboseSync.cjs`, `db-benchmark.cjs` - DB sync debugging (originally in server/db/)
+- `impartner-objects-v1.json` - Impartner objects snapshot (originally in impartner/)
+
+**Reason**: One-off testing and exploration scripts. API discovery is complete; all sync functionality is now handled by the task scheduler.
+
+---
+
+### 📁 diagnostic-scripts/ (February 2026)
+**Purpose**: One-off diagnostic and health-check scripts
+
+**37 files** including:
+- `check-*.cjs` (23) - DB checks, sync status, enrollment counts, partner status, NPCU cache, Salesforce IDs, etc.
+- `find-*.cjs/ps1` (5) - Find missing partners, invalid courses, Impartner accounts
+- `calc-npcu.cjs`, `get-primary-user.cjs`, `verify-protiviti.cjs` - Specific partner/data checks
+- `db-checkEnrollments.cjs`, `db-checkPartner.cjs`, `db-count.cjs` - DB diagnostics (originally in server/db/)
+- `find_impartner_account.cjs`, `inspect_partner.js`, `preview_sync_to_impartner.js` - Impartner diagnostics (originally in scripts/)
+
+**Reason**: One-off diagnostic scripts used during development and troubleshooting. Monitoring is now handled by the sync dashboard and admin tools.
+
+---
+
+### 📁 data-fix-scripts/ (February 2026)
+**Purpose**: One-off data repairs, migrations, and manual sync runners
+
+**34 files** including:
+- `add-*.cjs` (3) - Add columns/records
+- `cleanup-*.cjs` (4) - Clean stuck logs, orphan records
+- `deactivate-lms-users.cjs`, `disable-accounts.cjs` - Manual user deactivation
+- `rebuild-npcu*.cjs`, `refresh-npcu.cjs` - NPCU cache rebuilds
+- `repair-enrollments.cjs`, `update-sync-mode.cjs`, `enable-npcu-sync.cjs` - Data fixes
+- `link-impact.cjs`, `offboard-impact.cjs` - Impact Networking one-off operations
+- `db-*.cjs` (13) - Sync prototypes and migration scripts (originally in server/db/): continueSync, createNpcuCache, incrementalSync, quickSync, robustSync, runSync, syncEnrollments, syncGroupMembers, addPendingColumn, migrate-add-last-modified, run-migration
+- `db-runSync.ps1`, `db-sync_progress.json` - PowerShell runner and state file
+- `push_*.cjs`, `run_sync_to_impartner.cjs`, `sync-leads.cjs` - Manual sync launchers (originally in scripts/)
+
+**Reason**: These were operational prototypes and one-off fixes. All sync functionality is now handled by the production task scheduler in `server/db/taskScheduler.cjs`.
+
+---
+
+### 📁 audit-files/ (February 2026)
+**Purpose**: Audit outputs, log files, and data snapshots
 
 **Files**:
-- `demo-customer-dashboard.js` - Customer dashboard demo script
-- `demo-url-encoding.js` - URL encoding demo
-- `test-premier-tech.js` - Premier Tech customer test script
-- `test-url-encoding.js` - URL encoding test script
-- `fix_npcu_logging.js` - NPCU logging fix script
+- `audit-result.json`, `audit-result.txt`, `audit.json` - npm/code audit results
+- `Nintex Partner Portal Unmatched_2026-01-16.xlsx` - Unmatched partner data (originally in files/)
+- `sync-leads.log` - Lead sync log output
 
-**Reason**: These were development/testing scripts that are no longer needed in production. The functionality they demonstrate is now integrated into the application.
-
----
-
-### 📁 deployment-scripts/
-**Purpose**: Various deployment scripts and configurations for different platforms
-
-**Files**:
-- `deploy.ps1` - Original PowerShell deployment script
-- `deploy.sh` - Original Bash deployment script
-- `deploy-simple.ps1` - Simplified PowerShell deployment
-- `deploy-simple.sh` - Simplified Bash deployment
-- `deploy-robust.ps1` - Robust PowerShell deployment with error handling
-- `quick-upload.ps1` - Quick file upload script
-- `setup-ssh-keys.ps1` - SSH key setup script
-- `netlify.toml` - Netlify deployment configuration
-- `vercel.json` - Vercel deployment configuration
-- `Dockerfile` - Docker containerization config
-
-**Reason**: The application is now deployed on Ubuntu 22.04 with PM2 process management using `deploy-server.sh` and `server-with-proxy.js`. These alternative deployment methods are no longer used.
-
-**Current Deployment**: 
-- Server: Ubuntu 22.04.5 LTS at `http://20.125.24.28:3000`
-- Process Manager: PM2 with `northpass-portal` process
-- Active Script: `deploy-server.sh`
-- Server File: `server-with-proxy.js`
-
----
-
-### 📁 deployment-packages/
-**Purpose**: Packaged deployment archives
-
-**Files**:
-- `northpass-deployment.zip` - Original deployment package
-- `northpass-deployment-with-proxy.zip` - Deployment package with proxy configuration
-
-**Reason**: These were manual deployment packages. Deployment is now done via SSH with automated scripts.
-
----
-
-### 📁 unused-components/
-**Purpose**: React components that are no longer imported or used
-
-**Files**:
-- `UserWidget.jsx` - Individual user certification widget component
-- `UserWidget.css` - User widget styles
-
-**Reason**: This component was used for individual user views but is not currently imported in `App.jsx`. The application now uses:
-- `CompanyWidget.jsx` - For partner certification dashboards
-- `CustomerDashboard.jsx` - For customer training management
-- `AdminPanel.jsx` - For admin URL generation
-
-**Note**: If individual user views are needed in the future, this component can be restored.
-
----
-
-### 📄 Documentation Files (in archive root)
-**Files**:
-- `SSH_DEPLOYMENT.md` - SSH deployment guide
-- `SSH_KEY_SETUP.md` - SSH key setup instructions
-- `API_OPTIMIZATIONS.md` - API optimization notes
-
-**Reason**: These documents were useful during initial setup but are now reference material. The main `README.md` in the project root contains current deployment and setup instructions.
-
----
-
-## Currently Active Files (NOT Archived)
-
-### Essential Application Files
-- `src/` - All source code
-- `public/` - Public assets
-- `index.html` - Main HTML file
-- `package.json` - Dependencies and scripts
-- `vite.config.js` - Vite build configuration
-- `eslint.config.js` - ESLint configuration
-
-### Active Deployment & Configuration
-- `server-with-proxy.js` - Express server with Northpass API proxy
-- `server-package.json` - Server dependencies
-- `deploy-server.sh` - Active deployment script
-- `deploy-config.env` - Deployment environment variables
-- `README.md` - Main project documentation
-
-### Active Components
-- `CompanyWidget.jsx` - Partner dashboard
-- `CustomerDashboard.jsx` - Customer training dashboard
-- `AdminPanel.jsx` - Admin URL generator
-- `UrlGenerator.jsx` - Partner URL generator
-- `CustomerUrlGenerator.jsx` - Customer URL generator
-- `NintexButton/` - Reusable button component
-- `ProgressCharts.jsx` - Progress visualization components
-
-### Active Services
-- `northpassApi.js` - Main API client (1302 lines, fully featured)
-- `cacheService.js` - Browser-based caching system
-- `failedCourseTracker.js` - Course validation and error tracking
-- `invalidCourseReference.js` - Invalid course ID reference data
-
----
-
-## Restoration Instructions
-
-If you need to restore any archived files:
-
-1. Navigate to the appropriate archive subdirectory
-2. Copy the file back to its original location:
-   ```bash
-   cp archive/demo-scripts/test-premier-tech.js ./
-   ```
-3. For components, ensure you also restore associated CSS files and update imports in `App.jsx`
-
----
-
-## Notes
-
-- The attached `northpassApi.js` in the user's editor appears to be an old version (simple API with no caching, rate limiting, or comprehensive features)
-- The actual production `northpassApi.js` in `src/services/` is 1302 lines with full caching, rate limiting, and learning management features
-- Do NOT replace the production `northpassApi.js` with the simplified version in the attachment
+**Reason**: Historical audit outputs and data snapshots no longer needed in the project root.
