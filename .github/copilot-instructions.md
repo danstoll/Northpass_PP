@@ -63,6 +63,7 @@ Invoke-WebRequest -Uri "https://ptrlrndb.prod.ntxgallery.com/assets/index-*.js" 
 - **NPCU Values**: 0 (no certification), 1 (basic), 2 (advanced)
 - **Certifications**: Only courses with NPCU > 0 count as certifications
 - **Expiry Logic**: Expired certifications DO NOT count towards NPCU totals
+- **Re-Certification**: When a user re-completes a course, the most recent completion determines active/expired status (dedup by course_id per user, newest completion wins)
 - **Partner Tiers**: Premier (20 NPCU), Select (10 NPCU), Registered (5 NPCU), Certified (varies)
 
 ### Product Categories
@@ -725,7 +726,16 @@ All endpoints support `?region=&owner=&tier=` filter parameters.
 - ✅ Search box, quick stats display, notifications, and user profile menu
 - ✅ Mobile-responsive hamburger menu integration
 - ✅ Sidebar now positioned below top navbar (64px offset)
-- ✅ Current cache version: **254**
+- ✅ Current cache version: **428**
+
+### Re-Certification Dedup Fix (February 2026)
+- ✅ Fixed bug where re-certifications were not recognized on the company widget
+- ✅ **Root cause**: `/api/db/dashboard/group` enrollments query had no `ORDER BY`, so dedup (`countedCertifications` Set) processed the older expired enrollment first, skipping the newer active re-certification
+- ✅ **Fix**: Added `ORDER BY e.completed_at DESC` to enrollments query so newest completion always wins dedup
+- ✅ Users who re-certify now correctly appear in "Certified Team Members" instead of "Expired Certifications"
+- ✅ **UI enhancement**: Certified user cards now show expired certs when expanded (dashed divider with `⏰ Expired (N)` label)
+- ✅ Mini-stats row on certified user cards shows `⏰ X expired` indicator when user has both active and expired certs
+- ✅ Affected file: [dbRoutes.cjs](server/dbRoutes.cjs) (line ~2590), [CompanyWidget.jsx](src/components/CompanyWidget.jsx), [CompanyWidget.css](src/components/CompanyWidget.css)
 
 ### Sync Task Logging Improvements (January 2026)
 - ✅ **All sync tasks now log to `sync_logs` table** (not just Impartner)

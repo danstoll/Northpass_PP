@@ -1013,6 +1013,9 @@ const CompanyWidget = ({ groupName, tier }) => {
                 <div className="user-mini-stats">
                   <span className="mini-stat" title="Completed">✅ {user.completedCourses || 0}</span>
                   <span className="mini-stat" title="Certifications">🎓 {user.certificationCount || 0}</span>
+                  {user.expiredCertificationCount > 0 && (
+                    <span className="mini-stat expired" title="Expired Certifications">⏰ {user.expiredCertificationCount} expired</span>
+                  )}
                   <span className="mini-stat last-login" title={`Last login: ${formatLastLogin(user.lastLoginAt)}`}>
                     🕐 {formatLastLogin(user.lastLoginAt)}
                   </span>
@@ -1030,6 +1033,21 @@ const CompanyWidget = ({ groupName, tier }) => {
                     {!isExpanded && user.certifications.length > 2 && (
                       <div className="cert-more">+{user.certifications.length - 2} more</div>
                     )}
+                  </div>
+                )}
+                
+                {/* Show expired certifications when expanded */}
+                {isExpanded && user.expiredCertifications && user.expiredCertifications.length > 0 && (
+                  <div className="user-certs-mini expanded expired-certs-section">
+                    <div className="expired-certs-divider">⏰ Expired ({user.expiredCertifications.length})</div>
+                    {user.expiredCertifications.map((cert, index) => (
+                      <div key={`expired-${index}`} className="cert-tag cert-tag-full expired-tag">
+                        <span className="cert-tag-name">{cert.name}</span>
+                        <span className="cert-tag-expiry">
+                          Expired {new Date(cert.expiredAt).toLocaleDateString()}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>

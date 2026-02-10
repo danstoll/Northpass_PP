@@ -2587,6 +2587,7 @@ router.get('/dashboard/group', async (req, res) => {
       FROM lms_enrollments e
       JOIN lms_courses co ON co.id = e.course_id
       WHERE e.user_id IN (${placeholders})
+      ORDER BY e.completed_at DESC
     `, userIds);
     
     // Category labels for display
