@@ -3,13 +3,14 @@
  * This enables incremental imports by tracking when each CRM record was last modified
  */
 const mariadb = require('mariadb');
+const appConfig = require('../config.cjs');
 
 const pool = mariadb.createPool({
-  host: '20.29.25.238',
-  port: 31337,
-  user: 'northpass',
-  password: 'Nintex2025!',
-  database: 'northpass',
+  host: appConfig.db.host,
+  port: appConfig.db.port,
+  user: appConfig.db.user,
+  password: appConfig.db.password,
+  database: appConfig.db.database,
   connectionLimit: 1
 });
 

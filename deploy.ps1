@@ -131,6 +131,14 @@ try {
     Invoke-SCP "server" "$($Config.RemotePath)/"
     Invoke-SCP "server-package.json" "$($Config.RemotePath)/package.json"
     
+    # Upload .env file for secrets (not in git)
+    if (Test-Path ".env") {
+        Invoke-SCP ".env" "$($Config.RemotePath)/"
+        Write-Success ".env file uploaded"
+    } else {
+        Write-Warn ".env file not found - server will need environment variables configured"
+    }
+    
     if ($LASTEXITCODE -ne 0) { throw "Server file upload failed" }
     Write-Success "Server files uploaded"
 } catch {

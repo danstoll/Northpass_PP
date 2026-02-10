@@ -1,9 +1,12 @@
 ﻿// Script to find partners in our DB that don't exist in Impartner
 
+require('dotenv').config();
+const config = require('./server/config.cjs');
+
 const IMPARTNER_CONFIG = {
-  host: 'https://prod.impartner.live',
-  apiKey: 'H4nFg5b!TGS5FpkN6koWTKWxN7wjZBwFN@w&CW*LT8@ed26CJfE\\\\$%X2RK2n9VGqB&8htCf@gyZ@7#J9WR\\@fVECzrkGj8XinsWD!4C%E^o2DKypw',
-  tenantId: '1'
+  host: config.impartner.hostUrl,
+  apiKey: config.impartner.apiKey,
+  tenantId: config.impartner.tenantId
 };
 
 async function findNotFoundPartners() {

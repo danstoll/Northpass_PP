@@ -516,8 +516,9 @@ async function runMigrations() {
       }
       console.log('  ✓ Created default profiles (Admin, Channel Leadership, Channel Manager)');
       
-      // Create default admin user (password: Nintex2025!)
-      const adminPassword = 'Nintex2025!';
+      // Create default admin user
+      const appConfig = require('../config.cjs');
+      const adminPassword = appConfig.admin.defaultPassword || 'changeme';
       const salt = crypto.randomBytes(16).toString('hex');
       const hash = crypto.pbkdf2Sync(adminPassword, salt, 10000, 64, 'sha512').toString('hex');
       const passwordHash = `${salt}:${hash}`;
@@ -532,7 +533,7 @@ async function runMigrations() {
              ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash)`,
             ['admin@nintex.com', passwordHash, 'System', 'Admin', adminProfile.id, true]
           );
-          console.log('  ✓ Created default admin user (admin@nintex.com / Nintex2025!)');
+          console.log('  ✓ Created default admin user (admin@nintex.com)');
         }
       } catch (err) {
         console.log('  - Admin user error:', err.message);

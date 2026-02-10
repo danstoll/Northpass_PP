@@ -289,10 +289,11 @@ router.post('/calculate-partner-counts', async (req, res) => {
 router.get('/impartner-comparison', async (req, res) => {
   try {
     // Impartner API config (same as dbRoutes.cjs)
+    const config = require('../config.cjs');
     const IMPARTNER_CONFIG = {
-      host: 'https://prod.impartner.live',
-      apiKey: 'H4nFg5b!TGS5FpkN6koWTKWxN7wjZBwFN@w&CW*LT8@ed26CJfE$nfqemN$%X2RK2n9VGqB&8htCf@gyZ@7#J9WR$2B8go6Y1z@fVECzrkGj8XinsWD!4C%E^o2DKypw',
-      tenantId: '1'
+      host: config.impartner.hostUrl,
+      apiKey: config.impartner.apiKey,
+      tenantId: config.impartner.tenantId
     };
     
     // Valid tiers to sync (same as sync-to-impartner)

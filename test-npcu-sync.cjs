@@ -1,16 +1,18 @@
 // Test NPCU sync directly
+require('dotenv').config();
 const https = require('https');
 const mysql = require('mysql2/promise');
+const config = require('./server/config.cjs');
 
 const NORTHPASS_API_URL = 'https://api.northpass.com';
-const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+const API_KEY = config.northpass.apiKey;
 
 const dbConfig = {
-  host: '20.29.25.238',
-  port: 31337,
-  user: 'northpass',
-  password: 'northpass2025!',
-  database: 'northpass_portal'
+  host: config.db.host,
+  port: config.db.port,
+  user: config.db.user,
+  password: config.db.password,
+  database: config.db.database
 };
 
 function northpassRequest(endpoint, method = 'GET') {

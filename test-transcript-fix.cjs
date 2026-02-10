@@ -1,10 +1,12 @@
 /**
  * Test the fixed transcript endpoint
  */
+require('dotenv').config();
 const { query } = require('./server/db/connection.cjs');
 const https = require('https');
+const config = require('./server/config.cjs');
 
-const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+const API_KEY = config.northpass.apiKey;
 
 function northpassRequest(endpoint) {
   return new Promise((resolve, reject) => {

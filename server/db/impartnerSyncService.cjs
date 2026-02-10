@@ -12,13 +12,14 @@
 const { query, transaction } = require('./connection.cjs');
 const https = require('https');
 const { offboardPartner, offboardContact } = require('./offboardingService.cjs');
+const appConfig = require('../config.cjs');
 
 // Impartner API Configuration
 const IMPARTNER_CONFIG = {
-  host: 'prod.impartner.live',
+  host: appConfig.impartner.host,
   basePath: '/api/objects/v1',
-  apiKey: 'H4nFg5b!TGS5FpkN6koWTKWxN7wjZBwFN@w&CW*LT8@ed26CJfE$nfqemN$%X2RK2n9VGqB&8htCf@gyZ@7#J9WR$2B8go6Y1z@fVECzrkGj8XinsWD!4C%E^o2DKypw',
-  tenantId: '1',
+  apiKey: appConfig.impartner.apiKey,
+  tenantId: appConfig.impartner.tenantId,
   pageSize: 100 // Records per API request
 };
 

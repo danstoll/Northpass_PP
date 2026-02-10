@@ -1,4 +1,6 @@
-const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+require('dotenv').config();
+const config = require('./server/config.cjs');
+const API_KEY = config.northpass.apiKey;
 
 async function checkTranscripts() {
   // Get a sample user

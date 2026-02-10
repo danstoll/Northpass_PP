@@ -1,11 +1,12 @@
 /**
  * Deactivate the 28 Ricoh users in Northpass LMS
  */
-
+require('dotenv').config();
 const mysql = require('mysql2/promise');
 const https = require('https');
+const config = require('./server/config.cjs');
 
-const NORTHPASS_API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+const NORTHPASS_API_KEY = config.northpass.apiKey;
 
 // The 28 users that need LMS deactivation
 const lmsUsers = [
@@ -73,11 +74,11 @@ async function main() {
   console.log('=== Deactivating 28 users in Northpass LMS ===\n');
 
   const pool = mysql.createPool({
-    host: '20.29.25.238',
-    port: 31337,
-    user: 'root',
-    password: 'P6Rof2DQo5wZqa9yM7y6',
-    database: 'northpass_portal'
+    host: config.db.host,
+    port: config.db.port,
+    user: config.db.user,
+    password: config.db.password,
+    database: config.db.database
   });
 
   let success = 0;

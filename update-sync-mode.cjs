@@ -1,12 +1,14 @@
+require('dotenv').config();
 const mysql = require('mysql2/promise');
+const config = require('./server/config.cjs');
 
 async function updateSyncMode() {
   const conn = await mysql.createConnection({
-    host: '20.29.25.238',
-    port: 31337,
-    user: 'root',
-    password: 'P6Rof2DQo5wZqa9yM7y6',
-    database: 'northpass_portal'
+    host: config.db.host,
+    port: config.db.port,
+    user: config.db.user,
+    password: config.db.password,
+    database: config.db.database
   });
   
   console.log('Updating sync_to_impartner task config...');

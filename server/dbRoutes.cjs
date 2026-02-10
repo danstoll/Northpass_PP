@@ -4,10 +4,11 @@
  */
 
 const express = require('express');
+const config = require('./config.cjs');
 
 // Northpass API configuration
 const API_BASE = 'https://api.northpass.com';
-const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+const API_KEY = config.northpass.apiKey;
 
 // Import WebSocket emitters (may not be available during module load)
 let emitSyncProgress, emitSyncComplete, emitSyncError;
@@ -810,7 +811,7 @@ router.post('/users/create-lms', async (req, res) => {
 
     // Make API call to Northpass to create user
     const fetch = (await import('node-fetch')).default;
-    const NORTHPASS_API_KEY = process.env.NORTHPASS_API_KEY || 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+    const NORTHPASS_API_KEY = config.northpass.apiKey;
     
     const createResponse = await fetch('https://api.northpass.com/v2/people', {
       method: 'POST',
@@ -962,9 +963,9 @@ router.post('/users/create-crm', async (req, res) => {
     if (pushToImpartner && partnerInfo?.impartner_id) {
       try {
         const IMPARTNER_CONFIG = {
-          host: 'https://prod.impartner.live',
-          apiKey: 'H4nFg5b!TGS5FpkN6koWTKWxN7wjZBwFN@w&CW*LT8@ed26CJfE$nfqemN$%X2RK2n9VGqB&8htCf@gyZ@7#J9WR$2B8go6Y1z@fVECzrkGj8XinsWD!4C%E^o2DKypw',
-          tenantId: '1'
+          host: config.impartner.hostUrl,
+          apiKey: config.impartner.apiKey,
+          tenantId: config.impartner.tenantId
         };
 
         const impartnerResponse = await fetch(`${IMPARTNER_CONFIG.host}/api/objects/v1/User`, {
@@ -1099,9 +1100,9 @@ router.post('/users/bulk-create-crm', async (req, res) => {
     }
 
     const IMPARTNER_CONFIG = {
-      host: 'https://prod.impartner.live',
-      apiKey: 'H4nFg5b!TGS5FpkN6koWTKWxN7wjZBwFN@w&CW*LT8@ed26CJfE$nfqemN$%X2RK2n9VGqB&8htCf@gyZ@7#J9WR$2B8go6Y1z@fVECzrkGj8XinsWD!4C%E^o2DKypw',
-      tenantId: '1'
+      host: config.impartner.hostUrl,
+      apiKey: config.impartner.apiKey,
+      tenantId: config.impartner.tenantId
     };
 
     const results = {
@@ -1329,7 +1330,7 @@ router.post('/users/add-to-group', async (req, res) => {
 
     // Add to group in Northpass using JSON:API format
     const fetch = (await import('node-fetch')).default;
-    const NORTHPASS_API_KEY = process.env.NORTHPASS_API_KEY || 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+    const NORTHPASS_API_KEY = config.northpass.apiKey;
     
     // Build JSON:API payload
     const payload = {
@@ -5359,9 +5360,9 @@ router.get('/users/orphans/dismissed/:partnerId', async (req, res) => {
 
 // Impartner API Configuration
 const IMPARTNER_CONFIG = {
-  host: 'https://prod.impartner.live',
-  apiKey: 'H4nFg5b!TGS5FpkN6koWTKWxN7wjZBwFN@w&CW*LT8@ed26CJfE$nfqemN$%X2RK2n9VGqB&8htCf@gyZ@7#J9WR$2B8go6Y1z@fVECzrkGj8XinsWD!4C%E^o2DKypw',
-  tenantId: '1'
+  host: config.impartner.hostUrl,
+  apiKey: config.impartner.apiKey,
+  tenantId: config.impartner.tenantId
 };
 
 // Sync certification data to Impartner

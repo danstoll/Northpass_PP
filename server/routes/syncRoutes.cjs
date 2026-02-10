@@ -114,7 +114,8 @@ router.get('/api-health', async (req, res) => {
     
     // Also do a quick live check by hitting the groups endpoint
     const https = require('https');
-    const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+    const config = require('../../server/config.cjs');
+    const API_KEY = config.northpass.apiKey;
     
     const liveCheck = await new Promise((resolve) => {
       const options = {

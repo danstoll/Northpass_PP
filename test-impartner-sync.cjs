@@ -1,9 +1,11 @@
+require('dotenv').config();
+const config = require('./server/config.cjs');
 const { query } = require('./server/db/connection.cjs');
 
 const IMPARTNER_CONFIG = {
-  host: 'https://prod.impartner.live',
-  apiKey: 'H4nFg5b!TGS5FpkN6koWTKWxN7wjZBwFN@w&CW*LT8@ed26CJfE$nfqemN$%X2RK2n9VGqB&8htCf@gyZ@7#J9WR$2B8go6Y1z@fVECzrkGj8XinsWD!4C%E^o2DKypw',
-  tenantId: '1'
+  host: config.impartner.hostUrl,
+  apiKey: config.impartner.apiKey,
+  tenantId: config.impartner.tenantId
 };
 
 const IMPARTNER_ACCOUNT_ID = '1298255';

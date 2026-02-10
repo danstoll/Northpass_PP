@@ -2,12 +2,14 @@
  * Test writing to Total_NPCU__cf field on Account
  * to confirm we can push certification data to Impartner
  */
+require('dotenv').config();
 const https = require('https');
+const config = require('./server/config.cjs');
 
 const CONFIG = {
   host: 'prod.impartner.live',
-  apiKey: 'H4nFg5b!TGS5FpkN6koWTKWxN7wjZBwFN@w&CW*LT8@ed26CJfE$nfqemN$%X2RK2n9VGqB&8htCf@gyZ@7#J9WR$2B8go6Y1z@fVECzrkGj8XinsWD!4C%E^o2DKypw',
-  tenantId: '1'
+  apiKey: config.impartner.apiKey,
+  tenantId: config.impartner.tenantId
 };
 
 function makeRequest(method, path, body = null) {

@@ -1,7 +1,9 @@
 /**
  * Check what fields Impartner returns for Region
  */
+require('dotenv').config();
 const https = require('https');
+const config = require('./server/config.cjs');
 
 function makeRequest(path) {
   return new Promise((resolve, reject) => {
@@ -10,8 +12,8 @@ function makeRequest(path) {
       path: '/api/objects/v1' + path,
       method: 'GET',
       headers: {
-        'Authorization': 'prm-key H4nFg5b!TGS5FpkN6koWTKWxN7wjZBwFN@w&CW*LT8@ed26CJfE$nfqemN$%X2RK2n9VGqB&8htCf@gyZ@7#J9WR$2B8go6Y1z@fVECzrkGj8XinsWD!4C%E^o2DKypw',
-        'X-PRM-TenantId': '1',
+        'Authorization': `prm-key ${config.impartner.apiKey}`,
+        'X-PRM-TenantId': config.impartner.tenantId,
         'Accept': 'application/json'
       }
     };

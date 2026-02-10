@@ -7,9 +7,8 @@ import {
 } from './failedCourseTracker.js';
 import cacheService from './cacheService.js';
 
-// Always use proxy to avoid CORS issues
+// Always use proxy to avoid CORS issues - API key is injected server-side by the proxy
 const API_BASE_URL = '/api/northpass';
-const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
 
 // Optimized rate limiting configuration
 const STANDARD_RATE_LIMIT = 5; // 5 requests per second for standard endpoints
@@ -101,7 +100,6 @@ async function rateLimitedApiCall(apiCallFunction, retryCount = 0) {
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
   headers: {
-    'X-Api-Key': API_KEY,
     'Accept': 'application/json',
     'Content-Type': 'application/json',
   },
@@ -140,7 +138,6 @@ export const northpassApi = {
   async testConnection() {
     try {
       console.log('🔗 Testing Northpass API connection...');
-      console.log('🔑 Using API Key:', API_KEY.substring(0, 8) + '...');
       console.log('🌐 API Base URL:', API_BASE_URL);
       
       // Try a simple endpoint to test connectivity

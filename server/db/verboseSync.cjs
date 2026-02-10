@@ -2,8 +2,9 @@
  * Verbose Enrollment Sync - With detailed logging for debugging
  */
 const { getPool, closePool } = require('./connection.cjs');
+const appConfig = require('../config.cjs');
 
-const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+const API_KEY = appConfig.northpass.apiKey;
 const START_OFFSET = 650; // Resume from user 650
 const BATCH_SIZE = 100; // Process 100 users at a time
 

@@ -4,8 +4,9 @@
  */
 
 const { getPool, closePool } = require('./connection.cjs');
+const appConfig = require('../config.cjs');
 
-const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+const API_KEY = appConfig.northpass.apiKey;
 const API_BASE = 'https://api.northpass.com';
 
 async function fetchTranscripts(userId, page = 1) {

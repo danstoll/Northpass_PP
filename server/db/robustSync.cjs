@@ -4,8 +4,9 @@
  */
 const fs = require('fs');
 const { getPool, closePool } = require('./connection.cjs');
+const appConfig = require('../config.cjs');
 
-const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+const API_KEY = appConfig.northpass.apiKey;
 const PROGRESS_FILE = 'server/db/sync_progress.json';
 const BATCH_SIZE = 200; // Process this many users per run
 

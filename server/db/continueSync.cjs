@@ -2,8 +2,9 @@
  * Continue Enrollment Sync - Resume from a specific user offset
  */
 const { getPool, closePool } = require('./connection.cjs');
+const appConfig = require('../config.cjs');
 
-const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+const API_KEY = appConfig.northpass.apiKey;
 const START_OFFSET = 400; // Resume from user 400
 
 // Convert ISO 8601 date to MySQL datetime format

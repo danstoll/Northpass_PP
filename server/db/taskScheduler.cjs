@@ -13,6 +13,7 @@
 
 const { query } = require('./connection.cjs');
 const { initSyncContext, clearSyncContext, getSyncContext } = require('./syncContext.cjs');
+const appConfig = require('../config.cjs');
 
 // Environment check - only run scheduler in production
 const IS_PRODUCTION = process.env.NODE_ENV === 'production' || process.env.ENABLE_SCHEDULER === 'true';
@@ -745,7 +746,7 @@ async function runGroupMembersSync(config) {
   
   // For each group, check API to see if members now exist
   const https = require('https');
-  const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+  const API_KEY = appConfig.northpass.apiKey;
   
   const groupIds = Object.keys(groupedPending);
   let processed = 0;
@@ -926,8 +927,8 @@ async function runSyncToImpartner(config) {
   // Impartner API Configuration
   const IMPARTNER_CONFIG = {
     host: 'https://prod.impartner.live',
-    apiKey: 'H4nFg5b!TGS5FpkN6koWTKWxN7wjZBwFN@w&CW*LT8@ed26CJfE$nfqemN$%X2RK2n9VGqB&8htCf@gyZ@7#J9WR$2B8go6Y1z@fVECzrkGj8XinsWD!4C%E^o2DKypw',
-    tenantId: '1'
+    apiKey: appConfig.impartner.apiKey,
+    tenantId: appConfig.impartner.tenantId
   };
   
   // Get last sync time for incremental mode

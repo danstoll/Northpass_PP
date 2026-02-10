@@ -10,11 +10,13 @@
  *   node disable-accounts.cjs --check-only       # Only check which accounts exist
  */
 
+require('dotenv').config();
 const mysql = require('mysql2/promise');
 const XLSX = require('xlsx');
 const https = require('https');
+const config = require('./server/config.cjs');
 
-const NORTHPASS_API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+const NORTHPASS_API_KEY = config.northpass.apiKey;
 
 // Parse arguments
 const args = process.argv.slice(2);
@@ -96,11 +98,11 @@ async function main() {
 
   // Connect to database
   const pool = mysql.createPool({
-    host: '20.29.25.238',
-    port: 31337,
-    user: 'root',
-    password: 'P6Rof2DQo5wZqa9yM7y6',
-    database: 'northpass_portal'
+    host: config.db.host,
+    port: config.db.port,
+    user: config.db.user,
+    password: config.db.password,
+    database: config.db.database
   });
 
   try {

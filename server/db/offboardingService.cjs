@@ -8,11 +8,12 @@
 
 const { query } = require('./connection.cjs');
 const https = require('https');
+const config = require('../config.cjs');
 
 // Northpass API Configuration
 const NORTHPASS_CONFIG = {
   hostname: 'api.northpass.com',
-  apiKey: 'wcU0QRpN9jnPvXEc5KXMiuVWk'
+  apiKey: config.northpass.apiKey
 };
 
 /**

@@ -1,15 +1,17 @@
 /**
  * Check current account_region and country values in database
  */
+require('dotenv').config();
 const mysql = require('mysql2/promise');
+const config = require('./server/config.cjs');
 
 async function check() {
   const conn = await mysql.createConnection({
-    host: process.env.DB_HOST || '20.29.25.238',
-    port: parseInt(process.env.DB_PORT || '31337', 10),
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || 'P6Rof2DQo5wZqa9yM7y6',
-    database: process.env.DB_NAME || 'northpass_portal'
+    host: config.db.host,
+    port: config.db.port,
+    user: config.db.user,
+    password: config.db.password,
+    database: config.db.database
   });
   
   try {

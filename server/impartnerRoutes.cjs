@@ -38,12 +38,13 @@ const router = express.Router();
 
 // Impartner API Configuration
 // Authentication: prm-key header + X-PRM-TenantId header
+const appConfig = require('./config.cjs');
 const IMPARTNER_CONFIG = {
   host: 'https://prod.impartner.live',
   // prm-key value
-  apiKey: 'H4nFg5b!TGS5FpkN6koWTKWxN7wjZBwFN@w&CW*LT8@ed26CJfE$nfqemN$%X2RK2n9VGqB&8htCf@gyZ@7#J9WR$2B8go6Y1z@fVECzrkGj8XinsWD!4C%E^o2DKypw',
+  apiKey: appConfig.impartner.apiKey,
   // Tenant ID (required by API)
-  tenantId: '1'
+  tenantId: appConfig.impartner.tenantId
 };
 
 // Known object types from PRM

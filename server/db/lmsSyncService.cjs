@@ -22,7 +22,8 @@ try {
 }
 
 const NORTHPASS_API_URL = 'https://api.northpass.com';
-const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+const config = require('../config.cjs');
+const API_KEY = config.northpass.apiKey;
 
 /**
  * Custom error class for API failures
@@ -1101,7 +1102,7 @@ async function syncGroupMembers(logId, onProgress) {
         try {
           const response = await fetch(`https://api.northpass.com/v2/groups/${group.id}`, {
             headers: {
-              'X-Api-Key': process.env.NORTHPASS_API_KEY || 'wcU0QRpN9jnPvXEc5KXMiuVWk',
+              'X-Api-Key': config.northpass.apiKey,
               'Content-Type': 'application/json'
             }
           });

@@ -5,11 +5,13 @@
  * Testing to find correct tenant and auth combination
  */
 
+require('dotenv').config();
+const config = require('./server/config.cjs');
 const https = require('https');
 
 const CONFIG = {
-  host: 'prod.impartner.live',
-  apiKey: 'H4nFg5bITGS5FpkN6koWTKWxN7wjZBwFN@w&CW*LT8@ed26CJfE$nfqemN$%X2RK2n9VGqB&8htCf@gyZ@7#J9WR$2B8go6Y1z@fVECzrkGj8XinsWDI4C%E^o2DKypw'
+  host: config.impartner.host,
+  apiKey: config.impartner.apiKey
 };
 
 // Common tenant IDs to try (usually company name or subdomain)

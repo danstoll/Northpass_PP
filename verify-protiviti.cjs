@@ -1,12 +1,14 @@
+require('dotenv').config();
+const config = require('./server/config.cjs');
 const mysql = require('mysql2/promise');
 
 async function verify() {
   const conn = await mysql.createConnection({
-    host: '20.29.25.238',
-    port: 31337,
-    user: 'northpass',
-    password: 'Nintex2025!',
-    database: 'northpass'
+    host: config.db.host,
+    port: config.db.port,
+    user: config.db.user,
+    password: config.db.password,
+    database: config.db.database
   });
 
   // Find the group

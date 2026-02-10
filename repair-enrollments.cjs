@@ -11,10 +11,12 @@
  *   node repair-enrollments.cjs --user=email@example.com  # Repair specific user
  */
 
+require('dotenv').config();
 const mysql = require('mysql2/promise');
 const https = require('https');
+const config = require('./server/config.cjs');
 
-const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+const API_KEY = config.northpass.apiKey;
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -100,11 +102,11 @@ async function main() {
   }
 
   const pool = mysql.createPool({
-    host: '20.29.25.238',
-    port: 31337,
-    user: 'root',
-    password: 'P6Rof2DQo5wZqa9yM7y6',
-    database: 'northpass_portal'
+    host: config.db.host,
+    port: config.db.port,
+    user: config.db.user,
+    password: config.db.password,
+    database: config.db.database
   });
 
   try {

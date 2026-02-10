@@ -2,9 +2,10 @@
  * Quick script to sync group memberships
  */
 const { getPool, closePool } = require('./connection.cjs');
+const appConfig = require('../config.cjs');
 
 const NORTHPASS_API_URL = 'https://api.northpass.com';
-const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+const API_KEY = appConfig.northpass.apiKey;
 
 async function fetchMemberships(groupId) {
   const url = `${NORTHPASS_API_URL}/v2/groups/${groupId}/memberships?limit=100`;

@@ -6,15 +6,16 @@
 const express = require('express');
 const router = express.Router();
 const { query } = require('../db/connection.cjs');
+const config = require('../config.cjs');
 
 const API_BASE = 'https://api.northpass.com';
-const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+const API_KEY = config.northpass.apiKey;
 
 // Impartner API Configuration (same as impartnerSyncService.cjs)
 const IMPARTNER_CONFIG = {
   host: 'https://prod.impartner.live',
-  apiKey: 'H4nFg5b!TGS5FpkN6koWTKWxN7wjZBwFN@w&CW*LT8@ed26CJfE$nfqemN$%X2RK2n9VGqB&8htCf@gyZ@7#J9WR$2B8go6Y1z@fVECzrkGj8XinsWD!4C%E^o2DKypw',
-  tenantId: '1'
+  apiKey: config.impartner.apiKey,
+  tenantId: config.impartner.tenantId
 };
 
 // ============================================

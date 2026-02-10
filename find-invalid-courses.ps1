@@ -1,5 +1,8 @@
+# API key loaded from .env file - set NORTHPASS_API_KEY environment variable before running
+# To load from .env: Get-Content .env | ForEach-Object { if ($_ -match '^([^#=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim()) } }
+
 $headers = @{
-    "X-Api-Key" = "wcU0QRpN9jnPvXEc5KXMiuVWk"
+    "X-Api-Key" = $env:NORTHPASS_API_KEY
     "Accept" = "application/json"
 }
 

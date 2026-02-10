@@ -1,4 +1,4 @@
-const { query } = require('./server/db/connection.cjs');
+const { query } = require('./server/db/connection.cjs');\nconst config = require('./server/config.cjs');", "oldString": "const { query } = require('./server/db/connection.cjs');
 
 async function check() {
   try {
@@ -24,7 +24,7 @@ async function check() {
     console.log('\n--- Fetching All Partners memberships from API ---');
     const fetch = require('node-fetch');
     const response = await fetch(`https://api.northpass.com/v2/groups/${groupId}/memberships?page[size]=5`, {
-      headers: { 'X-Api-Key': 'wcU0QRpN9jnPvXEc5KXMiuVWk' }
+      headers: { 'X-Api-Key': config.northpass.apiKey }
     });
     const data = await response.json();
     console.log('API Response status:', response.status);

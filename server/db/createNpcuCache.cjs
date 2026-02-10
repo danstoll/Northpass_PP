@@ -1,12 +1,13 @@
 const mysql = require('mysql2/promise');
+const appConfig = require('../config.cjs');
 
 async function createCache() {
   const conn = await mysql.createConnection({
-    host: '20.29.25.238',
-    port: 31337,
-    user: 'root',
-    password: 'P6Rof2DQo5wZqa9yM7y6',
-    database: 'northpass_portal'
+    host: appConfig.db.host,
+    port: appConfig.db.port,
+    user: appConfig.db.user,
+    password: appConfig.db.password,
+    database: appConfig.db.database
   });
 
   console.log('Creating NPCU cache table...');

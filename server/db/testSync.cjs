@@ -2,8 +2,9 @@
  * Simple Enrollment Sync - with more debug output
  */
 const { getPool, closePool } = require('./connection.cjs');
+const appConfig = require('../config.cjs');
 
-const API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+const API_KEY = appConfig.northpass.apiKey;
 
 // Convert ISO 8601 date to MySQL datetime format
 function toMySQLDate(isoDate) {

@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const https = require('https');
@@ -5,6 +6,7 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const { Server } = require('socket.io');
+const config = require('./server/config.cjs');
 
 // Import database modules
 let dbRoutes = null;
@@ -64,8 +66,8 @@ app.use(express.json({ limit: '50mb' }));
 // Disable Express default caching
 app.set('etag', false);
 
-// Hardcoded API key - the one we verified works
-const NORTHPASS_API_KEY = 'wcU0QRpN9jnPvXEc5KXMiuVWk';
+// API key loaded from environment
+const NORTHPASS_API_KEY = config.northpass.apiKey;
 
 // Direct HTTPS request helper for Properties API (bypasses http-proxy-middleware issues)
 function fetchFromNorthpass(apiPath) {
