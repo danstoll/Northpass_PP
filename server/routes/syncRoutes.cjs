@@ -960,8 +960,9 @@ router.post('/partner-by-name', async (req, res) => {
     // We'll just call the same logic but with the ID
     req.params.partnerId = partner.id;
     
-    // Call the partner sync handler directly
-    const response = await fetch(`http://localhost:${process.env.PORT || 3000}/api/db/sync/partner/${partner.id}`, {
+    // Call the partner sync handler via loopback
+    const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
+    const response = await fetch(`${protocol}://localhost:${process.env.PORT || 3000}/api/db/sync/partner/${partner.id}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     });

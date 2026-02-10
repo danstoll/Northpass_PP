@@ -2,6 +2,7 @@
  * Portal Settings - Admin configuration for partner tiers and notifications
  */
 import { useState, useEffect, useCallback } from 'react';
+import DOMPurify from 'dompurify';
 import {
   Box, Typography, TextField, Button, Paper, Alert, Snackbar,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
@@ -928,7 +929,7 @@ export default function Settings() {
           )}
           <Paper variant="outlined" sx={{ p: 2 }}>
             {previewDialog.content?.includes('<') ? (
-              <div dangerouslySetInnerHTML={{ __html: previewDialog.content }} />
+              <div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(previewDialog.content) }} />
             ) : (
               <Typography component="pre" sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
                 {previewDialog.content}

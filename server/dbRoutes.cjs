@@ -4012,9 +4012,9 @@ router.post('/auth/login', async (req, res) => {
     // Set nintex_viewer cookie for widget analytics tracking
     // This identifies the viewer as a Nintex staff member when viewing partner dashboards
     if (email && email.toLowerCase().endsWith('@nintex.com')) {
-      res.cookie('nintex_viewer', email, {
+      res.cookie('nintex_viewer', 'true', {
         maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-        httpOnly: false, // Accessible by JavaScript for tracking
+        httpOnly: false,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax'
       });

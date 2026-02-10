@@ -792,17 +792,17 @@ function generateTemporaryPassword() {
   const specials = '!@#$%&*';
   let password = '';
   
-  // 8 alphanumeric characters
+  // 8 alphanumeric characters (cryptographically secure)
   for (let i = 0; i < 8; i++) {
-    password += chars.charAt(Math.floor(Math.random() * chars.length));
+    password += chars.charAt(crypto.randomInt(chars.length));
   }
   
   // Add 1 special character
-  password += specials.charAt(Math.floor(Math.random() * specials.length));
+  password += specials.charAt(crypto.randomInt(specials.length));
   
   // Add 2 more alphanumeric
   for (let i = 0; i < 2; i++) {
-    password += chars.charAt(Math.floor(Math.random() * chars.length));
+    password += chars.charAt(crypto.randomInt(chars.length));
   }
   
   return password;

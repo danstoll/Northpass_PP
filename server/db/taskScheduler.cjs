@@ -354,7 +354,8 @@ async function runTask(task) {
     if (systemAlertsEnabled) {
       try {
         const { sendSyncErrorAlert } = require('./notificationService.cjs');
-        await sendSyncErrorAlert(task.task_name, error.message, durationSeconds);
+        const safeErrorMsg = String(error.message || '').substring(0, 500).replace(/[\n\r]/g, ' ');
+        await sendSyncErrorAlert(task.task_name, safeErrorMsg, durationSeconds);
         console.log(`📤 Sent system alert for failed task: ${task.task_name}`);
       } catch (alertError) {
         console.error(`⚠️ Failed to send system alert: ${alertError.message}`);
@@ -1995,7 +1996,8 @@ async function runDailySyncChain(options = {}) {
     if (systemAlertsEnabled) {
       try {
         const { sendSyncErrorAlert } = require('./notificationService.cjs');
-        await sendSyncErrorAlert(`Daily sync chain failed: ${err.message}`);
+        const safeChainErr = String(err.message || '').substring(0, 500).replace(/[\n\r]/g, ' ');
+        await sendSyncErrorAlert('Daily sync chain', safeChainErr);
       } catch (alertErr) {
         console.error('Failed to send alert:', alertErr.message);
       }

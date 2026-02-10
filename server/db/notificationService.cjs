@@ -10,6 +10,7 @@
  */
 
 const { query } = require('./connection.cjs');
+const config = require('../config.cjs');
 
 // Dynamic import for node-fetch (CommonJS compatibility)
 let fetch;
@@ -20,8 +21,9 @@ async function getFetch() {
   return fetch;
 }
 
-const WORKFLOW_URL = 'https://ntx-channel.workflowcloud.com/api/v1/workflow/published/6176b33c-9458-4579-8828-af69bb829e8d/instances';
-const WORKFLOW_TOKEN = 'F80xrywkYF0FC7RyXa4QXUU78oQq7kobFQEp7HpauP1if7XsB81mswHarzweezCZwrlUgv';
+// Load from centralized config (env vars)
+const WORKFLOW_URL = config.nwc.workflowUrl;
+const WORKFLOW_TOKEN = config.nwc.workflowToken;
 
 /**
  * Start a Nintex Workflow to send a notification
@@ -311,11 +313,15 @@ async function renderTemplate(templateKey, variables = {}) {
   let subject = template.subject || '';
   let content = template.content || '';
   
-  // Replace {{variable}} placeholders
+  // Replace {{variable}} placeholders using string replacement (no RegExp)
   for (const [key, value] of Object.entries(variables)) {
-    const regex = new RegExp(`{{${key}}}`, 'g');
-    subject = subject.replace(regex, value);
-    content = content.replace(regex, value);
+    const placeholder = `{{${key}}}`;
+    while (subject.includes(placeholder)) {
+      subject = subject.replace(placeholder, value);
+    }
+    while (content.includes(placeholder)) {
+      content = content.replace(placeholder, value);
+    }
   }
   
   return { subject, content, commType: template.comm_type };

@@ -74,11 +74,15 @@ router.post('/templates/:key/preview', async (req, res) => {
     let content = template.content || '';
     let subject = template.subject || '';
     
-    // Replace {{variable}} placeholders
+    // Replace {{variable}} placeholders using string replacement (no RegExp)
     for (const [key, value] of Object.entries(variables)) {
-      const regex = new RegExp(`{{${key}}}`, 'g');
-      content = content.replace(regex, value);
-      subject = subject.replace(regex, value);
+      const placeholder = `{{${key}}}`;
+      while (content.includes(placeholder)) {
+        content = content.replace(placeholder, value);
+      }
+      while (subject.includes(placeholder)) {
+        subject = subject.replace(placeholder, value);
+      }
     }
     
     res.json({ subject, content, commType: template.comm_type });

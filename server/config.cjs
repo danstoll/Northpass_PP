@@ -35,9 +35,9 @@ const config = {
 
   // MariaDB Database
   db: {
-    host: process.env.DB_HOST || '20.29.25.238',
-    port: parseInt(process.env.DB_PORT || '31337', 10),
-    user: process.env.DB_USER || 'root',
+    host: process.env.DB_HOST || '',
+    port: parseInt(process.env.DB_PORT || '3306', 10),
+    user: process.env.DB_USER || '',
     password: process.env.DB_PASSWORD || '',
     database: process.env.DB_NAME || 'northpass_portal',
   },
@@ -45,6 +45,12 @@ const config = {
   // Admin defaults
   admin: {
     defaultPassword: process.env.ADMIN_DEFAULT_PASSWORD || '',
+  },
+
+  // Nintex Workflow Cloud (Notifications)
+  nwc: {
+    workflowUrl: process.env.NWC_WORKFLOW_URL || '',
+    workflowToken: process.env.NWC_WORKFLOW_TOKEN || '',
   },
 
   // Server

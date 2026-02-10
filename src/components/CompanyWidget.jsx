@@ -600,12 +600,8 @@ const CompanyWidget = ({ groupName, tier }) => {
 
       // Track page view for analytics (fire and forget)
       if (data.group.partnerId) {
-        // Check for nintex_viewer cookie to identify Nintex staff
-        const getNintexViewerCookie = () => {
-          const match = document.cookie.match(/(?:^|; )nintex_viewer=([^;]*)/);
-          return match ? decodeURIComponent(match[1]) : null;
-        };
-        const nintexViewer = getNintexViewerCookie();
+        // Check for nintex_viewer cookie to identify Nintex staff (flag only, no PII)
+        const isNintexViewer = document.cookie.includes('nintex_viewer=true');
 
         fetch('/api/track/view', {
           method: 'POST',
@@ -614,8 +610,7 @@ const CompanyWidget = ({ groupName, tier }) => {
             pageType: 'widget',
             pagePath: window.location.pathname,
             partnerId: data.group.partnerId,
-            viewer: nintexViewer ? 'nintex' : 'partner',
-            viewerEmail: nintexViewer || null,
+            viewer: isNintexViewer ? 'nintex' : 'partner',
             sessionId: sessionStorage.getItem('sessionId') || (() => {
               const id = Math.random().toString(36).substring(2);
               sessionStorage.setItem('sessionId', id);
